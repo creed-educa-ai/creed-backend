@@ -5,10 +5,10 @@ container no EKS (ADR-001), onde os valores são injetados por ConfigMap/Secret.
 """
 
 from functools import lru_cache
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import PostgresDsn, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -40,7 +40,11 @@ class Settings(BaseSettings):
     N8N_TIMEOUT_SECONDS: int = 10
 
     # --- CORS ---
-    CORS_ORIGINS: list[str] = ["http://localhost:5173"]
+    # NoDecode desliga o parse JSON que o pydantic-settings faz em campo de tipo
+    # complexo ANTES de qualquer validator: sem ele o valor vindo do .env vai para
+    # json.loads, e a lista separada por vírgula do .env.example estoura na leitura
+    # da config. Com NoDecode a string crua chega ao _split_origins abaixo.
+    CORS_ORIGINS: Annotated[list[str], NoDecode] = ["http://localhost:5173"]
 
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod
