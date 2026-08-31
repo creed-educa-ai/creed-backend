@@ -1,9 +1,9 @@
 # Barra o problema na máquina de quem escreve (mesmo princípio do ADR-003).
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.7.4
+    rev: v0.16.5
     hooks:
-      - id: ruff
+      - id: ruff-check
         args: [--fix]
       - id: ruff-format
 
@@ -21,7 +21,16 @@ repos:
     rev: v1.13.0
     hooks:
       - id: mypy
-        additional_dependencies: [pydantic, pydantic-settings, sqlalchemy]
+        # O hook roda em ambiente proprio, isolado do .venv: tudo que os
+        # arquivos checados importam precisa estar listado aqui, ou o mypy
+        # acusa import-not-found em codigo correto.
+        additional_dependencies:
+          - pydantic
+          - pydantic-settings
+          - sqlalchemy
+          - fastapi
+          - alembic
+          - pytest
         args: [--strict]
 
   - repo: local
@@ -30,8 +39,10 @@ repos:
       # commit por causa dele atrapalharia mais do que ajuda.
       - id: nome-da-branch
         name: nome da branch no padrao do CONTRIBUTING
-        entry: scripts/verificar-nome-da-branch.sh
-        language: script
+        entry: python scripts/verificar_nome_da_branch.py
+        # python, nao script: `language: script` depende do shebang, que o
+        # Windows nao honra - e o time desenvolve no Windows.
+        language: python
         stages: [pre-push]
         pass_filenames: false
         always_run: true
