@@ -6,7 +6,6 @@ cálculo dos 5 prismas (ADR-001, secao 4.1).
 """
 
 import uuid
-from datetime import date
 
 from app.domains.respondentes.models import Respondente
 from app.domains.respondentes.repository import RespondenteRepository
@@ -15,17 +14,6 @@ from app.domains.respondentes.schemas import (
     RespondenteUpdate,
 )
 from app.shared.exceptions import ConflictError, NotFoundError
-
-
-def calcular_idade(data_nascimento: date | None, hoje: date | None = None) -> int | None:
-    """Idade em anos completos. Função pura — trivialmente testável."""
-    if data_nascimento is None:
-        return None
-    referencia = hoje or date.today()
-    idade = referencia.year - data_nascimento.year
-    if (referencia.month, referencia.day) < (data_nascimento.month, data_nascimento.day):
-        idade -= 1
-    return idade
 
 
 class RespondenteService:
@@ -81,6 +69,10 @@ class RespondenteService:
                 valor = valor.upper()
             setattr(respondente, campo, valor)
 
+        # Não chamamos o repository para "salvar": o objeto veio da sessão desta
+        # requisição, então mudar o atributo basta — quem faz o commit é o
+        # get_db, no fim da requisição (conventions/camadas-do-back.md →
+        # "Transação: quem fecha").
         return respondente
 
     async def remover(self, respondente_id: uuid.UUID) -> None:
