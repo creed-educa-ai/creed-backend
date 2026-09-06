@@ -23,8 +23,16 @@ Organização **por domínio** (ADR-002, secao 2.1). Cada domínio em
 
 ## Setup local
 
-```bash
-python -m venv .venv && source .venv/bin/activate
+No Windows:
+```
+.\venv\Scripts\activate
+```
+
+- No macOS/Linux:
+```
+source venv/bin/activate
+```
+
 pip install -e ".[dev]"
 cp .env.example .env
 pre-commit install --hook-type pre-commit --hook-type pre-push
@@ -47,6 +55,7 @@ Docs da API: http://localhost:8000/api/v1/docs
 
 ```bash
 ruff check . && ruff format --check .
+ruff format .
 mypy app
 pytest
 ```
