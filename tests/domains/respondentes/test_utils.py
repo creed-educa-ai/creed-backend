@@ -1,15 +1,15 @@
-"""Testes do service de respondentes.
+"""Testes das funções puras do domínio respondentes.
 
-Demonstra o ganho da separação de camadas do ADR-002: a regra de negócio
-é testável sem HTTP e sem banco — exatamente o que permitirá testar o
-cálculo dos 5 prismas isoladamente.
+Exemplo de FORMA, vindo do scaffold: é assim que se testa cálculo puro, sem
+banco e sem HTTP. Não é cobertura conquistada por task nenhuma, e não prova nada
+sobre o resto do domínio.
 """
 
 from datetime import date
 
 import pytest
 
-from app.domains.respondentes.service import calcular_idade
+from app.domains.respondentes.utils import calcular_idade
 
 
 class TestCalcularIdade:
