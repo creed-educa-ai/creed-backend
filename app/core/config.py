@@ -39,6 +39,20 @@ class Settings(BaseSettings):
     N8N_CALLBACK_SECRET: str = ""
     N8N_TIMEOUT_SECONDS: int = 10
 
+    # --- Keycloak (CREED-23, decisoes D1 e D3) ---
+    # O realm local sobe pelo docker-compose a partir de docker/keycloak/realm-creed.json.
+    KEYCLOAK_SERVER_URL: str = "http://localhost:8080"
+    KEYCLOAK_REALM: str = "creed"
+    KEYCLOAK_CLIENT_ID: str = "creed-backend"
+    # Sem default, mesmo motivo do POSTGRES_PASSWORD: melhor falhar no boot do que
+    # subir com um segredo conhecido e descobrir isso em producao.
+    KEYCLOAK_CLIENT_SECRET: str
+    KEYCLOAK_TIMEOUT_SECONDS: int = 10
+    # TTL do cache da chave publica do realm (JWKS). A chave so muda quando o realm
+    # roda as chaves; reler a cada requisicao poria o Keycloak no caminho critico
+    # de toda rota protegida.
+    KEYCLOAK_JWKS_CACHE_SECONDS: int = 3600
+
     # --- CORS ---
     # NoDecode desliga o parse JSON que o pydantic-settings faz em campo de tipo
     # complexo ANTES de qualquer validator: sem ele o valor vindo do .env vai para

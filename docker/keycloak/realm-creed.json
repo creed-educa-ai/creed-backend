@@ -1,0 +1,88 @@
+{
+  "realm": "creed",
+  "displayName": "CREED.ai Educa",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "resetPasswordAllowed": false,
+  "verifyEmail": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "accessTokenLifespan": 900,
+  "ssoSessionIdleTimeout": 28800,
+  "ssoSessionMaxLifespan": 28800,
+  "roles": {
+    "realm": [
+      {
+        "name": "admin",
+        "description": "Cadastra usuario e muda papel, dentro da organizacao dele"
+      },
+      {
+        "name": "gestor",
+        "description": "Le formularios, respostas e dashboards da organizacao dele"
+      },
+      {
+        "name": "respondente",
+        "description": "Responde os formularios dos vinculos dele"
+      }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "creed-backend",
+      "name": "CREED backend",
+      "description": "Client confidencial da API. Unico que fala com este realm.",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "bearerOnly": false,
+      "secret": "creed-local-secret",
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": true,
+      "redirectUris": [],
+      "webOrigins": [],
+      "protocolMappers": [
+        {
+          "name": "audience-creed-backend",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "creed-backend",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "dev@creed.local",
+      "email": "dev@creed.local",
+      "firstName": "Dev",
+      "lastName": "Local",
+      "enabled": true,
+      "emailVerified": true,
+      "requiredActions": [],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "dev",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["admin"]
+    },
+    {
+      "username": "service-account-creed-backend",
+      "enabled": true,
+      "serviceAccountClientId": "creed-backend",
+      "clientRoles": {
+        "realm-management": ["manage-users", "view-users", "query-users"]
+      }
+    }
+  ]
+}
