@@ -85,6 +85,53 @@ def test_realm_nao_liga_acao_obrigatoria_por_padrao() -> None:
     assert REALM["registrationAllowed"] is False
 
 
+def test_perfil_nao_exige_nome_para_provisionar() -> None:
+    """A armadilha que custou mais caro achar, e que nenhum outro teste pegava.
+
+    O `UserCreate` do contrato manda `{vinculo_id, email, initial_password}` — sem
+    nome. O user profile declarativo do Keycloak, porém, nasce exigindo `firstName`
+    e `lastName`, e um perfil incompleto dispara `VERIFY_PROFILE` **no login**,
+    não na criação. O Direct Access Grant (decisão D1) então responde
+    `invalid_grant: "Account is not fully set up"` — que na tela vira "senha
+    inválida" para um usuário recém-criado cuja senha está certa.
+
+    Verificado contra o Keycloak 26.0.8: com o perfil padrão, todo usuário
+    provisionado só com e-mail fica trancado fora. Quem tem o nome da pessoa é o
+    `Participant` no nosso banco; aqui o Keycloak guarda credencial, não cadastro.
+    """
+    perfil = json.loads(
+        REALM["components"]["org.keycloak.userprofile.UserProfileProvider"][0]["config"][
+            "kc.user.profile.config"
+        ][0]
+    )
+    obrigatorios = {a["name"] for a in perfil["attributes"] if "required" in a}
+
+    assert "firstName" not in obrigatorios
+    assert "lastName" not in obrigatorios
+
+
+def test_service_account_tem_o_minimo_verificado() -> None:
+    """As duas roles que o provisionamento da entrega 3 (decisão D4) exige.
+
+    Verificado contra o Keycloak 26.0.8, tirando uma role por vez do conjunto:
+
+    - `manage-users` — criar e apagar usuário (a compensação da D4). Sem ela,
+      `POST /admin/realms/creed/users` responde 403.
+    - `view-realm` — **ler a realm role** antes de atribuí-la. Sem ela,
+      `GET /admin/realms/creed/roles/gestor` responde 403 e o espelhamento de
+      papel morre no meio do provisionamento, com o usuário já criado.
+
+    `view-users` e `query-users` são dispensáveis: `manage-users` já dá leitura,
+    e `view-users` é composta — traz `query-users` e `query-groups` de brinde.
+    Papel a mais aqui é permissão de admin que ninguém pediu.
+    """
+    sa = next(
+        u for u in REALM["users"] if u.get("serviceAccountClientId") == "creed-backend"
+    )
+
+    assert set(sa["clientRoles"]["realm-management"]) == {"manage-users", "view-realm"}
+
+
 def test_sessao_segue_os_tempos_da_premissa_p010() -> None:
     """P-010: access token de 15 min, refresh de 8 h."""
     assert REALM["accessTokenLifespan"] == 15 * 60
