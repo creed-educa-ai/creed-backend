@@ -51,6 +51,39 @@ uvicorn app.main:app --reload
 
 Docs da API: http://localhost:8000/api/v1/docs
 
+## Autenticação local (Keycloak)
+
+O Keycloak sobe pelo mesmo `docker-compose`, com o realm **importado de arquivo**
+(`docker/keycloak/realm-creed.json`). Nada aqui se configura clicando na UI: realm
+clicado é dev e produção divergindo sem ninguém perceber.
+
+```bash
+docker compose up -d db keycloak
+```
+
+> Quem já tinha o volume `pgdata` antes desta mudança precisa de um
+> `docker compose down -v` uma vez: o schema `keycloak` é criado pelo script de
+> init do Postgres, que só roda com o volume vazio.
+
+Conferir que o realm subiu — o usuário de teste vem do próprio export:
+
+```bash
+curl -s -X POST http://localhost:8080/realms/creed/protocol/openid-connect/token -d grant_type=password -d client_id=creed-backend -d client_secret=creed-local-secret -d username=dev@creed.local -d password=dev
+```
+
+| Onde | Valor |
+|---|---|
+| Console do Keycloak | http://localhost:8080 — `admin` / `admin` |
+| Usuário de teste do realm | `dev@creed.local` / `dev`, papel `admin` |
+
+**O que muda no realm, muda no arquivo.** Alterou pela UI para testar? Ou refaça no
+JSON, ou perca a alteração no próximo `down -v` — e é assim de propósito.
+
+> ⚠️ **O `sub` do usuário de teste muda a cada `down -v`.** O realm fixa e-mail, senha e
+> papel, não o id: quem recria o ambiente ganha um `sub` novo. Nenhum seed pode gravar
+> `User.keycloak_id` com o `sub` do `dev@creed.local` lido uma vez — o seed tem que
+> perguntar ao Keycloak a cada execução.
+
 ## Qualidade
 
 ```bash

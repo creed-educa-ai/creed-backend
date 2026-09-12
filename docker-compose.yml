@@ -7,11 +7,35 @@ services:
       POSTGRES_PASSWORD: creed
       POSTGRES_DB: creed
     ports: ['5432:5432']
-    volumes: [pgdata:/var/lib/postgresql/data]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Cria o schema `keycloak`. Só roda quando o volume nasce vazio — quem já
+      # tem o pgdata precisa de um `docker compose down -v` uma vez.
+      - ./docker/postgres/init-keycloak-schema.sql:/docker-entrypoint-initdb.d/10-keycloak-schema.sql:ro
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U creed']
       interval: 10s
       retries: 5
+
+  # Autenticação (CREED-23, decisões D1 e D3). O realm é ARQUIVO versionado e
+  # importado no boot: nada aqui se configura clicando na UI, senão dev e produção
+  # divergem sem ninguém perceber.
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    command: start-dev --import-realm
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://db:5432/creed
+      KC_DB_SCHEMA: keycloak
+      KC_DB_USERNAME: creed
+      KC_DB_PASSWORD: creed
+    ports: ['8080:8080']
+    volumes:
+      - ./docker/keycloak/realm-creed.json:/opt/keycloak/data/import/realm-creed.json:ro
+    depends_on:
+      db: {condition: service_healthy}
 
   n8n:
     image: n8nio/n8n:latest
