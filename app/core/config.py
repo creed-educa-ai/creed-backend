@@ -1,7 +1,8 @@
 """Configuração da aplicação via variáveis de ambiente (ADR-002, secao 2.3).
 
 A config vem sempre do ambiente — nunca hardcoded — porque o deploy é em
-container no EKS (ADR-001), onde os valores são injetados por ConfigMap/Secret.
+container numa EC2 (ADR-0007), onde os valores chegam pelo ambiente do
+container e os segredos vêm do gerenciador de segredo da AWS.
 """
 
 from functools import lru_cache
