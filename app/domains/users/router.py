@@ -1,8 +1,7 @@
 from fastapi import APIRouter, HTTPException, status
 
 from app.domains.users.dependencies import ServiceDep
-from app.domains.users.models import User
-from app.domains.users.schemas import UserCreate, UserResponse
+from app.domains.users.schemas import UserCreate, UserDelete, UserResponse
 from app.shared.exceptions import ConflictError
 
 """Endpoints HTTP do domínio respondentes (ADR-002, secao 2.2).
@@ -14,9 +13,39 @@ service e devolve. Nenhuma regra de negócio aqui.
 router = APIRouter(prefix="/user", tags=["auth"])
 
 
-@router.post("", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
-async def create_user_router(data: UserCreate, service: ServiceDep) -> User:
+@router.post(
+    "/create",
+    response_model=UserResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_user_router(
+    data: UserCreate,
+    service: ServiceDep,
+) -> UserResponse:
     try:
-        return await service.create_user_service(data)
+        user = await service.create_user_service(data)
+        return UserResponse.model_validate(user)
+
     except ConflictError as exc:
-        raise HTTPException(status.HTTP_409_CONFLICT, exc.message) from exc
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=exc.message,
+        ) from exc
+
+
+@router.delete(
+    "/delete",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_user_router(
+    data: UserDelete,
+    service: ServiceDep,
+) -> None:
+    try:
+        await service.delete_user_service(data)
+
+    except ConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=exc.message,
+        ) from exc

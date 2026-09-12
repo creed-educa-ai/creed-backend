@@ -1,9 +1,10 @@
 """Models SQLAlchemy do domínio organizacoes."""
 
+import enum
 import uuid
 from typing import TYPE_CHECKING
 
-from sqlalchemy import String
+from sqlalchemy import Enum, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -11,6 +12,18 @@ from app.core.database import Base
 
 if TYPE_CHECKING:
     pass
+
+
+class StatusEnum(enum.Enum):
+    """Enum para os status de um usuário
+
+    Attributes:
+        ACTIVE: Usuário ativo,
+        INACTIVE: Usuário desativado.
+    """
+
+    ACTIVE = True
+    INACTIVE = False
 
 
 class User(Base):
@@ -32,6 +45,10 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(255), nullable=False)
 
     hash_password: Mapped[str] = mapped_column(String(255), nullable=False)
+
+    role: Mapped[StatusEnum] = mapped_column(
+        Enum(StatusEnum), nullable=False, default=StatusEnum.INACTIVE
+    )
 
     id_link: Mapped[uuid.UUID] = relationship(
         "Connection", back_populates="user", cascade="all, delete-orphan", lazy="select"

@@ -25,11 +25,19 @@ class UserRepository:
         return result.scalar_one_or_none()
 
     async def create(self, user: User) -> User:
+        """Cria um usuário no banco."""
         self.db.add(user)
         await self.db.flush()
         await self.db.refresh(user)
         return user
 
     async def delete(self, user: User) -> None:
-        await self.db.delete(user)
-        await self.db.flush()
+        """Delete um usuário do banco."""
+        try:
+            await self.db.delete(user)
+            await self.db.flush()
+            await self.db.commit()
+
+        except Exception as exc:
+            await self.db.rollback()
+            raise exc
