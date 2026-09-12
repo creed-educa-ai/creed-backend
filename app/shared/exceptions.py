@@ -23,3 +23,7 @@ class ValidationError(DomainError):
 
 class ConflictError(DomainError):
     """Conflito de estado (ex: duplicidade). Traduzido para 409 no router."""
+
+
+class AuthenticationError(DomainError):
+    """Login ou renovação de sessão falhou. Traduzido para 401 no router."""
