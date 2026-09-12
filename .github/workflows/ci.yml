@@ -11,12 +11,15 @@ jobs:
   qualidade:
     runs-on: ubuntu-latest
 
-    # POSTGRES_PASSWORD não tem default na Settings (ADR-002, secao 2.3) — sem
-    # ele qualquer import de app.core.config falha, então vale para todos os steps.
+    # POSTGRES_PASSWORD e KEYCLOAK_CLIENT_SECRET não têm default na Settings
+    # (ADR-002, secao 2.3) — sem eles qualquer import de app.core.config falha,
+    # então valem para todos os steps. O valor aqui é descartável: nenhum teste
+    # fala com Keycloak, só precisa que a Settings consiga ser construída.
     env:
       POSTGRES_USER: creed
       POSTGRES_PASSWORD: creed
       POSTGRES_DB: creed_test
+      KEYCLOAK_CLIENT_SECRET: irrelevante-no-ci
 
     services:
       postgres:
