@@ -1,4 +1,4 @@
-"""Acesso a dados do domínio respondentes (ADR-002, secao 2.2).
+"""Acesso a dados do domínio de user.
 
 Esta camada NÃO contém regra de negócio: só queries e agregações.
 Agregação pesada é empurrada para o Postgres, nunca feita em memória.
@@ -32,12 +32,6 @@ class UserRepository:
         return user
 
     async def delete(self, user: User) -> None:
-        """Delete um usuário do banco."""
-        try:
-            await self.db.delete(user)
-            await self.db.flush()
-            await self.db.commit()
-
-        except Exception as exc:
-            await self.db.rollback()
-            raise exc
+        """Deleta um usuário do banco."""
+        await self.db.delete(user)
+        await self.db.flush()

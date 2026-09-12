@@ -1,55 +1,67 @@
-"""Models SQLAlchemy do domínio organizacoes."""
+"""Models SQLAlchemy do domínio de Users."""
 
 import enum
 import uuid
-from typing import TYPE_CHECKING
+from datetime import datetime
 
-from sqlalchemy import Enum, String
+from sqlalchemy import DateTime, Enum, String, func
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
 
-if TYPE_CHECKING:
-    pass
+
+class RecordStatus(enum.Enum):
+    """Enum para o status de um registro."""
+
+    ACTIVE = "active"
+    INACTIVE = "inactive"
 
 
-class StatusEnum(enum.Enum):
-    """Enum para os status de um usuário
+class UserRole(enum.Enum):
+    """Papéis disponíveis para usuários no realm."""
 
-    Attributes:
-        ACTIVE: Usuário ativo,
-        INACTIVE: Usuário desativado.
-    """
-
-    ACTIVE = True
-    INACTIVE = False
+    ADMIN = "admin"
+    GESTOR = "gestor"
+    RESPONDENTE = "respondente"
 
 
 class User(Base):
-    """Classe responsável por fazer simulação e criação da tabela user
-
-    Attributes:
-        id (uuid.UUID): Chave primária gerada automaticamente pelo sistema
-        email (str): Email do Usuário
-        hash_password (str): Hash da senha criptografada
-        id_link (uuid.UUID): Id do vinculo que esse usuário está linkado.
-    """
+    """Classe responsável pela criação da tabela de usuários."""
 
     __tablename__ = "user"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
     )
 
-    email: Mapped[str] = mapped_column(String(255), nullable=False)
-
-    hash_password: Mapped[str] = mapped_column(String(255), nullable=False)
-
-    role: Mapped[StatusEnum] = mapped_column(
-        Enum(StatusEnum), nullable=False, default=StatusEnum.INACTIVE
+    email: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+        unique=True,
     )
 
-    id_link: Mapped[uuid.UUID] = relationship(
-        "Connection", back_populates="user", cascade="all, delete-orphan", lazy="select"
+    hash_password: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+    )
+
+    status: Mapped[RecordStatus] = mapped_column(
+        Enum(RecordStatus),
+        nullable=False,
+        default=RecordStatus.INACTIVE,
+    )
+
+    role: Mapped[UserRole] = mapped_column(
+        Enum(UserRole),
+        nullable=False,
+        default=UserRole.RESPONDENTE,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
     )

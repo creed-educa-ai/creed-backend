@@ -1,20 +1,20 @@
+"""Endpoints HTTP do domínio de User.
+
+Esta camada é fina de propósito: recebe, valida via Pydantic, delega ao
+service e devolve. Nenhuma regra de negócio aqui.
+"""
+
 from fastapi import APIRouter, HTTPException, status
 
 from app.domains.users.dependencies import ServiceDep
 from app.domains.users.schemas import UserCreate, UserDelete, UserResponse
 from app.shared.exceptions import ConflictError
 
-"""Endpoints HTTP do domínio respondentes (ADR-002, secao 2.2).
-
-Esta camada é fina de propósito: recebe, valida via Pydantic, delega ao
-service e devolve. Nenhuma regra de negócio aqui.
-"""
-
-router = APIRouter(prefix="/user", tags=["auth"])
+router = APIRouter(prefix="/users", tags=["user"])
 
 
 @router.post(
-    "/create",
+    "/",
     response_model=UserResponse,
     status_code=status.HTTP_201_CREATED,
 )
@@ -34,7 +34,7 @@ async def create_user_router(
 
 
 @router.delete(
-    "/delete",
+    "/{user_id}",
     status_code=status.HTTP_204_NO_CONTENT,
 )
 async def delete_user_router(

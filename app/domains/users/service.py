@@ -8,7 +8,7 @@ cálculo dos 5 prismas (ADR-001, secao 4.1).
 from app.domains.users.models import User
 from app.domains.users.repository import UserRepository
 from app.domains.users.schemas import UserCreate, UserDelete
-from app.shared.exceptions import ConflictError
+from app.shared.exceptions import ConflictError, NotFoundError
 
 
 class UserService:
@@ -32,6 +32,6 @@ class UserService:
         user = await self.repository.get_by_id(request.id)
 
         if not user:
-            raise ConflictError(f"Usuário não existente para o Id: {request.id}")
+            raise NotFoundError(f"Usuário não existente para o Id: {request.id}")
 
         await self.repository.delete(user)

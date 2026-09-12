@@ -14,7 +14,7 @@ class UserResponse(BaseModel):
     """Representação de saída de User."""
 
     id: uuid.UUID
-    link_id: uuid.UUID
+    # link_id: uuid.UUID
     email: str = Field(min_length=2, max_length=200)
     status: bool
 
