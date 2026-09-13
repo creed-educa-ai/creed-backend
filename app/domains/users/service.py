@@ -5,7 +5,7 @@ isolada e testável — o mesmo padrão que os dashboards usarão para o
 cálculo dos 5 prismas (ADR-001, secao 4.1).
 """
 
-from app.domains.users.models import User
+from app.domains.users.models import RecordStatus, User
 from app.domains.users.repository import UserRepository
 from app.domains.users.schemas import UserCreate, UserDelete
 from app.shared.exceptions import ConflictError, NotFoundError
@@ -14,6 +14,14 @@ from app.shared.exceptions import ConflictError, NotFoundError
 class UserService:
     def __init__(self, repository: UserRepository) -> None:
         self.repository = repository
+
+    async def get_active_user_by_email(self, email: str) -> User | None:
+        user = await self.repository.get_user_by_email(email)
+
+        if user is None or user.status is not RecordStatus.ACTIVE:
+            return None
+
+        return user
 
     async def create_user_service(self, request: UserCreate) -> User:
         already_exists = await self.repository.get_user_by_email(request.email)
