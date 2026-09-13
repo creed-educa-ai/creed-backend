@@ -9,7 +9,11 @@ from app.domains.authentication.schemas import (
 )
 from app.domains.users.service import UserService
 from app.external_services.keycloak import client as keycloak_client
-from app.external_services.keycloak.token import validate_token
+from app.external_services.keycloak.token import (
+    InvalidTokenError,
+    JwksUnavailableError,
+    validate_token,
+)
 from app.shared.exceptions import AuthenticationError
 
 _INVALID_CREDENTIALS = "E-mail ou senha inválidos"
@@ -43,7 +47,14 @@ class AuthenticationService:
     async def _build_session(
         self, tokens: dict[str, Any], error_message: str
     ) -> SessionResponse:
-        claims = await validate_token(tokens["access_token"])
+        # O Keycloak acabou de emitir este token, então falhar aqui é anomalia:
+        # chave rodada no meio do login, relógio fora de sincronia, ou o JWKS
+        # inacessível. Nenhuma delas é 500 na cara do usuário.
+        try:
+            claims = await validate_token(tokens["access_token"])
+        except (InvalidTokenError, JwksUnavailableError) as exc:
+            raise AuthenticationError(error_message) from exc
+
         email = claims.get("email")
 
         user = await self.users.get_active_user_by_email(email) if email else None

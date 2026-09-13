@@ -7,7 +7,11 @@ from fastapi import Depends, HTTPException, Request, status
 
 from app.domains.users.dependencies import ServiceDep as UserServiceDep
 from app.domains.users.service import UserService
-from app.external_services.keycloak.token import InvalidTokenError, validate_token
+from app.external_services.keycloak.token import (
+    InvalidTokenError,
+    JwksUnavailableError,
+    validate_token,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +40,7 @@ async def _identity_from_token(request: Request) -> AuthenticatedUser:
 
     try:
         claims = await validate_token(token)
-    except InvalidTokenError as exc:
+    except (InvalidTokenError, JwksUnavailableError) as exc:
         logger.info("Token rejeitado: %s", exc)
         raise HTTPException(
             status.HTTP_401_UNAUTHORIZED, "Sessão inválida ou expirada"
