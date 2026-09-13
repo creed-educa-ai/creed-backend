@@ -37,15 +37,21 @@ class User(Base):
         default=uuid.uuid4,
     )
 
-    email: Mapped[str] = mapped_column(
-        String(255),
+    keycloak_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
         nullable=False,
         unique=True,
     )
 
-    hash_password: Mapped[str] = mapped_column(
+    nome: Mapped[str] = mapped_column(
+        String(200),
+        nullable=False,
+    )
+
+    email: Mapped[str] = mapped_column(
         String(255),
         nullable=False,
+        unique=True,
     )
 
     status: Mapped[RecordStatus] = mapped_column(
