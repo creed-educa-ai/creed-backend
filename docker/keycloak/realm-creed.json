@@ -75,19 +75,14 @@
           "temporary": false
         }
       ],
-      "realmRoles": [
-        "admin"
-      ]
+      "realmRoles": ["admin"]
     },
     {
       "username": "service-account-creed-backend",
       "enabled": true,
       "serviceAccountClientId": "creed-backend",
       "clientRoles": {
-        "realm-management": [
-          "manage-users",
-          "view-realm"
-        ]
+        "realm-management": ["manage-users", "view-realm"]
       }
     }
   ],

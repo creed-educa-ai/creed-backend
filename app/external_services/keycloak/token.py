@@ -5,10 +5,11 @@ A chave pública do realm (JWKS) é lida uma vez e guardada em memória pelo TTL
 reler a cada requisição poria o Keycloak no caminho crítico de **toda** rota
 protegida — uma indisponibilidade dele viraria indisponibilidade da API inteira.
 
-Valida assinatura RS256, `iss`, `aud` e `exp`. O `aud` só é conferível porque o
-realm tem um audience mapper explícito no client (ver `realm-creed.json`): sem
-ele, o Keycloak emite `aud: ["account"]` num Direct Access Grant e a conferência
-não diria nada sobre o destinatário do token.
+Valida assinatura RS256, `iss`, `aud` e `exp`. O `aud` só existe porque o realm
+tem um audience mapper explícito no client (ver `realm-creed.json`): medido
+contra o realm local, um Direct Access Grant **sem** esse mapper emite token
+sem `aud` nenhum, e a validação aqui recusaria todo login. Mexer nesse mapper
+quebra a autenticação inteira — por isso há teste guardando o arquivo.
 """
 
 import time
