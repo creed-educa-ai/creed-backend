@@ -22,9 +22,11 @@ from app.domains.respondentes.router import router as respondentes_router
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Ciclo de vida da aplicação.
 
-    NOTA (ADR-002, secao 2.4.d): migrations NÃO rodam aqui. No EKS, múltiplos
-    pods sobem em paralelo e migrariam o mesmo banco simultaneamente. A
-    migration roda num Job/initContainer dedicado, antes dos pods subirem.
+    NOTA (ADR-002 secao 2.4.d; mecanismo revisto pelo ADR-0007): migrations
+    NÃO rodam aqui. Schema é recurso compartilhado — migrar a partir do
+    processo que serve requisição mistura duas responsabilidades que precisam
+    falhar separado. A migration roda num passo dedicado do pipeline, num
+    container descartável, antes de este container ser recriado.
     """
     yield
 

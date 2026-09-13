@@ -107,6 +107,6 @@ alembic upgrade head
    renomear coluna vira drop+create e **perde dados**.
 2. Migration passa por code review, com prioridade.
 3. Conflito de heads: usar `alembic merge`, nunca editar `down_revision` à revelia.
-4. No deploy: **Job dedicado**, nunca no startup do container.
+4. No deploy: **passo dedicado do pipeline**, nunca no startup do container.
 5. Rollback: corrigir avançando com nova migration, não com `downgrade`.
 6. Mudança destrutiva: dividir em passos (adicionar → migrar dados → remover).
