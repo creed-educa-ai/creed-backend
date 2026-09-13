@@ -11,11 +11,13 @@ from sqlalchemy import engine_from_config, pool
 
 from app.core.config import settings
 from app.core.database import Base
+from app.domains.documentos import models as documentos_models  # noqa: F401
 
 # --- IMPORTANTE ---
 # Todo model novo precisa ser importado aqui, senão o autogenerate não o enxerga
 # e a migration sai vazia ou incompleta.
 from app.domains.respondentes import models as respondentes_models  # noqa: F401
+from app.domains.users import models as users_models  # noqa: F401
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.database_url_sync)
