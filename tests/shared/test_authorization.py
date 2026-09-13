@@ -22,7 +22,7 @@ class _FakeUserService:
         return self._user
 
 
-def _build_user(role: UserRole, email: str = "dev@creed.local") -> User:
+def _build_user(role: UserRole, email: str = "dev@creed.example.com") -> User:
     return User(
         id=uuid.uuid4(),
         keycloak_id=uuid.uuid4(),
@@ -109,7 +109,7 @@ def test_authenticated_route_with_valid_token_returns_200(
         monkeypatch,
         lambda _token: {
             "sub": "user-123",
-            "email": "dev@creed.local",
+            "email": "dev@creed.example.com",
             "realm_access": {"roles": ["admin"]},
         },
     )
@@ -197,7 +197,7 @@ def test_role_mismatch_between_token_and_database_returns_401_and_logs_error(
         monkeypatch,
         lambda _token: {
             "sub": "user-123",
-            "email": "dev@creed.local",
+            "email": "dev@creed.example.com",
             "realm_access": {"roles": ["admin"]},
         },
     )
@@ -217,7 +217,7 @@ def test_user_without_an_active_account_returns_401(
         monkeypatch,
         lambda _token: {
             "sub": "user-123",
-            "email": "dev@creed.local",
+            "email": "dev@creed.example.com",
             "realm_access": {"roles": ["admin"]},
         },
     )

@@ -18,7 +18,7 @@ FAKE_SESSION = SessionResponse(
     access_token="access-fake",  # noqa: S106
     refresh_token="refresh-fake",  # noqa: S106
     expires_in=900,
-    user=UserSessionResponse(id="user-123", email="dev@creed.local", role="admin"),
+    user=UserSessionResponse(id="user-123", email="dev@creed.example.com", role="admin"),
 )
 
 
@@ -60,7 +60,7 @@ def test_login_with_valid_credentials_returns_200_in_the_contract_shape(
     _use_fake_service(app, _FakeService(login_ok=True))
 
     response = client.post(
-        "/auth/login", json={"email": "dev@creed.local", "password": "dev"}
+        "/auth/login", json={"email": "dev@creed.example.com", "password": "dev"}
     )
 
     assert response.status_code == 200
@@ -82,7 +82,7 @@ def test_login_with_invalid_credentials_returns_401(
     _use_fake_service(app, _FakeService(login_ok=False))
 
     response = client.post(
-        "/auth/login", json={"email": "dev@creed.local", "password": "wrong"}
+        "/auth/login", json={"email": "dev@creed.example.com", "password": "wrong"}
     )
 
     assert response.status_code == 401
@@ -123,7 +123,7 @@ def test_me_without_authorization_returns_401(client: TestClient) -> None:
 
 def test_me_with_authenticated_user_returns_200(app: FastAPI, client: TestClient) -> None:
     app.dependency_overrides[current_user] = lambda: AuthenticatedUser(
-        sub="user-123", email="dev@creed.local", roles=["admin"]
+        sub="user-123", email="dev@creed.example.com", roles=["admin"]
     )
 
     response = client.get("/auth/me", headers={"Authorization": "Bearer valid"})

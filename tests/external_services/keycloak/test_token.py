@@ -33,7 +33,7 @@ def _token(**alteracoes: Any) -> str:
     agora = int(time.time())
     claims: dict[str, Any] = {
         "sub": "11111111-1111-4111-8111-111111111111",
-        "email": "dev@creed.local",
+        "email": "dev@creed.example.com",
         "aud": "creed-backend",
         "iss": ISSUER,
         "exp": agora + 900,
@@ -82,7 +82,7 @@ class TestTokenValido:
 
         claims = await keycloak_token.validate_token(_token())
 
-        assert claims["email"] == "dev@creed.local"
+        assert claims["email"] == "dev@creed.example.com"
         assert claims["realm_access"]["roles"] == ["admin"]
 
     async def test_le_o_jwks_do_endpoint_do_realm(

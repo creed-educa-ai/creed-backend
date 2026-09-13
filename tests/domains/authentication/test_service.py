@@ -22,14 +22,14 @@ FAKE_TOKENS = {
 }
 FAKE_CLAIMS = {
     "sub": "user-123",
-    "email": "dev@creed.local",
+    "email": "dev@creed.example.com",
     "realm_access": {"roles": ["admin"]},
 }
 
 ACTIVE_USER = User(
     id=uuid.uuid4(),
     keycloak_id=uuid.uuid4(),
-    email="dev@creed.local",
+    email="dev@creed.example.com",
     name="Dev CREED",
     status=RecordStatus.ACTIVE,
     role=UserRole.ADMIN,
@@ -67,7 +67,7 @@ async def test_login_success_builds_session_from_database_user(
 
     monkeypatch.setattr(keycloak_client, "login", _fake_login)
 
-    login_request = LoginRequest(email="dev@creed.local", password="dev")  # noqa: S106
+    login_request = LoginRequest(email="dev@creed.example.com", password="dev")  # noqa: S106
     session = await service.login(login_request)
 
     assert session.access_token == "access-fake"  # noqa: S105
@@ -75,7 +75,7 @@ async def test_login_success_builds_session_from_database_user(
     assert session.expires_in == 900
 
     assert session.user.id == str(ACTIVE_USER.id)
-    assert session.user.email == "dev@creed.local"
+    assert session.user.email == "dev@creed.example.com"
     assert session.user.role == "admin"
 
 
@@ -87,7 +87,7 @@ async def test_login_with_wrong_password_raises_authentication_error(
 
     monkeypatch.setattr(keycloak_client, "login", _fake_login)
 
-    login_request = LoginRequest(email="dev@creed.local", password="wrong")  # noqa: S106
+    login_request = LoginRequest(email="dev@creed.example.com", password="wrong")  # noqa: S106
     with pytest.raises(AuthenticationError):
         await service.login(login_request)
 
@@ -101,11 +101,11 @@ async def test_login_with_unknown_email_returns_same_message_as_wrong_password(
     monkeypatch.setattr(keycloak_client, "login", _fake_login)
 
     wrong_password_request = LoginRequest(
-        email="dev@creed.local",
+        email="dev@creed.example.com",
         password="wrong",  # noqa: S106
     )
     unknown_email_request = LoginRequest(
-        email="nobody@creed.local",
+        email="nobody@creed.example.com",
         password="any",  # noqa: S106
     )
 
@@ -128,7 +128,7 @@ async def test_login_with_inactive_database_user_returns_same_message(
 
     monkeypatch.setattr(keycloak_client, "login", _fake_login)
 
-    login_request = LoginRequest(email="dev@creed.local", password="dev")  # noqa: S106
+    login_request = LoginRequest(email="dev@creed.example.com", password="dev")  # noqa: S106
     with pytest.raises(AuthenticationError) as exc:
         await service.login(login_request)
 
@@ -143,7 +143,7 @@ async def test_login_with_keycloak_down_raises_authentication_error(
 
     monkeypatch.setattr(keycloak_client, "login", _fake_login)
 
-    login_request = LoginRequest(email="dev@creed.local", password="dev")  # noqa: S106
+    login_request = LoginRequest(email="dev@creed.example.com", password="dev")  # noqa: S106
     with pytest.raises(AuthenticationError):
         await service.login(login_request)
 

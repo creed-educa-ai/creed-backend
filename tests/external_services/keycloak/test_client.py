@@ -53,14 +53,14 @@ class TestLogin:
 
         _responder_com(monkeypatch, _handler)
 
-        assert await keycloak_client.login("dev@creed.local", "senha") == TOKENS
+        assert await keycloak_client.login("dev@creed.example.com", "senha") == TOKENS
 
         assert capturada["url"] == (
             "http://kc.local:8080/realms/creed/protocol/openid-connect/token"
         )
         corpo = str(capturada["corpo"])
         assert "grant_type=password" in corpo
-        assert "username=dev%40creed.local" in corpo
+        assert "username=dev%40creed.example.com" in corpo
         assert "client_id=creed-backend" in corpo
         assert "client_secret=segredo-local" in corpo
 
@@ -76,7 +76,7 @@ class TestLogin:
         )
 
         with pytest.raises(keycloak_client.InvalidCredentialsError):
-            await keycloak_client.login("dev@creed.local", "errada")
+            await keycloak_client.login("dev@creed.example.com", "errada")
 
     async def test_erro_do_servidor_nao_e_credencial(
         self, monkeypatch: pytest.MonkeyPatch
@@ -86,7 +86,7 @@ class TestLogin:
         _responder_com(monkeypatch, lambda _r: httpx.Response(503, text="down"))
 
         with pytest.raises(keycloak_client.KeycloakUnavailableError):
-            await keycloak_client.login("dev@creed.local", "senha")
+            await keycloak_client.login("dev@creed.example.com", "senha")
 
     async def test_keycloak_inalcancavel(self, monkeypatch: pytest.MonkeyPatch) -> None:
         def _handler(request: httpx.Request) -> httpx.Response:
@@ -95,7 +95,7 @@ class TestLogin:
         _responder_com(monkeypatch, _handler)
 
         with pytest.raises(keycloak_client.KeycloakUnavailableError):
-            await keycloak_client.login("dev@creed.local", "senha")
+            await keycloak_client.login("dev@creed.example.com", "senha")
 
 
 class TestRefresh:
