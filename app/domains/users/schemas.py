@@ -1,73 +1,54 @@
-"""Models SQLAlchemy do domínio de Users."""
+"""Schemas Pydantic do domínio users.
 
-import enum
+Separados por direção (ADR-002, secao 2.3): entrada e saída não se contaminam.
+
+A montagem da saída a partir do model mora aqui, em `de_model()`, e não no
+router: o schema já conhece a forma do model (`from_attributes=True`), enquanto o
+router não pode conhecer (ADR-0004, item 7).
+"""
+
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Enum, String, func
-from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import Mapped, mapped_column
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
-from app.core.database import Base
+from app.domains.users.models import RecordStatus, User, UserRole
 
 
-class RecordStatus(enum.Enum):
-    """Enum para o status de um registro."""
-
-    ACTIVE = "active"
-    INACTIVE = "inactive"
+class UserBase(BaseModel):
+    name: str = Field(min_length=2, max_length=200)
+    email: EmailStr
 
 
-class UserRole(enum.Enum):
-    """Papéis disponíveis para usuários no realm."""
+class UserCreate(UserBase):
+    """Payload de criação.
 
-    ADMIN = "admin"
-    GESTOR = "gestor"
-    RESPONDENTE = "respondente"
+    Sem senha: credencial é do Keycloak (P-012). O que atravessa é o
+    `keycloak_id`, o `sub` do JWT do usuário já provisionado no realm.
+
+    Sem `role`: o papel vem do vínculo, não do payload — `contrato-api.md` é
+    explícito ("mandar `role` no POST é sintoma de ter entendido o modelo ao
+    contrário"). Até `Vinculo` existir, vale o default do model.
+    """
+
+    keycloak_id: uuid.UUID
 
 
-class User(Base):
-    """Classe responsável pela criação da tabela de usuários."""
+class UserResponse(UserBase):
+    """Representação de saída, na forma do `User` do contrato-api.md.
 
-    __tablename__ = "user"
+    `keycloak_id` fica de fora de propósito: é o elo interno com o realm, e o
+    contrato não o expõe.
+    """
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
-        primary_key=True,
-        default=uuid.uuid4,
-    )
+    model_config = ConfigDict(from_attributes=True)
 
-    keycloak_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
-        nullable=False,
-        unique=True,
-    )
+    id: uuid.UUID
+    status: RecordStatus
+    role: UserRole
+    created_at: datetime
 
-    name: Mapped[str] = mapped_column(
-        String(200),
-        nullable=False,
-    )
-
-    email: Mapped[str] = mapped_column(
-        String(255),
-        nullable=False,
-        unique=True,
-    )
-
-    status: Mapped[RecordStatus] = mapped_column(
-        Enum(RecordStatus),
-        nullable=False,
-        default=RecordStatus.INACTIVE,
-    )
-
-    role: Mapped[UserRole] = mapped_column(
-        Enum(UserRole),
-        nullable=False,
-        default=UserRole.RESPONDENTE,
-    )
-
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-        server_default=func.now(),
-    )
+    @classmethod
+    def de_model(cls, user: User) -> "UserResponse":
+        """Monta a saída a partir do model."""
+        return cls.model_validate(user)
