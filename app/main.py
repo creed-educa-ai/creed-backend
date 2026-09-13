@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
+from app.domains.authentication.router import router as authentication_router
 from app.domains.dashboards.router import router as dashboards_router
 from app.domains.organizacoes.router import router as organizacoes_router
 from app.domains.prismas.router import router as prismas_router
@@ -54,6 +55,7 @@ async def health() -> dict[str, str]:
 
 
 for _router in (
+    authentication_router,
     respondentes_router,
     organizacoes_router,
     prismas_router,
