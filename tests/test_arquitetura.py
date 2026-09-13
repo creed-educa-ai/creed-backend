@@ -29,7 +29,14 @@ NOMES = [caminho.name for caminho in DOMINIOS]
 #     "dashboards": "agrega respondentes e prismas; ver docstring do repository"
 LEITURA_ENTRE_DOMINIOS: dict[str, str] = {}
 
-IMPORT_DE_DOMINIO = re.compile(r"from app\.domains\.(\w+)")
+
+COMPOE_COM_SERVICE_DE: dict[str, str] = {
+    "authentication": "le o usuario pelo UserService",
+}
+
+SUBMODULOS_DE_COMPOSICAO = {"service", "dependencies"}
+
+IMPORT_DE_DOMINIO = re.compile(r"from app\.domains\.(\w+)\.(\w+)")
 
 
 def _codigo(arquivo: Path) -> list[str]:
@@ -97,14 +104,18 @@ def test_dominio_nao_importa_dominio(dominio: Path) -> None:
     invasores = []
     for arquivo in sorted(dominio.glob("*.py")):
         for linha in _imports(_codigo(arquivo)):
-            for alvo in IMPORT_DE_DOMINIO.findall(linha):
+            for alvo, submodulo in IMPORT_DE_DOMINIO.findall(linha):
                 if alvo == dominio.name:
                     continue
-                permitido = (
+                leitura_por_join = (
                     dominio.name in LEITURA_ENTRE_DOMINIOS
                     and arquivo.name == "repository.py"
                 )
-                if not permitido:
+                composicao_por_service = (
+                    dominio.name in COMPOE_COM_SERVICE_DE
+                    and submodulo in SUBMODULOS_DE_COMPOSICAO
+                )
+                if not (leitura_por_join or composicao_por_service):
                     invasores.append(f"{arquivo.name}: {linha.strip()}")
 
     assert not invasores, (

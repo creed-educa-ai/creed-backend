@@ -65,7 +65,9 @@ def test_usuario_de_teste_entra_pelo_token_endpoint() -> None:
     responde `invalid_grant: "Account is not fully set up"` — que na tela vira
     "senha inválida" e manda o time procurar um bug que não existe.
     """
-    usuario = next(u for u in REALM["users"] if u.get("username") == "dev@creed.local")
+    usuario = next(
+        u for u in REALM["users"] if u.get("username") == "dev@creed.example.com"
+    )
 
     assert usuario["enabled"] is True
     assert usuario.get("requiredActions") == []
@@ -136,3 +138,35 @@ def test_sessao_segue_os_tempos_da_premissa_p010() -> None:
     """P-010: access token de 15 min, refresh de 8 h."""
     assert REALM["accessTokenLifespan"] == 15 * 60
     assert REALM["ssoSessionMaxLifespan"] == 8 * 60 * 60
+
+
+def test_client_carimba_a_propria_audiencia_no_access_token(
+    client: dict[str, Any],
+) -> None:
+    """Sem este mapper, o Direct Access Grant emite `aud: ["account"]`.
+
+    O backend valida `aud` (entrega 23.4). Com `account` no lugar do client, ou
+    a conferência falha e ninguém entra, ou é afrouxada — e aí deixa de dizer
+    qualquer coisa sobre para quem o token foi emitido.
+    """
+    mapper = next(
+        m
+        for m in client.get("protocolMappers", [])
+        if m["protocolMapper"] == "oidc-audience-mapper"
+    )
+
+    assert mapper["config"]["included.client.audience"] == client["clientId"]
+    assert mapper["config"]["access.token.claim"] == "true"
+
+
+def test_usuario_de_teste_tem_id_fixo() -> None:
+    """O `keycloak_id` da tabela `user` precisa casar com o `sub` do token.
+
+    Sem `id` no export, o Keycloak sorteia um UUID a cada import e o seed local
+    não tem como ser escrito antes de o realm subir.
+    """
+    usuario = next(
+        u for u in REALM["users"] if u.get("username") == "dev@creed.example.com"
+    )
+
+    assert usuario["id"] == "11111111-1111-4111-8111-111111111111"
