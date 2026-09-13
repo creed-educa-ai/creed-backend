@@ -6,6 +6,7 @@ cálculo dos 5 prismas (ADR-001, secao 4.1).
 """
 
 import uuid
+
 from app.domains.users.models import RecordStatus, User
 from app.domains.users.repository import UserRepository
 from app.domains.users.schemas import UserCreate

@@ -28,8 +28,9 @@ FAKE_CLAIMS = {
 
 ACTIVE_USER = User(
     id=uuid.uuid4(),
+    keycloak_id=uuid.uuid4(),
     email="dev@creed.local",
-    hash_password="irrelevant-hash",  # noqa: S106
+    name="Dev CREED",
     status=RecordStatus.ACTIVE,
     role=UserRole.ADMIN,
 )

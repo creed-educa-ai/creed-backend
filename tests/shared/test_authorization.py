@@ -25,8 +25,9 @@ class _FakeUserService:
 def _build_user(role: UserRole, email: str = "dev@creed.local") -> User:
     return User(
         id=uuid.uuid4(),
+        keycloak_id=uuid.uuid4(),
         email=email,
-        hash_password="irrelevant-hash",  # noqa: S106
+        name="Dev CREED",
         status=RecordStatus.ACTIVE,
         role=role,
     )
