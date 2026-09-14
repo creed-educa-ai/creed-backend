@@ -60,8 +60,9 @@
   ],
   "users": [
     {
-      "username": "dev@creed.local",
-      "email": "dev@creed.local",
+      "id": "11111111-1111-4111-8111-111111111111",
+      "username": "dev@creed.example.com",
+      "email": "dev@creed.example.com",
       "firstName": "Dev",
       "lastName": "Local",
       "enabled": true,

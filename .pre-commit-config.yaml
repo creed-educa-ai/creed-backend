@@ -31,6 +31,8 @@ repos:
           - fastapi
           - alembic
           - pytest
+          - httpx
+          - pyjwt[crypto]
         args: [--strict]
 
   - repo: local

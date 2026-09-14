@@ -49,6 +49,12 @@ alembic upgrade head
 uvicorn app.main:app --reload
 ```
 
+> **Já tem um PostgreSQL instalado na máquina?** Ele ocupa a 5432 e o container fica
+> à sombra dele: o sintoma é `autenticação do tipo senha falhou para o usuário "creed"`,
+> com o container saudável. Confira com `netstat -ano | findstr :5432` — duas linhas
+> LISTENING é o sinal. Ou pare o serviço local, ou publique o container em outra porta
+> e ajuste `POSTGRES_PORT` no `.env`.
+
 Docs da API: http://localhost:8000/api/v1/docs
 
 ## Autenticação local (Keycloak)
@@ -68,20 +74,33 @@ docker compose up -d db keycloak
 Conferir que o realm subiu — o usuário de teste vem do próprio export:
 
 ```bash
-curl -s -X POST http://localhost:8080/realms/creed/protocol/openid-connect/token -d grant_type=password -d client_id=creed-backend -d client_secret=creed-local-secret -d username=dev@creed.local -d password=dev
+curl -s -X POST http://localhost:8080/realms/creed/protocol/openid-connect/token -d grant_type=password -d client_id=creed-backend -d client_secret=creed-local-secret -d username=dev@creed.example.com -d password=dev
 ```
 
 | Onde | Valor |
 |---|---|
 | Console do Keycloak | http://localhost:8080 — `admin` / `admin` |
-| Usuário de teste do realm | `dev@creed.local` / `dev`, papel `admin` |
+| Usuário de teste do realm | `dev@creed.example.com` / `dev`, papel `admin` |
+
+Existir no realm não basta: depois de o Keycloak aprovar a senha, o login ainda lê o
+usuário no **nosso** banco (decisão D2). Com o banco vazio, a senha certa devolve 401 —
+que na tela vira "e-mail ou senha inválidos" e manda o time caçar um bug de senha que
+não existe. O seed resolve, e é idempotente:
+
+```bash
+alembic upgrade head
+python scripts/seed_local.py
+```
+
+Rode-o de novo depois de todo `docker compose down -v`: ele reata o usuário ao `sub`
+novo em vez de estourar na constraint única.
 
 **O que muda no realm, muda no arquivo.** Alterou pela UI para testar? Ou refaça no
 JSON, ou perca a alteração no próximo `down -v` — e é assim de propósito.
 
 > ⚠️ **O `sub` do usuário de teste muda a cada `down -v`.** O realm fixa e-mail, senha e
 > papel, não o id: quem recria o ambiente ganha um `sub` novo. Nenhum seed pode gravar
-> `User.keycloak_id` com o `sub` do `dev@creed.local` lido uma vez — o seed tem que
+> `User.keycloak_id` com o `sub` do `dev@creed.example.com` lido uma vez — o seed tem que
 > perguntar ao Keycloak a cada execução.
 
 ## Qualidade
@@ -107,6 +126,6 @@ alembic upgrade head
    renomear coluna vira drop+create e **perde dados**.
 2. Migration passa por code review, com prioridade.
 3. Conflito de heads: usar `alembic merge`, nunca editar `down_revision` à revelia.
-4. No deploy: **Job dedicado**, nunca no startup do container.
+4. No deploy: **passo dedicado do pipeline**, nunca no startup do container.
 5. Rollback: corrigir avançando com nova migration, não com `downgrade`.
 6. Mudança destrutiva: dividir em passos (adicionar → migrar dados → remover).

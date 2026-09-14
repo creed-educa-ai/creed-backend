@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
+from app.domains.authentication.router import router as authentication_router
 from app.domains.dashboards.router import router as dashboards_router
 from app.domains.organizacoes.router import router as organizacoes_router
 from app.domains.prismas.router import router as prismas_router
@@ -23,9 +24,11 @@ from app.domains.users.router import router as user_router
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Ciclo de vida da aplicação.
 
-    NOTA (ADR-002, secao 2.4.d): migrations NÃO rodam aqui. No EKS, múltiplos
-    pods sobem em paralelo e migrariam o mesmo banco simultaneamente. A
-    migration roda num Job/initContainer dedicado, antes dos pods subirem.
+    NOTA (ADR-002 secao 2.4.d; mecanismo revisto pelo ADR-0007): migrations
+    NÃO rodam aqui. Schema é recurso compartilhado — migrar a partir do
+    processo que serve requisição mistura duas responsabilidades que precisam
+    falhar separado. A migration roda num passo dedicado do pipeline, num
+    container descartável, antes de este container ser recriado.
     """
     yield
 
@@ -54,6 +57,7 @@ async def health() -> dict[str, str]:
 
 
 for _router in (
+    authentication_router,
     respondentes_router,
     organizacoes_router,
     prismas_router,
