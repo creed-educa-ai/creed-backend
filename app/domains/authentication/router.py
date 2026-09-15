@@ -12,7 +12,7 @@ from app.domains.authentication.schemas import (
 from app.shared.authorization import CurrentUserDep
 from app.shared.exceptions import AuthenticationError
 
-router = APIRouter(prefix="/auth", tags=["authentication"])
+router = APIRouter(prefix="/authentication", tags=["authentication"])
 
 
 @router.post("/login", response_model=SessionResponse)
@@ -31,8 +31,8 @@ async def renew(data: RefreshRequest, service: ServiceDep) -> SessionResponse:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, exc.message) from exc
 
 
-@router.get("/me", response_model=UserSessionResponse)
-async def me(user: CurrentUserDep) -> UserSessionResponse:
+@router.get("/session", response_model=UserSessionResponse)
+async def session(user: CurrentUserDep) -> UserSessionResponse:
     return UserSessionResponse(
         id=user.sub,
         email=user.email or "",
