@@ -60,7 +60,8 @@ def test_login_with_valid_credentials_returns_200_in_the_contract_shape(
     _use_fake_service(app, _FakeService(login_ok=True))
 
     response = client.post(
-        "/auth/login", json={"email": "dev@creed.example.com", "password": "dev"}
+        "/authentication/login",
+        json={"email": "dev@creed.example.com", "password": "dev"},
     )
 
     assert response.status_code == 200
@@ -82,14 +83,15 @@ def test_login_with_invalid_credentials_returns_401(
     _use_fake_service(app, _FakeService(login_ok=False))
 
     response = client.post(
-        "/auth/login", json={"email": "dev@creed.example.com", "password": "wrong"}
+        "/authentication/login",
+        json={"email": "dev@creed.example.com", "password": "wrong"},
     )
 
     assert response.status_code == 401
 
 
 def test_login_with_invalid_payload_returns_422_not_401(client: TestClient) -> None:
-    response = client.post("/auth/login", json={"email": "a"})
+    response = client.post("/authentication/login", json={"email": "a"})
 
     assert response.status_code == 422
 
@@ -99,7 +101,9 @@ def test_renew_with_valid_refresh_token_returns_200(
 ) -> None:
     _use_fake_service(app, _FakeService(refresh_ok=True))
 
-    response = client.post("/auth/renew", json={"refresh_token": "valid-refresh-token"})
+    response = client.post(
+        "/authentication/renew", json={"refresh_token": "valid-refresh-token"}
+    )
 
     assert response.status_code == 200
     assert response.json()["access_token"] == "access-fake"  # noqa: S105
@@ -110,23 +114,29 @@ def test_renew_with_expired_refresh_token_returns_401(
 ) -> None:
     _use_fake_service(app, _FakeService(refresh_ok=False))
 
-    response = client.post("/auth/renew", json={"refresh_token": "expired-refresh-token"})
+    response = client.post(
+        "/authentication/renew", json={"refresh_token": "expired-refresh-token"}
+    )
 
     assert response.status_code == 401
 
 
-def test_me_without_authorization_returns_401(client: TestClient) -> None:
-    response = client.get("/auth/me")
+def test_session_without_authorization_returns_401(client: TestClient) -> None:
+    response = client.get("/authentication/session")
 
     assert response.status_code == 401
 
 
-def test_me_with_authenticated_user_returns_200(app: FastAPI, client: TestClient) -> None:
+def test_session_with_authenticated_user_returns_200(
+    app: FastAPI, client: TestClient
+) -> None:
     app.dependency_overrides[current_user] = lambda: AuthenticatedUser(
         sub="user-123", email="dev@creed.example.com", roles=["admin"]
     )
 
-    response = client.get("/auth/me", headers={"Authorization": "Bearer valid"})
+    response = client.get(
+        "/authentication/session", headers={"Authorization": "Bearer valid"}
+    )
 
     assert response.status_code == 200
     body = response.json()
