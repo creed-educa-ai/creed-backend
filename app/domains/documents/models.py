@@ -22,9 +22,9 @@ class DocType(enum.Enum):
     CNPJ = "cnpj"
     NIF = "nif"
     NIPC = "nipc"
-    PASSAPORTE = "passaporte"
+    PASSPORT = "passport"
     VAT_EU = "vat_eu"
-    OUTRO = "outro"
+    OTHER = "other"
 
 
 class Document(Base):
@@ -34,7 +34,9 @@ class Document(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    type: Mapped[DocType] = mapped_column(Enum(DocType, name="doc_type"), nullable=False)
+    type: Mapped[DocType] = mapped_column(
+        Enum(DocType, name="doc_type"), nullable=False, default=DocType.OTHER
+    )
     value: Mapped[str] = mapped_column(String(100), nullable=False)
     issuing_country: Mapped[str | None] = mapped_column(
         String(2), nullable=True

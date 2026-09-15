@@ -18,9 +18,9 @@ class TestDocType:
             "CNPJ",
             "NIF",
             "NIPC",
-            "PASSAPORTE",
+            "PASSPORT",
             "VAT_EU",
-            "OUTRO",
+            "OTHER",
         }
         assert {tipo.name for tipo in DocType} == esperados
 
