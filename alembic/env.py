@@ -16,7 +16,6 @@ from app.domains.responses import models as responses_models  # noqa: F401
 # --- IMPORTANTE ---
 # Todo model novo precisa ser importado aqui, senão o autogenerate não o enxerga
 # e a migration sai vazia ou incompleta.
-# from app.domains.respondentes import models as respondentes_models
 from app.domains.users import models as users_models  # noqa: F401
 
 config = context.config
