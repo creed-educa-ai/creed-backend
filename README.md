@@ -19,7 +19,9 @@ Organização **por domínio** (ADR-002, secao 2.1). Cada domínio em
 | `schemas.py` | Pydantic, separado por direção | — |
 | `models.py` | Tabelas SQLAlchemy | — |
 
-`app/domains/respondentes/` é o **domínio-exemplo completo** — use como molde.
+`app/domains/users/` é o **domínio-exemplo completo** — use como molde. Tem as cinco
+camadas da tabela acima mais `dependencies.py`, e está no idioma decidido pelo ADR-0005
+(inglês em todo identificador).
 
 ## Setup local
 
