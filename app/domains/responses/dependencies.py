@@ -10,8 +10,8 @@ from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.domains.respostas.repository import FormResponseRepository
-from app.domains.respostas.service import FormResponseService
+from app.domains.responses.repository import FormResponseRepository
+from app.domains.responses.service import FormResponseService
 
 
 def get_repository(

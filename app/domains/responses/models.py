@@ -7,7 +7,7 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Enum, func
+from sqlalchemy import DateTime, Enum, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -20,17 +20,33 @@ class FormResponseStatus(enum.Enum):
 
 
 class FormResponse(Base):
-    __tablename__ = "form_response"
+    __tablename__ = "form_responses"
+
+    __table_args__ = (
+        UniqueConstraint(
+            "form_id",
+            "vinculo_id",
+            name="uq_form_responses_form_id_vinculo_id",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
 
     # FK para Form — tabela ainda não criada
-    form_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    form_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        nullable=False,
+        index=True,
+    )
 
     # FK para Vinculo — tabela ainda não criada
-    vinculo_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    vinculo_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        nullable=False,
+        index=True,
+    )
 
     status: Mapped[FormResponseStatus] = mapped_column(
         Enum(FormResponseStatus),
