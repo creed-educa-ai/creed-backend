@@ -11,7 +11,7 @@ from sqlalchemy import engine_from_config, pool
 
 from app.core.config import settings
 from app.core.database import Base
-from app.domains.respostas import models as respostas_models  # noqa: F401
+from app.domains.responses import models as responses_models  # noqa: F401
 
 # --- IMPORTANTE ---
 # Todo model novo precisa ser importado aqui, senão o autogenerate não o enxerga
