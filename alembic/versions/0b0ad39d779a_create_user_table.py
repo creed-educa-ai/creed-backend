@@ -14,6 +14,10 @@ CHECKLIST DE REVISÃO (ADR-002, secao 2.4):
   [x] Mudança destrutiva foi dividida em passos? Não há passo destrutivo —
       `upgrade()` só cria, `downgrade()` só desfaz o que ela criou.
   [x] `alembic heads` conferido antes de abrir o PR? Head único.
+
+Correção de 2026-09-22: o `downgrade()` só apagava a tabela e deixava no banco os
+tipos `userrole` e `recordstatus`, e o `upgrade()` seguinte falhava com "type already
+exists". Agora ele apaga os dois tipos, na mesma forma da `49ef1d2c7b7e`.
 """
 
 from collections.abc import Sequence
@@ -58,3 +62,5 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_table("user")
+    sa.Enum(name="userrole").drop(op.get_bind(), checkfirst=True)
+    sa.Enum(name="recordstatus").drop(op.get_bind(), checkfirst=True)
