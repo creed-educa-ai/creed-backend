@@ -17,7 +17,7 @@ from app.domains.prismas.router import router as prismas_router
 from app.domains.prognosticos.router import router as prognosticos_router
 from app.domains.relatorios.router import router as relatorios_router
 from app.domains.respondentes.router import router as respondentes_router
-from app.domains.respostas.router import router as respostas_router
+from app.domains.responses.router import router as respostas_router
 from app.domains.users.router import router as user_router
 
 
