@@ -6,7 +6,10 @@ services:
       POSTGRES_USER: creed
       POSTGRES_PASSWORD: creed
       POSTGRES_DB: creed
-    ports: ['5432:5432']
+    # POSTGRES_PORT é a porta do HOST, não a do container (que continua 5432
+    # pra dentro da rede do compose — Keycloak e N8N abaixo não mudam). Existe
+    # pra quem já tem outro Postgres/projeto ocupando a 5432 na máquina.
+    ports: ['${POSTGRES_PORT:-5432}:5432']
     volumes:
       - pgdata:/var/lib/postgresql/data
       # Cria o schema `keycloak`. Só roda quando o volume nasce vazio — quem já
