@@ -1,6 +1,6 @@
 """Endpoints HTTP do domínio prismas.
 
-STUB — seguir a estrutura de app/domains/respondentes como referência
+STUB — seguir a estrutura de app/domains/users como referência
 (ADR-002, secao 2.2): router fino, service com a regra, repository com as queries.
 """
 
