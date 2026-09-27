@@ -8,7 +8,8 @@ from app.main import app
 
 
 def _operation(schema: dict[str, Any], path: str, method: str) -> dict[str, Any]:
-    return schema["paths"][path][method]
+    operation: dict[str, Any] = schema["paths"][path][method]
+    return operation
 
 
 def test_swagger_ui_is_available_at_the_documented_url() -> None:
