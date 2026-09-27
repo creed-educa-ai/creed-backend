@@ -16,14 +16,13 @@ class FormRepository:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
 
-    async def get_by_id(self, table_id: uuid.UUID) -> Form | None:
-        result = await self.db.execute(select(Form).where(Form.id == table_id))
+    async def get_by_id(self, form_id: uuid.UUID) -> Form | None:
+        result = await self.db.execute(select(Form).where(Form.id == form_id))
         return result.scalar_one_or_none()
 
-    async def get_form_by_organization_id(
-        self, organization_id: uuid.UUID
-    ) -> Form | None:
-        result = await self.db.execute(
-            select(Form).where(Form.organization_id == organization_id)
-        )
-        return result.scalar_one_or_none()
+    async def create(self, form: Form) -> Form:
+        """Cria um formulário no banco."""
+        self.db.add(form)
+        await self.db.flush()
+        await self.db.refresh(form)
+        return form
