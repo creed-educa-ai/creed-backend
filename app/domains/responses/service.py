@@ -1,7 +1,7 @@
 """Regra de negócio do domínio responses.
 
 Esta camada não conhece HTTP nem detalhes de ORM. É onde ficam
-as regras próprias da entidade FormResponse.
+as regras próprias das entidades FormResponse e Answer.
 """
 
 import uuid
@@ -69,9 +69,13 @@ class AnswerService:
         escrito, se era descritiva."""
         texto = dados.value.strip() if dados.value else ""
 
-        if dados.option_id is None and not texto:
+        tem_opcao = dados.option_id is not None
+        tem_texto = bool(texto)
+
+        if tem_opcao == tem_texto:
             raise ValidationError(
-                "A resposta precisa ter uma alternativa marcada ou um texto escrito"
+                "A resposta precisa ter exatamente uma forma preenchida: "
+                "a alternativa marcada ou o texto escrito"
             )
 
         answer = Answer(

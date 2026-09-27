@@ -1,8 +1,7 @@
 """Testes do service do domínio responses.
 
 Sem banco e sem HTTP: o repository é substituído por um dublê em memória
-(ADR-002). O que se prova aqui é a regra de negócio da submissão — status
-muda para SUBMITTED e submitted_at é registrado — não o mapeamento SQL.
+(ADR-002). O que se prova aqui é a regra de negócio, não o mapeamento SQL.
 """
 
 import uuid
@@ -144,6 +143,8 @@ class TestRecordAnswer:
 
         assert resultado.value == "minha resposta"
         assert resultado.option_id is None
+        assert resultado.id is not None
+        assert resultado.created_at is not None
 
     async def test_as_duas_formas_vazias_vira_validation_error(self) -> None:
         """Linha sem alternativa e sem texto é registro sem significado."""
@@ -155,6 +156,17 @@ class TestRecordAnswer:
     async def test_texto_so_com_espaco_vira_validation_error(self) -> None:
         """Texto em branco não é resposta descritiva."""
         dados = AnswerCreate(question_id=uuid.uuid4(), value="   ")
+
+        with pytest.raises(ValidationError):
+            await servico_answer(FakeAnswerRepository()).record(dados)
+
+    async def test_as_duas_formas_preenchidas_vira_validation_error(self) -> None:
+        """Uma resposta é objetiva ou descritiva, nunca as duas."""
+        dados = AnswerCreate(
+            question_id=uuid.uuid4(),
+            option_id=uuid.uuid4(),
+            value="texto",
+        )
 
         with pytest.raises(ValidationError):
             await servico_answer(FakeAnswerRepository()).record(dados)
