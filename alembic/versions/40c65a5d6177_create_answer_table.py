@@ -5,10 +5,17 @@ Revises: 49ef1d2c7b7e
 Create Date: 2026-09-27 13:09:22.645770
 
 CHECKLIST DE REVISÃO (ADR-002, secao 2.4):
-  [ ] Autogenerate foi lido linha a linha?
-  [ ] Renomeação virou drop+create? (perde dados — corrigir para op.alter_column)
-  [ ] Mudança destrutiva foi dividida em passos (adicionar -> migrar -> remover)?
-  [ ] `alembic heads` conferido antes de abrir o PR?
+  [x] Autogenerate foi lido linha a linha? Sim. Removi à mão duas operações
+      sobre `form_responses` (drop do índice e create do unique constraint)
+      que o autogenerate trouxe por drift entre o model da CREED-34 e o
+      banco — não são desta tabela.
+  [x] Renomeação virou drop+create? Não se aplica: a migration só cria a
+      tabela `answer`, não renomeia nada.
+  [x] Mudança destrutiva foi dividida em passos? Não se aplica: não há
+      remoção nem alteração de estrutura existente.
+  [x] `alembic heads` conferido antes de abrir o PR? Sim, um head só
+      (40c65a5d6177). Ciclo upgrade → downgrade → upgrade rodado duas vezes,
+      mais teardown completo do volume, reproduzindo a mesma estrutura.
 """
 
 from collections.abc import Sequence
