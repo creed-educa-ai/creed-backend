@@ -16,7 +16,9 @@ dependencies = [
     "pydantic>=2.9.0",
     "pydantic-settings>=2.6.0",
     "email-validator>=2.2.0",
-    "sqlalchemy>=2.0.36",
+    # [asyncio] traz o greenlet, que a 2.1 deixou de instalar por padrão.
+    # <2.1: subir de versão menor é decisão explícita, não efeito de um pip install.
+    "sqlalchemy[asyncio]>=2.0.36,<2.1",
     "alembic>=1.14.0",
     "asyncpg>=0.30.0",
     "psycopg[binary]>=3.2.0",
