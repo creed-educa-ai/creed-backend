@@ -39,15 +39,18 @@ class QuestionSection(enum.Enum):
 class Prisma(enum.Enum):
     """As cinco dimensões de análise do produto (CREED-351).
 
-    🟡 Premissa P-021 — nomes em inglês por tradução direta do termo em
-    português; a cliente não nomeou os valores do enum.
+    Identificador Python em inglês (ADR-0005); o valor de cada membro — o que
+    trafega no JSON — é o termo em português já fixado no modelo de dados
+    (`context/modelo-de-dados.proposta.dbml`, `Enum Prisma`), que a spec da
+    CREED-35 também publica. Corrige a P-021, que tinha traduzido o valor para
+    inglês sem checar que o modelo já havia decidido os termos em português.
     """
 
-    HUMAN_PLASTICITY = "human_plasticity"
-    ENTREPRENEURSHIP = "entrepreneurship"
-    MULTICULTURALISM = "multiculturalism"
-    NEUROINNOVATION = "neuroinnovation"
-    DECISION_MAKING = "decision_making"
+    HUMAN_PLASTICITY = "plasticidade_humana"
+    ENTREPRENEURSHIP = "empreendedorismo"
+    MULTICULTURALISM = "multiculturalismo"
+    NEUROINNOVATION = "neuroinovacao"
+    DECISION_MAKING = "tomada_decisao"
 
 
 class Question(Base):
