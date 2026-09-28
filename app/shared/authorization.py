@@ -25,12 +25,26 @@ bearer_scheme = HTTPBearer(
 
 
 class AuthenticatedUser:
-    """Identidade do usuário autenticado"""
+    """Identidade do usuário autenticado.
 
-    def __init__(self, sub: str, email: str | None, roles: list[str]) -> None:
+    `vinculo_id` e `organization_id` nascem `None`: quem monta a partir só do
+    token (`_identity_from_token`) não os tem. Só `_check_against_database`,
+    que já consultou o vínculo, os preenche.
+    """
+
+    def __init__(
+        self,
+        sub: str,
+        email: str | None,
+        roles: list[str],
+        vinculo_id: str | None = None,
+        organization_id: str | None = None,
+    ) -> None:
         self.sub = sub
         self.email = email
         self.roles = roles
+        self.vinculo_id = vinculo_id
+        self.organization_id = organization_id
 
     def has_role(self, role: str) -> bool:
         return role in self.roles
@@ -65,23 +79,35 @@ async def _identity_from_token(
 async def _check_against_database(
     identity: AuthenticatedUser, users: UserService
 ) -> AuthenticatedUser:
-    user = (
-        await users.get_active_user_by_email(identity.email) if identity.email else None
+    # `None` cobre usuário inexistente, inativo, sem vínculo, ou vínculo que o
+    # VinculoService não encontra — a guarda trata os quatro como "sem acesso"
+    # (P-008), sem distinguir. O papel comparado é o do vínculo, não mais o de
+    # `user.role`: a coluna deixou de ser lida (CREED-32).
+    access = (
+        await users.get_active_user_access_by_email(identity.email)
+        if identity.email
+        else None
     )
 
-    if user is None:
+    if access is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Não autenticado")
 
-    if not identity.has_role(user.role.value):
+    if not identity.has_role(access.role):
         logger.error(
-            "Divergência de cargo entre token (%s) e banco (%s) para o usuário %s",
+            "Divergência de cargo entre token (%s) e vínculo (%s) para o usuário %s",
             identity.roles,
-            user.role.value,
-            user.id,
+            access.role,
+            access.id,
         )
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Sessão inválida ou expirada")
 
-    return AuthenticatedUser(sub=str(user.id), email=user.email, roles=[user.role.value])
+    return AuthenticatedUser(
+        sub=str(access.id),
+        email=access.email,
+        roles=[access.role],
+        vinculo_id=str(access.vinculo_id),
+        organization_id=str(access.organization_id),
+    )
 
 
 def require_role(*roles: str) -> Any:

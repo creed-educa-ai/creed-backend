@@ -21,10 +21,23 @@ from app.core.config import settings
 from app.core.database import AsyncSessionLocal
 from app.domains.users.models import RecordStatus, User, UserRole
 from app.domains.users.repository import UserRepository
+from app.domains.vinculos.models import Roles, VincType, Vinculo
+from app.domains.vinculos.repository import VinculoRepository
 
 EMAIL = "dev@creed.example.com"
 NAME = "Dev CREED"
-ROLE = UserRole.ADMIN
+
+# A partir da CREED-32 o papel de acesso é o do vínculo, não mais o da coluna
+# `user.role`. `USER_ROLE_COLUMN` só existe porque a coluna continua `NOT NULL`
+# até a task 6 — ninguém lê o valor.
+USER_ROLE_COLUMN = UserRole.RESPONDENTE
+VINCULO_ROLE = Roles.ADMIN
+
+# Órfãos até `Participant` e `Organization` existirem: a amarração deve criar
+# as duas linhas com estes mesmos ids (spec da CREED-32, "Abordagem técnica",
+# item 13). Fixos, e não aleatórios, para o seed continuar idempotente.
+PARTICIPANT_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
+ORGANIZATION_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
 
 class SeedError(Exception):
@@ -77,8 +90,9 @@ async def semear() -> None:
         keycloak_id = await _keycloak_id(http, token)
 
     async with AsyncSessionLocal() as session:
-        repository = UserRepository(session)
-        existente = await repository.get_user_by_email(EMAIL)
+        users = UserRepository(session)
+        vinculos = VinculoRepository(session)
+        existente = await users.get_user_by_email(EMAIL)
 
         if existente is not None:
             # Idempotente: rodar de novo depois de um `down -v` só reata o
@@ -87,20 +101,45 @@ async def semear() -> None:
                 print(f"keycloak_id mudou: {existente.keycloak_id} -> {keycloak_id}")
                 existente.keycloak_id = keycloak_id
                 await session.commit()
-            print(f"{EMAIL} já estava no banco ({existente.role.value}).")
+
+            if existente.vinculo_id is not None:
+                print(
+                    f"{EMAIL} já estava no banco, com o vínculo {existente.vinculo_id}."
+                )
+                return
+
+            # Banco de antes da CREED-32: o usuário existe, falta o vínculo.
+            vinculo = await vinculos.insert(_novo_vinculo())
+            existente.vinculo_id = vinculo.id
+            await session.commit()
+            print(f"{EMAIL} ganhou o vínculo {vinculo.id} ({VINCULO_ROLE.value}).")
             return
 
-        await repository.create(
+        vinculo = await vinculos.insert(_novo_vinculo())
+        await users.create(
             User(
                 keycloak_id=keycloak_id,
                 name=NAME,
                 email=EMAIL,
                 status=RecordStatus.ACTIVE,
-                role=ROLE,
+                role=USER_ROLE_COLUMN,
+                vinculo_id=vinculo.id,
             )
         )
         await session.commit()
-        print(f"{EMAIL} criado ({ROLE.value}), keycloak_id={keycloak_id}.")
+        print(
+            f"{EMAIL} criado, keycloak_id={keycloak_id}, "
+            f"vínculo {vinculo.id} ({VINCULO_ROLE.value})."
+        )
+
+
+def _novo_vinculo() -> Vinculo:
+    return Vinculo(
+        participant_id=PARTICIPANT_ID,
+        organization_id=ORGANIZATION_ID,
+        type=VincType.EMPREGO,
+        role=VINCULO_ROLE,
+    )
 
 
 if __name__ == "__main__":

@@ -142,3 +142,24 @@ def test_session_with_authenticated_user_returns_200(
     body = response.json()
     assert body["id"] == "user-123"
     assert body["role"] == "admin"
+
+
+def test_session_devolve_vinculo_id_e_organization_id_do_usuario_autenticado(
+    app: FastAPI, client: TestClient
+) -> None:
+    app.dependency_overrides[current_user] = lambda: AuthenticatedUser(
+        sub="user-123",
+        email="dev@creed.example.com",
+        roles=["admin"],
+        vinculo_id="3f9a2b1c-4d5e-4f6a-8b7c-9d0e1f2a3b4c",
+        organization_id="8f14e45f-ceea-467e-adde-3f81905dbc1c",
+    )
+
+    response = client.get(
+        "/authentication/session", headers={"Authorization": "Bearer valid"}
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["vinculo_id"] == "3f9a2b1c-4d5e-4f6a-8b7c-9d0e1f2a3b4c"
+    assert body["organization_id"] == "8f14e45f-ceea-467e-adde-3f81905dbc1c"

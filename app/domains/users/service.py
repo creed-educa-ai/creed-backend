@@ -53,17 +53,8 @@ class UserService:
         self.repository = repository
         self.vinculos = vinculos
 
-    async def get_active_user_by_email(self, email: str) -> User | None:
-        """Ainda em uso pela guarda e pelo login (task 5 troca os dois)."""
-        user = await self.repository.get_user_by_email(email)
-
-        if user is None or user.status is not RecordStatus.ACTIVE:
-            return None
-
-        return user
-
     async def get_active_user_access_by_email(self, email: str) -> UserAccess | None:
-        """O que a task 5 vai usar no lugar de `get_active_user_by_email`.
+        """O que a guarda e o login usam para saber quem está logado.
 
         `None` cobre usuário inexistente, inativo, sem `vinculo_id`, e
         `vinculo_id` que o `VinculoService` não encontra — a guarda e o login

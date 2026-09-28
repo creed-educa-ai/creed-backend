@@ -57,8 +57,12 @@ class AuthenticationService:
 
         email = claims.get("email")
 
-        user = await self.users.get_active_user_by_email(email) if email else None
-        if user is None:
+        # Usuário sem vínculo é usuário sem sessão (P-008): mesma mensagem que
+        # e-mail ou senha errados, para não revelar se a conta existe.
+        access = (
+            await self.users.get_active_user_access_by_email(email) if email else None
+        )
+        if access is None:
             raise AuthenticationError(error_message)
 
         return SessionResponse(
@@ -66,8 +70,10 @@ class AuthenticationService:
             refresh_token=tokens["refresh_token"],
             expires_in=tokens["expires_in"],
             user=UserSessionResponse(
-                id=str(user.id),
-                email=user.email,
-                role=user.role.value,
+                id=str(access.id),
+                email=access.email,
+                role=access.role,
+                vinculo_id=str(access.vinculo_id),
+                organization_id=str(access.organization_id),
             ),
         )
