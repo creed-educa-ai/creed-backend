@@ -22,20 +22,28 @@ from app.shared.exceptions import ConflictError
 
 
 class _FakeQuestionService:
-    """Duble da service: guarda em lista, replica só o que o contrato promete."""
+    """Duble da service: devolve o que for configurado, sem reimplementar regra.
 
-    def __init__(self, existentes: list[Question] | None = None) -> None:
+    `conflito=True` só faz `create` levantar `ConflictError` — não reproduz a
+    lógica real de "mesma posição no mesmo formulário". Essa regra já está
+    coberta em tests/domains/questions/test_service.py; aqui o que se prova é
+    só a tradução ConflictError -> 409, que é trabalho do router.
+    """
+
+    def __init__(
+        self,
+        existentes: list[Question] | None = None,
+        *,
+        conflito: bool = False,
+    ) -> None:
         self.itens: list[Question] = list(existentes or [])
+        self.conflito = conflito
 
     async def create(self, request: QuestionCreate) -> Question:
-        ja_existe = any(
-            q.form_id == request.form_id and q.order_index == request.order_index
-            for q in self.itens
-        )
-        if ja_existe:
+        if self.conflito:
             raise ConflictError(
-                f"Ja existe pergunta na posicao {request.order_index} "
-                f"do formulario {request.form_id}"
+                f"Já existe pergunta na posição {request.order_index} "
+                f"do formulário {request.form_id}"
             )
 
         question = Question(
@@ -113,27 +121,18 @@ class TestCriarPergunta:
         }
         assert body["section"] == "assessment"
 
-    def test_com_posicao_ja_ocupada_devolve_409_mesmo_em_outra_secao(
+    def test_com_conflito_de_posicao_devolve_409(
         self, app: FastAPI, client: TestClient
     ) -> None:
-        form_id = uuid.uuid4()
-        existente = Question(
-            id=uuid.uuid4(),
-            form_id=form_id,
-            text="Primeira",
-            order_index=0,
-            type=QuestionType.OBJECTIVE,
-            section=QuestionSection.ASSESSMENT,
-            required=True,
-            prisma=None,
-            created_at=datetime(2026, 9, 22, tzinfo=UTC),
-        )
-        _use_fake_service(app, _FakeQuestionService([existente]))
+        """Prova só a tradução do router: ConflictError -> 409.
 
-        response = client.post(
-            "/questions",
-            json=_payload(form_id=str(form_id), order_index=0, section="closing"),
-        )
+        A regra "mesma posição, mesmo formulário, mesmo em outra seção" é
+        provada com a service real em test_service.py — não é reimplementada
+        aqui.
+        """
+        _use_fake_service(app, _FakeQuestionService(conflito=True))
+
+        response = client.post("/questions", json=_payload())
 
         assert response.status_code == 409
 
@@ -178,6 +177,24 @@ class TestCriarPergunta:
         _use_fake_service(app, _FakeQuestionService())
 
         response = client.post("/questions", json=_payload(form_id="nao-e-uuid"))
+
+        assert response.status_code == 422
+
+    def test_com_order_index_negativo_devolve_422(
+        self, app: FastAPI, client: TestClient
+    ) -> None:
+        _use_fake_service(app, _FakeQuestionService())
+
+        response = client.post("/questions", json=_payload(order_index=-1))
+
+        assert response.status_code == 422
+
+    def test_com_prisma_fora_do_enum_devolve_422(
+        self, app: FastAPI, client: TestClient
+    ) -> None:
+        _use_fake_service(app, _FakeQuestionService())
+
+        response = client.post("/questions", json=_payload(prisma="inexistente"))
 
         assert response.status_code == 422
 
