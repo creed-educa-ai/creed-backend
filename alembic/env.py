@@ -17,6 +17,7 @@ from app.domains.responses import models as responses_models  # noqa: F401
 # Todo model novo precisa ser importado aqui, senão o autogenerate não o enxerga
 # e a migration sai vazia ou incompleta.
 from app.domains.users import models as users_models  # noqa: F401
+from app.domains.vinculos import models as vinculos_models  # noqa: F401
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.database_url_sync)

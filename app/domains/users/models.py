@@ -9,7 +9,7 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Enum, String, func
+from sqlalchemy import DateTime, Enum, ForeignKey, String, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -53,10 +53,19 @@ class User(Base):
         Enum(RecordStatus), nullable=False, default=RecordStatus.ACTIVE
     )
 
-    # Enquanto `Vinculo` não existe, o papel é coluna e nasce no menor privilégio
-    # (P-008: o vínculo é quem manda, e ele ainda não tem tabela).
+    # A partir da CREED-32 esta coluna não é mais lida: o papel passou a morar em
+    # `Vinculo.role`. Sai de vez na task 6 da CREED-32, junto com `UserRole`.
     role: Mapped[UserRole] = mapped_column(
         Enum(UserRole), nullable=False, default=UserRole.RESPONDENTE
+    )
+
+    # Aponta para o vínculo que dá o papel deste login (modelo [C2]: 1 login = 1 vínculo).
+    # Nulável só até a task 6 da CREED-32: aí vira NOT NULL e `role` sai.
+    vinculo_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("vinculos.id", name="fk_user_vinculo_id_vinculos"),
+        unique=True,
+        nullable=True,
     )
 
     created_at: Mapped[datetime] = mapped_column(
