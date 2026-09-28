@@ -10,8 +10,8 @@ from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.domains.responses.repository import FormResponseRepository
-from app.domains.responses.service import FormResponseService
+from app.domains.responses.repository import AnswerRepository, FormResponseRepository
+from app.domains.responses.service import AnswerService, FormResponseService
 
 
 def get_repository(
@@ -27,3 +27,18 @@ def get_service(
 
 
 ServiceDep = Annotated[FormResponseService, Depends(get_service)]
+
+
+def get_answer_repository(
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> AnswerRepository:
+    return AnswerRepository(db)
+
+
+def get_answer_service(
+    repository: Annotated[AnswerRepository, Depends(get_answer_repository)],
+) -> AnswerService:
+    return AnswerService(repository)
+
+
+AnswerServiceDep = Annotated[AnswerService, Depends(get_answer_service)]

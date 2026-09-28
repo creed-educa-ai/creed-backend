@@ -3,7 +3,8 @@
 import logging
 from typing import Annotated, Any
 
-from fastapi import Depends, HTTPException, Request, status
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.domains.users.dependencies import ServiceDep as UserServiceDep
 from app.domains.users.service import UserService
@@ -14,6 +15,13 @@ from app.external_services.keycloak.token import (
 )
 
 logger = logging.getLogger(__name__)
+
+bearer_scheme = HTTPBearer(
+    bearerFormat="JWT",
+    scheme_name="BearerAuth",
+    description=("Token JWT retornado pelos endpoints de login ou renovação de sessão."),
+    auto_error=False,
+)
 
 
 class AuthenticatedUser:
@@ -28,15 +36,16 @@ class AuthenticatedUser:
         return role in self.roles
 
 
-def _extract_token(request: Request) -> str:
-    header = request.headers.get("Authorization")
-    if not header or not header.startswith("Bearer "):
+def _extract_token(credentials: HTTPAuthorizationCredentials | None) -> str:
+    if credentials is None or credentials.scheme.lower() != "bearer":
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Não autenticado")
-    return header.removeprefix("Bearer ").strip()
+    return credentials.credentials.strip()
 
 
-async def _identity_from_token(request: Request) -> AuthenticatedUser:
-    token = _extract_token(request)
+async def _identity_from_token(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)],
+) -> AuthenticatedUser:
+    token = _extract_token(credentials)
 
     try:
         claims = await validate_token(token)

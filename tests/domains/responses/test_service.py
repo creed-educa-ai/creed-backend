@@ -1,8 +1,7 @@
 """Testes do service do domínio responses.
 
 Sem banco e sem HTTP: o repository é substituído por um dublê em memória
-(ADR-002). O que se prova aqui é a regra de negócio da submissão — status
-muda para SUBMITTED e submitted_at é registrado — não o mapeamento SQL.
+(ADR-002). O que se prova aqui é a regra de negócio, não o mapeamento SQL.
 """
 
 import uuid
@@ -10,9 +9,10 @@ from datetime import UTC, datetime
 
 import pytest
 
-from app.domains.responses.models import FormResponse, FormResponseStatus
-from app.domains.responses.service import FormResponseService
-from app.shared.exceptions import NotFoundError
+from app.domains.responses.models import Answer, FormResponse, FormResponseStatus
+from app.domains.responses.schemas import AnswerCreate
+from app.domains.responses.service import AnswerService, FormResponseService
+from app.shared.exceptions import NotFoundError, ValidationError
 
 
 class FakeFormResponseRepository:
@@ -99,3 +99,87 @@ class TestCreateFormResponse:
         assert resultado.vinculo_id == vinculo_id
         assert resultado.status == FormResponseStatus.IN_PROGRESS
         assert resultado.submitted_at is None
+
+
+class FakeAnswerRepository:
+    """Dublê do repository: não decide nada, não toca no banco."""
+
+    def __init__(self, existente: Answer | None = None) -> None:
+        self.existente = existente
+
+    async def get_by_id(self, answer_id: uuid.UUID) -> Answer | None:
+        if self.existente is not None and self.existente.id == answer_id:
+            return self.existente
+        return None
+
+    async def insert(self, answer: Answer) -> Answer:
+        """O id e o created_at seriam preenchidos pelo banco."""
+        answer.id = uuid.uuid4()
+        answer.created_at = datetime.now(UTC)
+        return answer
+
+
+def servico_answer(repository: FakeAnswerRepository) -> AnswerService:
+    return AnswerService(repository)  # type: ignore[arg-type]
+
+
+class TestRecordAnswer:
+    async def test_aceita_resposta_objetiva(self) -> None:
+        """Pergunta objetiva responde marcando alternativa, sem texto."""
+        dados = AnswerCreate(question_id=uuid.uuid4(), option_id=uuid.uuid4())
+
+        resultado = await servico_answer(FakeAnswerRepository()).record(dados)
+
+        assert resultado.option_id == dados.option_id
+        assert resultado.value is None
+        assert resultado.id is not None
+        assert resultado.created_at is not None
+
+    async def test_aceita_resposta_descritiva(self) -> None:
+        """Pergunta descritiva responde com texto, sem alternativa."""
+        dados = AnswerCreate(question_id=uuid.uuid4(), value="minha resposta")
+
+        resultado = await servico_answer(FakeAnswerRepository()).record(dados)
+
+        assert resultado.value == "minha resposta"
+        assert resultado.option_id is None
+        assert resultado.id is not None
+        assert resultado.created_at is not None
+
+    async def test_as_duas_formas_vazias_vira_validation_error(self) -> None:
+        """Linha sem alternativa e sem texto é registro sem significado."""
+        dados = AnswerCreate(question_id=uuid.uuid4())
+
+        with pytest.raises(ValidationError):
+            await servico_answer(FakeAnswerRepository()).record(dados)
+
+    async def test_texto_so_com_espaco_vira_validation_error(self) -> None:
+        """Texto em branco não é resposta descritiva."""
+        dados = AnswerCreate(question_id=uuid.uuid4(), value="   ")
+
+        with pytest.raises(ValidationError):
+            await servico_answer(FakeAnswerRepository()).record(dados)
+
+    async def test_as_duas_formas_preenchidas_vira_validation_error(self) -> None:
+        """Uma resposta é objetiva ou descritiva, nunca as duas."""
+        dados = AnswerCreate(
+            question_id=uuid.uuid4(),
+            option_id=uuid.uuid4(),
+            value="texto",
+        )
+
+        with pytest.raises(ValidationError):
+            await servico_answer(FakeAnswerRepository()).record(dados)
+
+
+class TestGetAnswer:
+    async def test_inexistente_vira_not_found(self) -> None:
+        """Quando a busca volta vazia, é a camada de regra que recusa."""
+        with pytest.raises(NotFoundError):
+            await servico_answer(FakeAnswerRepository()).get(uuid.uuid4())
+
+    async def test_repository_devolve_none_sem_levantar(self) -> None:
+        """A camada de banco não decide: devolve nada e deixa a regra decidir."""
+        repository = FakeAnswerRepository()
+
+        assert await repository.get_by_id(uuid.uuid4()) is None
