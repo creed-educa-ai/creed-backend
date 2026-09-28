@@ -2,8 +2,14 @@
 
 Esta camada nao conhece HTTP nem detalhes de ORM. A checagem de posicao
 repetida acontece aqui, antes de gravar — mesmo padrao de
-create_user_service checando e-mail antes de criar. A UniqueConstraint na
-tabela fica so como rede de seguranca para gravacoes simultaneas.
+create_user_service checando e-mail antes de criar. Ela cobre o caso comum
+sem round-trip extra de erro, mas nao fecha a corrida sozinha.
+
+Quem fecha a corrida e a UniqueConstraint do banco: dois POSTs simultaneos
+na mesma posicao podem os dois passarem pela checagem, e o segundo tem o
+insert recusado. `repository.insert` devolve `None` nesse caso (nao pode
+levantar erro de negocio — test_arquitetura.py o proibe), e e este service
+que traduz `None` em ConflictError.
 """
 
 import uuid
@@ -25,8 +31,8 @@ class QuestionService:
 
         if already_exists is not None:
             raise ConflictError(
-                f"Ja existe pergunta na posicao {request.order_index} "
-                f"do formulario {request.form_id}"
+                f"Já existe pergunta na posição {request.order_index} "
+                f"do formulário {request.form_id}"
             )
 
         question = Question(
@@ -38,7 +44,13 @@ class QuestionService:
             required=request.required,
             prisma=request.prisma,
         )
-        return await self.repository.insert(question)
+        created = await self.repository.insert(question)
+        if created is None:
+            raise ConflictError(
+                f"Já existe pergunta na posição {request.order_index} "
+                f"do formulário {request.form_id}"
+            )
+        return created
 
     async def list_for_form(
         self, form_id: uuid.UUID, section: QuestionSection | None = None
