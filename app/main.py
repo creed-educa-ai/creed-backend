@@ -18,6 +18,7 @@ from app.domains.prognosticos.router import router as prognosticos_router
 from app.domains.relatorios.router import router as relatorios_router
 from app.domains.responses.router import router as respostas_router
 from app.domains.users.router import router as user_router
+from app.domains.vinculos.router import router as vinculos_router
 from app.shared.schemas import HealthResponse
 
 API_DESCRIPTION = """
@@ -45,6 +46,10 @@ OPENAPI_TAGS = [
     {
         "name": "form-responses",
         "description": "Abertura e submissão de respostas de formulário.",
+    },
+    {
+        "name": "vinculos",
+        "description": "Criação do vínculo entre um participante e uma organização.",
     },
 ]
 
@@ -107,5 +112,6 @@ for _router in (
     prognosticos_router,
     relatorios_router,
     user_router,
+    vinculos_router,
 ):
     app.include_router(_router, prefix=settings.API_V1_PREFIX)
