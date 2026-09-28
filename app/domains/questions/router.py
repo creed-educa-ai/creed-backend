@@ -12,8 +12,9 @@ registro em app/main.py.
 """
 
 import uuid
+from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Path, Query, status
 
 from app.domains.questions.dependencies import ServiceDep
 from app.domains.questions.schemas import (
@@ -46,8 +47,8 @@ router = APIRouter(tags=["questions"])
                 "application/json": {
                     "example": {
                         "detail": (
-                            "Ja existe pergunta na posicao 0 "
-                            "do formulario 00000000-0000-0000-0000-000000000001"
+                            "Já existe pergunta na posição 0 "
+                            "do formulário 00000000-0000-0000-0000-000000000001"
                         )
                     }
                 }
@@ -74,9 +75,21 @@ async def create_question(dados: QuestionCreate, service: ServiceDep) -> Questio
     operation_id="list_questions",
 )
 async def list_questions(
-    form_id: uuid.UUID,
+    form_id: Annotated[
+        uuid.UUID,
+        Path(
+            description="Identificador do formulário cujas perguntas serão listadas.",
+            examples=["00000000-0000-0000-0000-000000000001"],
+        ),
+    ],
     service: ServiceDep,
-    section: QuestionSection | None = None,
+    section: Annotated[
+        QuestionSection | None,
+        Query(
+            description="Filtra as perguntas por seção do formulário.",
+            examples=["assessment"],
+        ),
+    ] = None,
 ) -> list[QuestionResponse]:
     questions = await service.list_for_form(form_id, section)
     return [QuestionResponse.de_model(question) for question in questions]
