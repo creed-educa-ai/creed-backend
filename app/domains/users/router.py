@@ -24,15 +24,32 @@ router = APIRouter(prefix="/users", tags=["users"])
     status_code=status.HTTP_201_CREATED,
     summary="Criar usuário",
     description=(
-        "Registra na plataforma um usuário já provisionado no Keycloak. "
-        "O status inicial é ativo e o papel inicial é respondente."
+        "Registra na plataforma um usuário já provisionado no Keycloak, "
+        "vinculado a um vínculo existente. O status inicial é ativo, e o "
+        "papel é o do vínculo informado."
     ),
     response_description="Usuário criado na plataforma.",
     operation_id="create_user",
     responses={
+        status.HTTP_404_NOT_FOUND: {
+            "model": ErrorResponse,
+            "description": "O vínculo informado não existe.",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": (
+                            "Vínculo 3f9a2b1c-4d5e-4f6a-8b7c-9d0e1f2a3b4c não encontrado"
+                        )
+                    }
+                }
+            },
+        },
         status.HTTP_409_CONFLICT: {
             "model": ErrorResponse,
-            "description": "Já existe um usuário com o e-mail informado.",
+            "description": (
+                "Já existe um usuário com o e-mail informado, "
+                "ou o vínculo já está em uso por outro usuário."
+            ),
             "content": {
                 "application/json": {
                     "example": {
@@ -40,14 +57,23 @@ router = APIRouter(prefix="/users", tags=["users"])
                     }
                 }
             },
-        }
+        },
     },
 )
 async def create_user(dados: UserCreate, service: ServiceDep) -> UserResponse:
     try:
-        return UserResponse.de_model(await service.create_user_service(dados))
+        criado = await service.create_user_service(dados)
+    except NotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, exc.message) from exc
     except ConflictError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, exc.message) from exc
+
+    return UserResponse.de_model(
+        criado.user,
+        role=criado.role,
+        vinculo_id=dados.vinculo_id,
+        organization_id=criado.organization_id,
+    )
 
 
 @router.delete(

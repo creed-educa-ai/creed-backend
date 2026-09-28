@@ -24,6 +24,11 @@ class UserRepository:
         result = await self.db.execute(select(User).where(User.email == user_email))
         return result.scalar_one_or_none()
 
+    async def get_by_vinculo_id(self, vinculo_id: uuid.UUID) -> User | None:
+        """Usado para o 409 de `create_user_service`: um vínculo, um login."""
+        result = await self.db.execute(select(User).where(User.vinculo_id == vinculo_id))
+        return result.scalar_one_or_none()
+
     async def create(self, user: User) -> User:
         """Cria um usuário no banco."""
         self.db.add(user)

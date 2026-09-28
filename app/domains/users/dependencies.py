@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.domains.users.repository import UserRepository
 from app.domains.users.service import UserService
+from app.domains.vinculos.dependencies import ServiceDep as VinculoServiceDep
 
 
 def get_repository(
@@ -22,8 +23,9 @@ def get_repository(
 
 def get_service(
     repository: Annotated[UserRepository, Depends(get_repository)],
+    vinculos: VinculoServiceDep,
 ) -> UserService:
-    return UserService(repository)
+    return UserService(repository, vinculos)
 
 
 ServiceDep = Annotated[UserService, Depends(get_service)]
