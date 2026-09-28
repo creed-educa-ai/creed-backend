@@ -3,7 +3,7 @@
 import enum
 import uuid
 
-from sqlalchemy import Enum
+from sqlalchemy import Enum, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -22,6 +22,8 @@ class Form(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
+
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
 
     organization_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), unique=True, nullable=False
