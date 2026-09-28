@@ -12,9 +12,10 @@ from datetime import UTC, datetime
 
 import pytest
 
-from app.domains.users.models import RecordStatus, User, UserRole
+from app.domains.users.models import User, UserRole
 from app.domains.users.schemas import UserCreate, UserResponse
 from app.domains.users.service import UserService
+from app.shared.enums import RecordStatus
 from app.shared.exceptions import ConflictError, NotFoundError
 
 

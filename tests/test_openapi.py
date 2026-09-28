@@ -30,6 +30,8 @@ def test_all_endpoints_have_method_summary_description_and_operation_id() -> Non
         ("/api/v1/users/{user_id}", "delete"),
         ("/api/v1/form-responses", "post"),
         ("/api/v1/form-responses/{form_response_id}", "patch"),
+        ("/api/v1/participants", "post"),
+        ("/api/v1/participants/{participant_id}", "get"),
     }
 
     documented_operations = {
@@ -56,8 +58,15 @@ def test_request_fields_path_parameters_and_examples_are_documented() -> None:
     assert components["SessionResponse"]["examples"]
     assert components["UserResponse"]["examples"]
     assert components["FormResponseResponse"]["examples"]
+    assert components["ParticipantCreate"]["examples"]
+    assert components["ParticipantResponse"]["examples"]
 
-    for schema_name in ("LoginRequest", "UserCreate", "FormResponseCreate"):
+    for schema_name in (
+        "LoginRequest",
+        "UserCreate",
+        "FormResponseCreate",
+        "ParticipantCreate",
+    ):
         for field in components[schema_name]["properties"].values():
             assert field["description"]
 
@@ -76,6 +85,12 @@ def test_request_fields_path_parameters_and_examples_are_documented() -> None:
     assert form_response_id["name"] == "form_response_id"
     assert form_response_id["description"]
     assert form_response_id["schema"]["examples"]
+
+    get_participant = _operation(schema, "/api/v1/participants/{participant_id}", "get")
+    participant_id = get_participant["parameters"][0]
+    assert participant_id["name"] == "participant_id"
+    assert participant_id["description"]
+    assert participant_id["schema"]["examples"]
 
 
 def test_success_error_and_bearer_authentication_responses_are_documented() -> None:
@@ -101,6 +116,15 @@ def test_success_error_and_bearer_authentication_responses_are_documented() -> N
             "patch",
         )["responses"]
     ) >= {"200", "404", "409", "422"}
+    assert set(_operation(schema, "/api/v1/participants", "post")["responses"]) >= {
+        "201",
+        "401",
+        "403",
+        "422",
+    }
+    assert set(
+        _operation(schema, "/api/v1/participants/{participant_id}", "get")["responses"]
+    ) >= {"200", "401", "403", "404", "422"}
 
     security_schemes = schema["components"]["securitySchemes"]
     assert security_schemes["BearerAuth"] == {

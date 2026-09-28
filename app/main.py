@@ -13,6 +13,7 @@ from app.core.config import settings
 from app.domains.authentication.router import router as authentication_router
 from app.domains.dashboards.router import router as dashboards_router
 from app.domains.organizacoes.router import router as organizacoes_router
+from app.domains.participants.router import router as participants_router
 from app.domains.prismas.router import router as prismas_router
 from app.domains.prognosticos.router import router as prognosticos_router
 from app.domains.questions.router import router as questions_router
@@ -109,5 +110,6 @@ for _router in (
     questions_router,
     relatorios_router,
     user_router,
+    participants_router,
 ):
     app.include_router(_router, prefix=settings.API_V1_PREFIX)

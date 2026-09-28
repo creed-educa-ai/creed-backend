@@ -12,7 +12,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
-from app.domains.users.models import RecordStatus, User, UserRole
+from app.domains.users.models import User, UserRole
+from app.shared.enums import RecordStatus
 
 
 class UserBase(BaseModel):
