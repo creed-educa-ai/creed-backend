@@ -164,6 +164,8 @@ class TestComAdmin:
         )
 
         assert response.status_code == 422
+        # Erro do Pydantic: `detail` é lista, não texto como o do service.
+        assert response.json()["detail"][0]["loc"] == ["body", "document_id"]
 
     def test_remove_espacos_das_pontas_do_nome(self, client: TestClient) -> None:
         response = client.post(
@@ -178,6 +180,7 @@ class TestComAdmin:
         response = client.post("/participants", json={"name": nome}, headers=TOKEN)
 
         assert response.status_code == 422
+        assert response.json()["detail"][0]["loc"] == ["body", "name"]
 
     def test_consulta_o_participante_cadastrado(self, client: TestClient) -> None:
         criado = client.post(

@@ -16,7 +16,7 @@ from app.domains.participants.dependencies import ServiceDep
 from app.domains.participants.schemas import ParticipantCreate, ParticipantResponse
 from app.shared.authorization import require_role
 from app.shared.exceptions import ConflictError, NotFoundError, ValidationError
-from app.shared.schemas import ErrorResponse
+from app.shared.schemas import ErrorResponse, ValidationErrorResponse
 
 router = APIRouter(prefix="/participants", tags=["participants"])
 
@@ -66,18 +66,41 @@ _AUTH_RESPONSES: dict[int | str, dict[str, Any]] = {
                 }
             },
         },
+        # Dois formatos no mesmo 422: o do service (`detail` texto) e o da
+        # validação do Pydantic (`detail` lista).
         status.HTTP_422_UNPROCESSABLE_CONTENT: {
-            "model": ErrorResponse,
+            "model": ErrorResponse | ValidationErrorResponse,
             "description": (
-                "Nome inválido, `document_id` malformado ou documento inexistente."
+                "Documento inexistente: `detail` é texto. "
+                "Nome inválido ou `document_id` malformado: `detail` é uma lista, "
+                "um item por campo recusado."
             ),
             "content": {
                 "application/json": {
-                    "example": {
-                        "detail": (
-                            "Documento 3b2f8c1a-6d4e-4f7a-9c5b-1e0d2a8f6b94 "
-                            "não encontrado"
-                        )
+                    "examples": {
+                        "documento_inexistente": {
+                            "summary": "Documento inexistente",
+                            "value": {
+                                "detail": (
+                                    "Documento 3b2f8c1a-6d4e-4f7a-9c5b-1e0d2a8f6b94 "
+                                    "não encontrado"
+                                )
+                            },
+                        },
+                        "nome_vazio": {
+                            "summary": "Nome vazio",
+                            "value": {
+                                "detail": [
+                                    {
+                                        "loc": ["body", "name"],
+                                        "msg": (
+                                            "String should have at least 1 character"
+                                        ),
+                                        "type": "string_too_short",
+                                    }
+                                ]
+                            },
+                        },
                     }
                 }
             },

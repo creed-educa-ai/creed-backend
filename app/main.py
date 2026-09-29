@@ -48,6 +48,10 @@ OPENAPI_TAGS = [
         "name": "form-responses",
         "description": "Abertura e submissão de respostas de formulário.",
     },
+    {
+        "name": "participants",
+        "description": "Cadastro e consulta das pessoas participantes.",
+    },
 ]
 
 

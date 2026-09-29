@@ -127,6 +127,18 @@ def test_success_error_and_bearer_authentication_responses_are_documented() -> N
         _operation(schema, "/api/v1/participants/{participant_id}", "get")["responses"]
     ) >= {"200", "401", "403", "404", "422"}
 
+    # O 422 do cadastro sai em dois formatos: texto (documento inexistente, vindo
+    # do service) e lista (validação do Pydantic). Os dois precisam estar no schema.
+    participant_422 = _operation(schema, "/api/v1/participants", "post")["responses"][
+        "422"
+    ]["content"]["application/json"]
+    assert {ref["$ref"] for ref in participant_422["schema"]["anyOf"]} == {
+        "#/components/schemas/ErrorResponse",
+        "#/components/schemas/ValidationErrorResponse",
+    }
+    assert set(participant_422["examples"]) == {"documento_inexistente", "nome_vazio"}
+    assert "participants" in {tag["name"] for tag in schema["tags"]}
+
     security_schemes = schema["components"]["securitySchemes"]
     assert security_schemes["BearerAuth"] == {
         "type": "http",
