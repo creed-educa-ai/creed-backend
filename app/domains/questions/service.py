@@ -30,10 +30,7 @@ class QuestionService:
         )
 
         if already_exists is not None:
-            raise ConflictError(
-                f"Já existe pergunta na posição {request.order_index} "
-                f"do formulário {request.form_id}"
-            )
+            raise self._conflito_de_posicao(request)
 
         question = Question(
             form_id=request.form_id,
@@ -46,13 +43,16 @@ class QuestionService:
         )
         created = await self.repository.insert(question)
         if created is None:
-            raise ConflictError(
-                f"Já existe pergunta na posição {request.order_index} "
-                f"do formulário {request.form_id}"
-            )
+            raise self._conflito_de_posicao(request)
         return created
 
     async def list_for_form(
         self, form_id: uuid.UUID, section: QuestionSection | None = None
     ) -> list[Question]:
         return await self.repository.list_by_form(form_id, section)
+
+    def _conflito_de_posicao(self, request: QuestionCreate) -> ConflictError:
+        return ConflictError(
+            f"Já existe pergunta na posição {request.order_index} "
+            f"do formulário {request.form_id}"
+        )

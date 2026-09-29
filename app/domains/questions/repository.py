@@ -33,7 +33,9 @@ class QuestionRepository:
         self.db.add(question)
         try:
             await self.db.flush()
-        except IntegrityError:
+        except IntegrityError as exc:
+            if "uq_questions_form_id_order_index" not in str(exc.orig):
+                raise
             return None
         await self.db.refresh(question)
         return question

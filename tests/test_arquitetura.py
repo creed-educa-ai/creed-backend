@@ -36,7 +36,7 @@ LEITURA_ENTRE_DOMINIOS: dict[str, str] = {}
 # só que escondido atrás de schemas.py. Formato: nome do domínio -> motivo.
 REEXPORT_DE_TIPO_PERMITIDO: dict[str, str] = {
     "questions": (
-        "QuestionSection e QuestionType são tipos de valor (Enum), não ORM. "
+        "QuestionSection, QuestionType e Prisma são tipos de valor (Enum), não ORM. "
         "schemas.py os reexporta para o filtro ?section= de router.py usar, "
         "sem duplicar os valores em um segundo enum."
     ),

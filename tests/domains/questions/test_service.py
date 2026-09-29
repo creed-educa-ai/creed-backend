@@ -24,11 +24,18 @@ from app.shared.exceptions import ConflictError
 class FakeQuestionRepository:
     """Duble do repository: guarda em lista, nao decide nada."""
 
-    def __init__(self, existentes: list[Question] | None = None) -> None:
+    def __init__(
+        self,
+        existentes: list[Question] | None = None,
+        recusar_insert: bool = False,
+    ) -> None:
         self.itens: list[Question] = list(existentes or [])
         self.secao_pedida: QuestionSection | str | None = "nao chamado"
+        self.recusar_insert = recusar_insert
 
-    async def insert(self, question: Question) -> Question:
+    async def insert(self, question: Question) -> Question | None:
+        if self.recusar_insert:
+            return None
         self.itens.append(question)
         return question
 
@@ -77,6 +84,23 @@ def servico(repository: FakeQuestionRepository) -> QuestionService:
 
 
 class TestCriarQuestion:
+    async def test_corrida_na_gravacao_vira_conflito_sem_gravar(self) -> None:
+        form_id = uuid.uuid4()
+        repository = FakeQuestionRepository(recusar_insert=True)
+
+        with pytest.raises(ConflictError, match=re.escape(str(form_id))):
+            await servico(repository).create(
+                QuestionCreate(
+                    form_id=form_id,
+                    text="Pergunta que perde a corrida",
+                    order_index=0,
+                    type=QuestionType.OBJECTIVE,
+                    section=QuestionSection.ASSESSMENT,
+                )
+            )
+
+        assert repository.itens == []
+
     async def test_persiste_os_campos_do_payload(self) -> None:
         repository = FakeQuestionRepository()
         form_id = uuid.uuid4()
