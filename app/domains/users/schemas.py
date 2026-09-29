@@ -10,10 +10,11 @@ router não pode conhecer (ADR-0004, item 7).
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 from app.domains.users.models import User, UserRole
 from app.shared.enums import RecordStatus
+from app.shared.validators import sem_caractere_de_controle
 
 
 class UserBase(BaseModel):
@@ -56,6 +57,12 @@ class UserCreate(UserBase):
         description="Identificador `sub` do usuário provisionado no Keycloak.",
         examples=["e5c0e7fa-3e57-427a-8d7b-a4ab5fb6c339"],
     )
+
+    @field_validator("name")
+    @classmethod
+    def _sem_caractere_de_controle(cls, name: str) -> str:
+        """Só na entrada: a saída devolve o que está gravado."""
+        return sem_caractere_de_controle(name)
 
 
 class UserResponse(UserBase):
