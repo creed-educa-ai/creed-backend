@@ -15,6 +15,8 @@ class FormStatus(enum.Enum):
     """Status de um Formulário."""
 
     DRAFT = "draft"
+    PUBLISHED = "published"
+    CLOSED = "closed"
 
 
 class Form(Base):
@@ -26,7 +28,11 @@ class Form(Base):
 
     name: Mapped[str] = mapped_column(String(200), nullable=False)
 
-    organization_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        nullable=False,
+        index=True,
+    )
 
     status: Mapped[FormStatus] = mapped_column(
         Enum(FormStatus), nullable=False, default=FormStatus.DRAFT
