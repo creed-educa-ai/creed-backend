@@ -1,7 +1,9 @@
 """Sessão SQLAlchemy 2.0 async e base declarativa (ADR-002, secao 2.3)."""
 
 from collections.abc import AsyncGenerator
+from typing import Annotated
 
+from fastapi import Depends
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -34,7 +36,7 @@ class Base(DeclarativeBase):
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
-    """Dependência de sessão, injetada nos routers via Depends."""
+    """Sessão da requisição. Os domínios a recebem por `SessionDep`, não direto."""
     async with AsyncSessionLocal() as session:
         try:
             yield session
@@ -42,3 +44,12 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
         except Exception:
             await session.rollback()
             raise
+
+
+# `scope="function"`: o que vem depois do `yield` (o commit) roda quando a rota
+# termina, ANTES de a resposta sair. No escopo padrão o FastAPI envia a resposta
+# primeiro e só então fecha a sessão: o cliente recebia 201 com o commit ainda
+# por fazer, e um commit que falhasse ali não virava erro para ninguém
+# (CREED-364). Todo `dependencies.py` usa este tipo — tests/test_arquitetura.py
+# reprova `Depends(get_db)` solto.
+SessionDep = Annotated[AsyncSession, Depends(get_db, scope="function")]

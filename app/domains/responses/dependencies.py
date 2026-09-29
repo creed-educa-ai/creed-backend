@@ -7,15 +7,14 @@ repository -> service, mantendo o router livre de construção de objetos.
 from typing import Annotated
 
 from fastapi import Depends
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database import get_db
+from app.core.database import SessionDep
 from app.domains.responses.repository import AnswerRepository, FormResponseRepository
 from app.domains.responses.service import AnswerService, FormResponseService
 
 
 def get_repository(
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: SessionDep,
 ) -> FormResponseRepository:
     return FormResponseRepository(db)
 
@@ -30,7 +29,7 @@ ServiceDep = Annotated[FormResponseService, Depends(get_service)]
 
 
 def get_answer_repository(
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: SessionDep,
 ) -> AnswerRepository:
     return AnswerRepository(db)
 

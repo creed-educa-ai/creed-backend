@@ -173,6 +173,20 @@ def test_commit_so_no_get_db() -> None:
     )
 
 
+def test_sessao_so_pelo_session_dep() -> None:
+    database = APP / "core" / "database.py"
+    culpados = [
+        str(arquivo.relative_to(APP))
+        for arquivo in sorted(APP.rglob("*.py"))
+        if arquivo != database
+        and any("Depends(get_db" in linha for linha in _codigo(arquivo))
+    ]
+    assert not culpados, (
+        f"Depends(get_db) solto em: {culpados}. "
+        "Use SessionDep: ele fecha a sessão (commit) antes de a resposta sair."
+    )
+
+
 def test_nao_existe_utils_global() -> None:
     assert not (APP / "shared" / "utils.py").exists(), (
         "app/shared/utils.py é proibido: compartilhado sobe com nome de assunto "

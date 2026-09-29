@@ -7,15 +7,14 @@ documento recebe o `ServiceDep` daqui, nunca o model.
 from typing import Annotated
 
 from fastapi import Depends
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database import get_db
+from app.core.database import SessionDep
 from app.domains.documents.repository import DocumentRepository
 from app.domains.documents.service import DocumentService
 
 
 def get_repository(
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: SessionDep,
 ) -> DocumentRepository:
     return DocumentRepository(db)
 
