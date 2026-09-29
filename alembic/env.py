@@ -13,11 +13,12 @@ from app.core.config import settings
 from app.core.database import Base
 from app.domains.documents import models as documents_models  # noqa: F401
 from app.domains.forms import models as forms_models  # noqa: F401
-from app.domains.responses import models as responses_models  # noqa: F401
 
 # --- IMPORTANTE ---
 # Todo model novo precisa ser importado aqui, senão o autogenerate não o enxerga
 # e a migration sai vazia ou incompleta.
+from app.domains.questions import models as questions_models  # noqa: F401
+from app.domains.responses import models as responses_models  # noqa: F401
 from app.domains.users import models as users_models  # noqa: F401
 
 config = context.config

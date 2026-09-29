@@ -29,6 +29,19 @@ NOMES = [caminho.name for caminho in DOMINIOS]
 #     "dashboards": "agrega respondentes e prismas; ver docstring do repository"
 LEITURA_ENTRE_DOMINIOS: dict[str, str] = {}
 
+# Exceção declarada: schemas.py pode reexportar um tipo de VALOR de
+# models.py (Enum — nunca model de tabela) para o router usar, em vez de
+# duplicar os mesmos valores num segundo enum só de API. Sem esta lista,
+# reexportar é o mesmo desvio de `router.py` importar de `models.py` direto,
+# só que escondido atrás de schemas.py. Formato: nome do domínio -> motivo.
+REEXPORT_DE_TIPO_PERMITIDO: dict[str, str] = {
+    "questions": (
+        "QuestionSection, QuestionType e Prisma são tipos de valor (Enum), não ORM. "
+        "schemas.py os reexporta para o filtro ?section= de router.py usar, "
+        "sem duplicar os valores em um segundo enum."
+    ),
+}
+
 
 COMPOE_COM_SERVICE_DE: dict[str, str] = {
     "authentication": "le o usuario pelo UserService",
@@ -84,6 +97,28 @@ def test_router_nao_conhece_models_nem_orm(dominio: Path) -> None:
         f"{dominio.name}/router.py conhece a tabela: {proibidos}. "
         "O mapeamento model -> schema é `de_model()`, em schemas.py."
     )
+
+
+@pytest.mark.parametrize("dominio", DOMINIOS, ids=NOMES)
+def test_reexport_de_tipo_do_model_e_declarado(dominio: Path) -> None:
+    """`schemas.py` pode importar de `models.py` — é o normal de `de_model()`.
+
+    O que precisa de exceção declarada é REEXPORTAR esse tipo (`__all__`) para
+    outra camada importar: aí o acoplamento com `models.py` continua existindo,
+    só que por um desvio que passa no grep de `test_router_nao_conhece_models_nem_orm`.
+    """
+    linhas_schemas = _codigo(dominio / "schemas.py")
+    importa_de_models = any(
+        f"from app.domains.{dominio.name}.models import" in linha
+        for linha in _imports(linhas_schemas)
+    )
+    reexporta = any(linha.strip().startswith("__all__") for linha in linhas_schemas)
+
+    if importa_de_models and reexporta:
+        assert dominio.name in REEXPORT_DE_TIPO_PERMITIDO, (
+            f"{dominio.name}/schemas.py reexporta tipo de models.py (tem `__all__`) "
+            "sem motivo declarado em REEXPORT_DE_TIPO_PERMITIDO."
+        )
 
 
 @pytest.mark.parametrize("dominio", DOMINIOS, ids=NOMES)
