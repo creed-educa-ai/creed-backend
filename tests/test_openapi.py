@@ -28,6 +28,8 @@ def test_all_endpoints_have_method_summary_description_and_operation_id() -> Non
         ("/api/v1/authentication/session", "get"),
         ("/api/v1/users", "post"),
         ("/api/v1/users/{user_id}", "delete"),
+        ("/api/v1/forms", "post"),
+        ("/api/v1/forms/{form_id}", "get"),
         ("/api/v1/form-responses", "post"),
         ("/api/v1/form-responses/{form_response_id}", "patch"),
     }

@@ -28,8 +28,14 @@ class _FakeService:
     def __init__(self, form: Form | None = FAKE_FORM) -> None:
         self.form = form
 
-    async def create(self, _dados: FormCreate) -> Form:
-        return FAKE_FORM
+    async def create(self, dados: FormCreate) -> Form:
+        return Form(
+            id=FAKE_FORM.id,
+            name=dados.name,
+            organization_id=dados.organization_id,
+            status=FormStatus.DRAFT,
+            created_at=FAKE_FORM.created_at,
+        )
 
     async def get(self, form_id: uuid.UUID) -> Form:
         if self.form is None:
@@ -57,18 +63,18 @@ def test_create_with_valid_payload_returns_201_in_the_contract_shape(
     app: FastAPI, client: TestClient
 ) -> None:
     _use_fake_service(app, _FakeService())
+    payload = {
+        "name": "Instrumento piloto",
+        "organization_id": "00000000-0000-0000-0000-000000000001",
+    }
 
-    response = client.post(
-        "/forms",
-        json={
-            "name": "Instrumento piloto",
-            "organization_id": "00000000-0000-0000-0000-000000000001",
-        },
-    )
+    response = client.post("/forms", json=payload)
 
     assert response.status_code == 201
     body = response.json()
     assert set(body) == CHAVES_DA_SAIDA
+    assert body["name"] == payload["name"]
+    assert body["organization_id"] == payload["organization_id"]
     assert body["status"] == "draft"
 
 
