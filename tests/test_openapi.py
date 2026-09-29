@@ -32,6 +32,8 @@ def test_all_endpoints_have_method_summary_description_and_operation_id() -> Non
         ("/api/v1/form-responses/{form_response_id}", "patch"),
         ("/api/v1/participants", "post"),
         ("/api/v1/participants/{participant_id}", "get"),
+        ("/api/v1/questions", "post"),
+        ("/api/v1/forms/{form_id}/questions", "get"),
     }
 
     documented_operations = {
@@ -46,6 +48,20 @@ def test_all_endpoints_have_method_summary_description_and_operation_id() -> Non
         assert operation["summary"]
         assert operation["description"]
         assert operation["operationId"]
+
+
+def test_every_tag_used_by_a_route_has_a_description() -> None:
+    # Domínio novo sem entrada em `OPENAPI_TAGS` aparece no Swagger sem texto.
+    schema = app.openapi()
+    used_tags = {
+        tag
+        for path_item in schema["paths"].values()
+        for operation in path_item.values()
+        for tag in operation.get("tags", [])
+    }
+    described_tags = {tag["name"] for tag in schema["tags"] if tag["description"]}
+
+    assert used_tags <= described_tags
 
 
 def test_request_fields_path_parameters_and_examples_are_documented() -> None:
@@ -137,7 +153,6 @@ def test_success_error_and_bearer_authentication_responses_are_documented() -> N
         "#/components/schemas/ValidationErrorResponse",
     }
     assert set(participant_422["examples"]) == {"documento_inexistente", "nome_vazio"}
-    assert "participants" in {tag["name"] for tag in schema["tags"]}
 
     security_schemes = schema["components"]["securitySchemes"]
     assert security_schemes["BearerAuth"] == {

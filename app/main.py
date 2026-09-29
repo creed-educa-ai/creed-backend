@@ -52,6 +52,10 @@ OPENAPI_TAGS = [
         "name": "participants",
         "description": "Cadastro e consulta das pessoas participantes.",
     },
+    {
+        "name": "questions",
+        "description": "Cadastro e listagem das perguntas dos formulários.",
+    },
 ]
 
 
