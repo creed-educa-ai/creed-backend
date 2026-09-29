@@ -175,7 +175,10 @@ class TestComAdmin:
         assert response.status_code == 201
         assert response.json()["name"] == "Pessoa Exemplo"
 
-    @pytest.mark.parametrize("nome", ["", "   ", "a" * 201])
+    @pytest.mark.parametrize(
+        "nome",
+        ["", "   ", "a" * 201, "Pessoa\x00Exemplo", "Pessoa\nExemplo", "Pessoa\tExemplo"],
+    )
     def test_nome_invalido_devolve_422(self, client: TestClient, nome: str) -> None:
         response = client.post("/participants", json={"name": nome}, headers=TOKEN)
 
