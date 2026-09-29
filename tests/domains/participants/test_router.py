@@ -209,7 +209,7 @@ class TestSemAcesso:
         monkeypatch: pytest.MonkeyPatch,
         role: UserRole,
     ) -> None:
-        """P-015 — só admin cadastra e consulta participante."""
+        """P-022 — só admin cadastra e consulta participante."""
         autenticar_como(app, monkeypatch, role)
 
         cadastro = client.post("/participants", json={"name": "X"}, headers=TOKEN)

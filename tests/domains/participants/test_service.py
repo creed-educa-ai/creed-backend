@@ -2,7 +2,7 @@
 
 Sem banco e sem HTTP: o repository é substituído por um dublê em memória. O que
 se prova aqui é a regra de negócio — o status de nascimento, o participante
-inexistente e as duas recusas de documento (P-014). O `DocumentService` também é
+inexistente e as duas recusas de documento (P-021). O `DocumentService` também é
 dublê: só responde se um id existe. O mapeamento para o Postgres não passa por aqui.
 """
 

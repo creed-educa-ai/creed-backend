@@ -1,7 +1,7 @@
 """Regra de negócio do domínio documents (ADR-0004).
 
 Por enquanto só responde se um documento existe: é o que `participants` precisa
-para aceitar um `document_id` (P-014). Criar e editar documento não tem rota
+para aceitar um `document_id` (P-021). Criar e editar documento não tem rota
 nesta entrega.
 """
 

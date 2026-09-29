@@ -28,7 +28,7 @@ class ParticipantCreate(ParticipantBase):
     Espaços nas pontas do nome saem antes da validação: `"   "` vira texto vazio e
     é recusado, em vez de gravar um nome em branco.
 
-    🟡 Premissa P-014 — `document_id` é opcional. Se vier, o documento precisa já
+    🟡 Premissa P-021 — `document_id` é opcional. Se vier, o documento precisa já
     existir: nesta entrega não há rota que crie documento.
     """
 

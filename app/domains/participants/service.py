@@ -26,7 +26,7 @@ class ParticipantService:
         self.documents = documents
 
     async def create_participant(self, request: ParticipantCreate) -> Participant:
-        # 🟡 Premissa P-014 — sem documento é válido; com documento, ele precisa
+        # 🟡 Premissa P-021 — sem documento é válido; com documento, ele precisa
         # existir e não pode estar ligado a outra pessoa.
         if request.document_id is not None:
             if not await self.documents.document_exists(request.document_id):

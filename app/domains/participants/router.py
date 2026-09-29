@@ -3,7 +3,7 @@
 Camada fina: recebe, valida via Pydantic, delega ao service e devolve. Nenhuma
 regra de negócio aqui, e nenhum import de `models`.
 
-🟡 Premissa P-015 — só `admin` cadastra e consulta participante nesta entrega.
+🟡 Premissa P-022 — só `admin` cadastra e consulta participante nesta entrega.
 Confirmar na próxima reunião.
 """
 
