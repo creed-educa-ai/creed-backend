@@ -9,7 +9,7 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domains.responses.models import FormResponse
+from app.domains.responses.models import Answer, FormResponse
 
 
 class FormResponseRepository:
@@ -41,3 +41,19 @@ class FormResponseRepository:
         await self.db.flush()
         await self.db.refresh(form_response)
         return form_response
+
+
+class AnswerRepository:
+    def __init__(self, db: AsyncSession) -> None:
+        self.db = db
+
+    async def get_by_id(self, answer_id: uuid.UUID) -> Answer | None:
+        result = await self.db.execute(select(Answer).where(Answer.id == answer_id))
+        return result.scalar_one_or_none()
+
+    async def insert(self, answer: Answer) -> Answer:
+        """Grava a resposta. O id e o created_at vêm do banco."""
+        self.db.add(answer)
+        await self.db.flush()
+        await self.db.refresh(answer)
+        return answer

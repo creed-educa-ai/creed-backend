@@ -12,7 +12,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.domains.responses.models import FormResponse, FormResponseStatus
+from app.domains.responses.models import Answer, FormResponse, FormResponseStatus
 
 
 class FormResponseCreate(BaseModel):
@@ -74,3 +74,40 @@ class FormResponseResponse(BaseModel):
     def de_model(cls, form_response: FormResponse) -> "FormResponseResponse":
         """Monta a saída a partir do model."""
         return cls.model_validate(form_response)
+
+
+class AnswerCreate(BaseModel):
+    """Payload de criação de uma resposta individual."""
+
+    question_id: uuid.UUID = Field(
+        description="Identificador da pergunta respondida.",
+    )
+    option_id: uuid.UUID | None = Field(
+        default=None,
+        description="Alternativa marcada, quando a pergunta é objetiva.",
+    )
+    value: str | None = Field(
+        default=None,
+        description="Texto escrito, quando a pergunta é descritiva.",
+    )
+
+
+class AnswerResponse(BaseModel):
+    """Representação de saída de uma resposta individual."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID = Field(description="Identificador da resposta.")
+    question_id: uuid.UUID = Field(description="Identificador da pergunta respondida.")
+    option_id: uuid.UUID | None = Field(
+        default=None, description="Alternativa marcada, quando objetiva."
+    )
+    value: str | None = Field(
+        default=None, description="Texto escrito, quando descritiva."
+    )
+    created_at: datetime = Field(description="Data e hora do registro da resposta.")
+
+    @classmethod
+    def de_model(cls, answer: Answer) -> "AnswerResponse":
+        """Monta a saída a partir do model."""
+        return cls.model_validate(answer)

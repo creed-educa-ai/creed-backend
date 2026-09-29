@@ -1,18 +1,16 @@
 """Regra de negócio do domínio responses.
 
 Esta camada não conhece HTTP nem detalhes de ORM. É onde ficam
-as regras próprias da entidade FormResponse.
+as regras próprias das entidades FormResponse e Answer.
 """
 
 import uuid
 from datetime import UTC, datetime
 
-from app.domains.responses.models import (
-    FormResponse,
-    FormResponseStatus,
-)
-from app.domains.responses.repository import FormResponseRepository
-from app.shared.exceptions import ConflictError, NotFoundError
+from app.domains.responses.models import Answer, FormResponse, FormResponseStatus
+from app.domains.responses.repository import AnswerRepository, FormResponseRepository
+from app.domains.responses.schemas import AnswerCreate
+from app.shared.exceptions import ConflictError, NotFoundError, ValidationError
 
 
 class FormResponseService:
@@ -59,3 +57,39 @@ class FormResponseService:
         form_response.submitted_at = datetime.now(UTC)
 
         return form_response
+
+
+class AnswerService:
+    def __init__(self, repository: AnswerRepository) -> None:
+        self.repository = repository
+
+    async def record(self, dados: AnswerCreate) -> Answer:
+        """Uma resposta válida tem uma das duas formas preenchida: a
+        alternativa marcada, se a pergunta era objetiva, ou o texto
+        escrito, se era descritiva."""
+        texto = dados.value.strip() if dados.value else ""
+
+        tem_opcao = dados.option_id is not None
+        tem_texto = bool(texto)
+
+        if tem_opcao == tem_texto:
+            raise ValidationError(
+                "A resposta precisa ter exatamente uma forma preenchida: "
+                "a alternativa marcada ou o texto escrito"
+            )
+
+        answer = Answer(
+            question_id=dados.question_id,
+            option_id=dados.option_id,
+            value=texto or None,
+        )
+
+        return await self.repository.insert(answer)
+
+    async def get(self, answer_id: uuid.UUID) -> Answer:
+        answer = await self.repository.get_by_id(answer_id)
+
+        if answer is None:
+            raise NotFoundError(f"Answer {answer_id} não encontrado")
+
+        return answer
