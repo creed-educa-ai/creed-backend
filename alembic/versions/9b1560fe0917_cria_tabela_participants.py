@@ -20,7 +20,9 @@ CHECKLIST DE REVISÃO (ADR-002, secao 2.4):
       e a criação do tipo `recordstatus`.
   [x] Renomeação virou drop+create? Não há renomeação.
   [x] Mudança destrutiva foi dividida em passos? Não apaga dado: só cria tabela.
-  [x] `alembic heads` conferido antes de abrir o PR? Head único.
+  [x] `alembic heads` conferido antes de abrir o PR? Era head único na abertura.
+      Depois o #27 entrou na `dev` com a 0f7193652978, irmã desta; as duas pontas
+      se juntam na f7e122daf2c9 (merge).
 """
 
 from collections.abc import Sequence
