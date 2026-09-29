@@ -173,6 +173,18 @@ def test_commit_so_no_get_db() -> None:
     )
 
 
+@pytest.mark.parametrize("dominio", DOMINIOS, ids=NOMES)
+def test_models_do_dominio_esta_no_registro(dominio: Path) -> None:
+    if not (dominio / "models.py").exists():
+        pytest.skip(f"{dominio.name} não tem models.py")
+
+    registro = _imports(_codigo(APP / "models.py"))
+    assert f"from app.domains.{dominio.name} import models" in "\n".join(registro), (
+        f"{dominio.name}/models.py não está em app/models.py. Sem o registro, o "
+        "autogenerate não enxerga a tabela e FK por nome para ela quebra no flush."
+    )
+
+
 def test_sessao_so_pelo_session_dep() -> None:
     database = APP / "core" / "database.py"
     culpados = [

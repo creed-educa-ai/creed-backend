@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app import models  # noqa: F401  (registra todas as tabelas; ver app/models.py)
 from app.core.config import settings
 from app.domains.authentication.router import router as authentication_router
 from app.domains.dashboards.router import router as dashboards_router
