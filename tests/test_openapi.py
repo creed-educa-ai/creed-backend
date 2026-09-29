@@ -120,6 +120,7 @@ def test_success_error_and_bearer_authentication_responses_are_documented() -> N
         "201",
         "401",
         "403",
+        "409",
         "422",
     }
     assert set(

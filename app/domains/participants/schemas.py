@@ -27,11 +27,27 @@ class ParticipantCreate(ParticipantBase):
 
     Espaços nas pontas do nome saem antes da validação: `"   "` vira texto vazio e
     é recusado, em vez de gravar um nome em branco.
+
+    🟡 Premissa P-014 — `document_id` é opcional. Se vier, o documento precisa já
+    existir: nesta entrega não há rota que crie documento.
     """
 
     model_config = ConfigDict(
         str_strip_whitespace=True,
-        json_schema_extra={"examples": [{"name": "Pessoa Exemplo"}]},
+        json_schema_extra={
+            "examples": [
+                {
+                    "name": "Pessoa Exemplo",
+                    "document_id": "3b2f8c1a-6d4e-4f7a-9c5b-1e0d2a8f6b94",
+                }
+            ]
+        },
+    )
+
+    document_id: uuid.UUID | None = Field(
+        default=None,
+        description="Documento já cadastrado da pessoa. Opcional.",
+        examples=["3b2f8c1a-6d4e-4f7a-9c5b-1e0d2a8f6b94"],
     )
 
 
@@ -45,6 +61,7 @@ class ParticipantResponse(ParticipantBase):
                 {
                     "id": "7f9c2b1e-4a3d-4c8e-9b6f-2d1e0a5c8b73",
                     "name": "Pessoa Exemplo",
+                    "document_id": "3b2f8c1a-6d4e-4f7a-9c5b-1e0d2a8f6b94",
                     "status": "active",
                     "created_at": "2026-09-27T14:30:00Z",
                     "updated_at": None,
@@ -54,6 +71,9 @@ class ParticipantResponse(ParticipantBase):
     )
 
     id: uuid.UUID = Field(description="Identificador do participante na plataforma.")
+    document_id: uuid.UUID | None = Field(
+        description="Documento da pessoa; nulo se foi cadastrada sem documento."
+    )
     status: RecordStatus = Field(description="Estado do cadastro do participante.")
     created_at: datetime = Field(description="Data e hora do cadastro.")
     updated_at: datetime | None = Field(

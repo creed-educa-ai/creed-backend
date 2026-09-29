@@ -11,7 +11,7 @@ endereço entra quando alguma tela pedir ([C19]).
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Enum, String, func
+from sqlalchemy import DateTime, Enum, ForeignKey, String, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -21,12 +21,25 @@ from app.shared.enums import RecordStatus
 
 class Participant(Base):
     __tablename__ = "participants"
+    # Nome explícito porque o repository reconhece esta constraint no
+    # IntegrityError (corrida de dois cadastros com o mesmo documento).
+    __table_args__ = (
+        UniqueConstraint("document_id", name="uq_participants_document_id"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
 
     name: Mapped[str] = mapped_column(String(200), nullable=False)
+
+    # O dono aponta para o documento, e não o contrário ([C3]). A constraint
+    # única lá em cima impede duas pessoas de apontarem para o mesmo documento.
+    # A FK é por nome de tabela: importar o model de `documents` furaria a
+    # fronteira de domínio.
+    document_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("documents.id"), nullable=True
+    )
 
     # Mesmo tipo `recordstatus` do `user`: é um enum só no banco ([C6]).
     status: Mapped[RecordStatus] = mapped_column(

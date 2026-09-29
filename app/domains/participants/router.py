@@ -15,7 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Path, status
 from app.domains.participants.dependencies import ServiceDep
 from app.domains.participants.schemas import ParticipantCreate, ParticipantResponse
 from app.shared.authorization import require_role
-from app.shared.exceptions import NotFoundError
+from app.shared.exceptions import ConflictError, NotFoundError, ValidationError
 from app.shared.schemas import ErrorResponse
 
 router = APIRouter(prefix="/participants", tags=["participants"])
@@ -45,16 +45,54 @@ _AUTH_RESPONSES: dict[int | str, dict[str, Any]] = {
     summary="Cadastrar participante",
     description=(
         "Cadastra uma pessoa na plataforma. O participante nasce ativo. "
-        "Exige o papel admin."
+        "O documento é opcional; se vier, precisa já existir e não pode estar "
+        "ligado a outro participante. Exige o papel admin."
     ),
     response_description="Participante cadastrado.",
     operation_id="create_participant",
-    responses=_AUTH_RESPONSES,
+    responses={
+        **_AUTH_RESPONSES,
+        status.HTTP_409_CONFLICT: {
+            "model": ErrorResponse,
+            "description": "O documento informado já pertence a outro participante.",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": (
+                            "O documento 3b2f8c1a-6d4e-4f7a-9c5b-1e0d2a8f6b94 "
+                            "já pertence a outro participante"
+                        )
+                    }
+                }
+            },
+        },
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {
+            "model": ErrorResponse,
+            "description": (
+                "Nome inválido, `document_id` malformado ou documento inexistente."
+            ),
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": (
+                            "Documento 3b2f8c1a-6d4e-4f7a-9c5b-1e0d2a8f6b94 "
+                            "não encontrado"
+                        )
+                    }
+                }
+            },
+        },
+    },
 )
 async def create_participant(
     dados: ParticipantCreate, service: ServiceDep
 ) -> ParticipantResponse:
-    return ParticipantResponse.de_model(await service.create_participant(dados))
+    try:
+        return ParticipantResponse.de_model(await service.create_participant(dados))
+    except ValidationError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, exc.message) from exc
+    except ConflictError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, exc.message) from exc
 
 
 @router.get(

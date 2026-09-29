@@ -22,9 +22,13 @@ from app.domains.participants.schemas import ParticipantCreate
 from app.domains.users.dependencies import get_service as get_user_service
 from app.domains.users.models import User, UserRole
 from app.shared.enums import RecordStatus
-from app.shared.exceptions import NotFoundError
+from app.shared.exceptions import ConflictError, NotFoundError, ValidationError
 
 TOKEN = {"Authorization": "Bearer token-de-teste"}
+
+# Ids que o service falso recusa, para provar a tradução de cada erro em status.
+DOCUMENTO_INEXISTENTE = uuid.UUID("00000000-0000-4000-8000-000000000001")
+DOCUMENTO_EM_USO = uuid.UUID("00000000-0000-4000-8000-000000000002")
 
 
 class _FakeParticipantService:
@@ -32,9 +36,17 @@ class _FakeParticipantService:
         self.itens: list[Participant] = []
 
     async def create_participant(self, request: ParticipantCreate) -> Participant:
+        if request.document_id == DOCUMENTO_INEXISTENTE:
+            raise ValidationError(f"Documento {request.document_id} não encontrado")
+        if request.document_id == DOCUMENTO_EM_USO:
+            raise ConflictError(
+                f"O documento {request.document_id} já pertence a outro participante"
+            )
+
         participant = Participant(
             id=uuid.uuid4(),
             name=request.name,
+            document_id=request.document_id,
             status=RecordStatus.ACTIVE,
             created_at=datetime(2026, 9, 27, tzinfo=UTC),
             updated_at=None,
@@ -108,7 +120,50 @@ class TestComAdmin:
         corpo = response.json()
         assert corpo["name"] == "Pessoa Exemplo"
         assert corpo["status"] == "active"
+        assert corpo["document_id"] is None
         assert corpo["updated_at"] is None
+
+    def test_cadastra_com_documento_e_devolve_o_mesmo_id(
+        self, client: TestClient
+    ) -> None:
+        documento = str(uuid.uuid4())
+
+        response = client.post(
+            "/participants",
+            json={"name": "Pessoa Exemplo", "document_id": documento},
+            headers=TOKEN,
+        )
+
+        assert response.status_code == 201
+        assert response.json()["document_id"] == documento
+
+    def test_documento_inexistente_devolve_422(self, client: TestClient) -> None:
+        response = client.post(
+            "/participants",
+            json={"name": "Pessoa Exemplo", "document_id": str(DOCUMENTO_INEXISTENTE)},
+            headers=TOKEN,
+        )
+
+        assert response.status_code == 422
+        assert response.json()["detail"].startswith("Documento")
+
+    def test_documento_de_outra_pessoa_devolve_409(self, client: TestClient) -> None:
+        response = client.post(
+            "/participants",
+            json={"name": "Pessoa Exemplo", "document_id": str(DOCUMENTO_EM_USO)},
+            headers=TOKEN,
+        )
+
+        assert response.status_code == 409
+
+    def test_document_id_malformado_devolve_422(self, client: TestClient) -> None:
+        response = client.post(
+            "/participants",
+            json={"name": "Pessoa Exemplo", "document_id": "nao-e-uuid"},
+            headers=TOKEN,
+        )
+
+        assert response.status_code == 422
 
     def test_remove_espacos_das_pontas_do_nome(self, client: TestClient) -> None:
         response = client.post(
