@@ -4,7 +4,7 @@ Sem banco: lê a descrição da tabela direto do código. Trava o que é
 fácil de desfazer sem perceber.
 """
 
-from app.domains.forms.models import Form
+from app.domains.forms.models import Form, FormStatus
 
 
 class TestForms:
@@ -19,7 +19,28 @@ class TestForms:
             "status": False,
             "created_at": False,
         }
-        assert {c.name: c.nullable for c in Form.__table__.columns} == expected
+
+        assert {
+            column.name: column.nullable for column in Form.__table__.columns
+        } == expected
+
+    def test_organization_id_has_index(self) -> None:
+        organization_id = Form.__table__.c.organization_id
+
+        assert organization_id.index is True
+
+    def test_status_values(self) -> None:
+        assert {status.name for status in FormStatus} == {
+            "DRAFT",
+            "PUBLISHED",
+            "CLOSED",
+        }
+
+        assert {status.value for status in FormStatus} == {
+            "draft",
+            "published",
+            "closed",
+        }
 
     def test_foreign_keys(self) -> None:
         """A tabela de Vínculo ainda não existe."""
