@@ -37,4 +37,5 @@ def test_cadastro_de_usuario_usa_a_regra() -> None:
             name="Pessoa\x00Exemplo",
             email="pessoa@exemplo.com",
             keycloak_id=uuid.uuid4(),
+            link_id=uuid.uuid4(),
         )

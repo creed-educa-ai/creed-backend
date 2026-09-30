@@ -14,6 +14,7 @@ from app.core.config import settings
 from app.domains.authentication.router import router as authentication_router
 from app.domains.dashboards.router import router as dashboards_router
 from app.domains.forms.router import router as forms_router
+from app.domains.links.router import router as links_router
 from app.domains.organizacoes.router import router as organizacoes_router
 from app.domains.participants.router import router as participants_router
 from app.domains.prismas.router import router as prismas_router
@@ -49,6 +50,10 @@ OPENAPI_TAGS = [
     {
         "name": "form-responses",
         "description": "Abertura e submissão de respostas de formulário.",
+    },
+    {
+        "name": "links",
+        "description": "Criação do vínculo entre um participante e uma organização.",
     },
     {
         "name": "participants",
@@ -124,6 +129,7 @@ for _router in (
     questions_router,
     relatorios_router,
     user_router,
+    links_router,
     participants_router,
     forms_router,
 ):

@@ -95,4 +95,6 @@ async def session(user: CurrentUserDep) -> UserSessionResponse:
         id=user.sub,
         email=user.email or "",
         role=user.roles[0] if user.roles else None,
+        link_id=user.link_id,
+        organization_id=user.organization_id,
     )

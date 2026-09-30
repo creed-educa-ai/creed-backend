@@ -9,6 +9,7 @@ from typing import Annotated
 from fastapi import Depends
 
 from app.core.database import SessionDep
+from app.domains.links.dependencies import ServiceDep as LinkServiceDep
 from app.domains.users.repository import UserRepository
 from app.domains.users.service import UserService
 
@@ -21,8 +22,9 @@ def get_repository(
 
 def get_service(
     repository: Annotated[UserRepository, Depends(get_repository)],
+    links: LinkServiceDep,
 ) -> UserService:
-    return UserService(repository)
+    return UserService(repository, links)
 
 
 ServiceDep = Annotated[UserService, Depends(get_service)]

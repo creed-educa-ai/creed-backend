@@ -37,7 +37,8 @@ class RefreshRequest(BaseModel):
 class UserSessionResponse(BaseModel):
     """Usuário devolvido junto da sessão.
 
-    `vinculo_id`, `organization_id` e `organization_name` ainda não existem. -> None
+    `link_id` e `organization_id` vêm do vínculo do usuário. `organization_name`
+    ainda não existe -> None
     """
 
     model_config = ConfigDict(
@@ -47,7 +48,7 @@ class UserSessionResponse(BaseModel):
                     "id": "6f8c2e7d-4248-4d30-a8b8-2091c48b06f2",
                     "email": "usuario@exemplo.com",
                     "role": "respondente",
-                    "vinculo_id": None,
+                    "link_id": None,
                     "organization_id": None,
                     "organization_name": None,
                 }
@@ -62,7 +63,7 @@ class UserSessionResponse(BaseModel):
         description="Papel efetivo do usuário na plataforma.",
         examples=["respondente"],
     )
-    vinculo_id: str | None = Field(
+    link_id: str | None = Field(
         default=None,
         description="Identificador do vínculo organizacional, quando disponível.",
     )
@@ -88,7 +89,7 @@ class SessionResponse(BaseModel):
                         "id": "6f8c2e7d-4248-4d30-a8b8-2091c48b06f2",
                         "email": "usuario@exemplo.com",
                         "role": "respondente",
-                        "vinculo_id": None,
+                        "link_id": None,
                         "organization_id": None,
                         "organization_name": None,
                     },

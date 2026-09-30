@@ -10,10 +10,8 @@ import pytest
 
 from app.domains.authentication.schemas import LoginRequest
 from app.domains.authentication.service import AuthenticationService
-from app.domains.users.models import User, UserRole
-from app.domains.users.service import UserService
+from app.domains.users.service import UserAccess, UserService
 from app.external_services.keycloak import client as keycloak_client
-from app.shared.enums import RecordStatus
 from app.shared.exceptions import AuthenticationError
 
 FAKE_TOKENS = {
@@ -27,29 +25,31 @@ FAKE_CLAIMS = {
     "realm_access": {"roles": ["admin"]},
 }
 
-ACTIVE_USER = User(
+# `role`, `link_id` e `organization_id` são os do vínculo (CREED-32), não os
+# de uma coluna de `User` — por isso o dublê devolve `UserAccess`, o mesmo tipo
+# que `UserService.get_active_user_access_by_email` devolve de verdade.
+ACTIVE_ACCESS = UserAccess(
     id=uuid.uuid4(),
-    keycloak_id=uuid.uuid4(),
     email="dev@creed.example.com",
-    name="Dev CREED",
-    status=RecordStatus.ACTIVE,
-    role=UserRole.ADMIN,
+    role="admin",
+    link_id=uuid.uuid4(),
+    organization_id=uuid.uuid4(),
 )
 
 
 class _FakeUserService(UserService):
     """Não chama `super().__init__()`: não precisa de repository nenhum."""
 
-    def __init__(self, user: User | None) -> None:
-        self._user = user
+    def __init__(self, access: UserAccess | None) -> None:
+        self._access = access
 
-    async def get_active_user_by_email(self, email: str) -> User | None:
-        return self._user
+    async def get_active_user_access_by_email(self, email: str) -> UserAccess | None:
+        return self._access
 
 
 @pytest.fixture
 def service() -> AuthenticationService:
-    return AuthenticationService(_FakeUserService(ACTIVE_USER))
+    return AuthenticationService(_FakeUserService(ACTIVE_ACCESS))
 
 
 @pytest.fixture(autouse=True)
@@ -75,9 +75,11 @@ async def test_login_success_builds_session_from_database_user(
     assert session.refresh_token == "refresh-fake"  # noqa: S105
     assert session.expires_in == 900
 
-    assert session.user.id == str(ACTIVE_USER.id)
+    assert session.user.id == str(ACTIVE_ACCESS.id)
     assert session.user.email == "dev@creed.example.com"
     assert session.user.role == "admin"
+    assert session.user.link_id == str(ACTIVE_ACCESS.link_id)
+    assert session.user.organization_id == str(ACTIVE_ACCESS.organization_id)
 
 
 async def test_login_with_wrong_password_raises_authentication_error(

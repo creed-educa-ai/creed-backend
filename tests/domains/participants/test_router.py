@@ -20,7 +20,8 @@ from app.domains.participants.models import Participant
 from app.domains.participants.router import router
 from app.domains.participants.schemas import ParticipantCreate
 from app.domains.users.dependencies import get_service as get_user_service
-from app.domains.users.models import User, UserRole
+from app.domains.users.models import UserRole
+from app.domains.users.service import UserAccess
 from app.shared.enums import RecordStatus
 from app.shared.exceptions import ConflictError, NotFoundError, ValidationError
 
@@ -62,11 +63,11 @@ class _FakeParticipantService:
 
 
 class _FakeUserService:
-    def __init__(self, user: User) -> None:
-        self._user = user
+    def __init__(self, access: UserAccess) -> None:
+        self._access = access
 
-    async def get_active_user_by_email(self, email: str) -> User | None:
-        return self._user
+    async def get_active_user_access_by_email(self, email: str) -> UserAccess | None:
+        return self._access
 
 
 @pytest.fixture
@@ -92,15 +93,15 @@ def autenticar_como(
         return {"sub": "sub-dev", "email": email, "realm_access": {"roles": [role.value]}}
 
     monkeypatch.setattr("app.shared.authorization.validate_token", _fake_validate_token)
-    user = User(
+    # Desde a CREED-32 a guarda lê o papel do vínculo (`UserAccess`), não do `User`.
+    access = UserAccess(
         id=uuid.uuid4(),
-        keycloak_id=uuid.uuid4(),
         email=email,
-        name="Dev CREED",
-        status=RecordStatus.ACTIVE,
-        role=role,
+        role=role.value,
+        link_id=uuid.uuid4(),
+        organization_id=uuid.uuid4(),
     )
-    app.dependency_overrides[get_user_service] = lambda: _FakeUserService(user)
+    app.dependency_overrides[get_user_service] = lambda: _FakeUserService(access)
 
 
 class TestComAdmin:

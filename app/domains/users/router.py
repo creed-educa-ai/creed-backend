@@ -8,10 +8,11 @@ a montagem da resposta é `UserResponse.de_model()`, em `schemas.py`.
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Path, status
+from fastapi import APIRouter, Depends, HTTPException, Path, status
 
 from app.domains.users.dependencies import ServiceDep
 from app.domains.users.schemas import UserCreate, UserResponse
+from app.shared.authorization import require_role
 from app.shared.exceptions import ConflictError, NotFoundError
 from app.shared.schemas import ErrorResponse
 
@@ -24,15 +25,48 @@ router = APIRouter(prefix="/users", tags=["users"])
     status_code=status.HTTP_201_CREATED,
     summary="Criar usuário",
     description=(
-        "Registra na plataforma um usuário já provisionado no Keycloak. "
-        "O status inicial é ativo e o papel inicial é respondente."
+        "Registra na plataforma um usuário já provisionado no Keycloak, "
+        "vinculado a um vínculo existente. O status inicial é ativo, e o "
+        "papel é o do vínculo informado. Exige o papel admin (P-008): amarrar "
+        "um login a um vínculo decide o acesso de alguém à plataforma."
     ),
     response_description="Usuário criado na plataforma.",
     operation_id="create_user",
+    dependencies=[Depends(require_role("admin"))],
     responses={
+        status.HTTP_401_UNAUTHORIZED: {
+            "model": ErrorResponse,
+            "description": "Token ausente, inválido ou expirado.",
+            "content": {"application/json": {"example": {"detail": "Não autenticado"}}},
+        },
+        status.HTTP_403_FORBIDDEN: {
+            "model": ErrorResponse,
+            "description": "O usuário autenticado não tem o papel admin.",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Cargo insuficiente para acessar"}
+                }
+            },
+        },
+        status.HTTP_404_NOT_FOUND: {
+            "model": ErrorResponse,
+            "description": "O vínculo informado não existe.",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": (
+                            "Vínculo 3f9a2b1c-4d5e-4f6a-8b7c-9d0e1f2a3b4c não encontrado"
+                        )
+                    }
+                }
+            },
+        },
         status.HTTP_409_CONFLICT: {
             "model": ErrorResponse,
-            "description": "Já existe um usuário com o e-mail informado.",
+            "description": (
+                "Já existe um usuário com o e-mail informado, "
+                "ou o vínculo já está em uso por outro usuário."
+            ),
             "content": {
                 "application/json": {
                     "example": {
@@ -40,14 +74,23 @@ router = APIRouter(prefix="/users", tags=["users"])
                     }
                 }
             },
-        }
+        },
     },
 )
 async def create_user(dados: UserCreate, service: ServiceDep) -> UserResponse:
     try:
-        return UserResponse.de_model(await service.create_user_service(dados))
+        created = await service.create_user_service(dados)
+    except NotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, exc.message) from exc
     except ConflictError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, exc.message) from exc
+
+    return UserResponse.de_model(
+        created.user,
+        role=created.role,
+        link_id=dados.link_id,
+        organization_id=created.organization_id,
+    )
 
 
 @router.delete(
