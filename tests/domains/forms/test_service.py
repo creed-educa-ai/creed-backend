@@ -1,4 +1,8 @@
-"""Testes do service do domínio forms."""
+"""Testes do service do domínio forms.
+
+Inclui a regra de organização (P-033): o `admin` age em qualquer organização,
+`gestor` e `respondente` só na do próprio vínculo.
+"""
 
 import uuid
 from datetime import UTC, datetime
@@ -8,7 +12,7 @@ import pytest
 from app.domains.forms.models import Form, FormStatus
 from app.domains.forms.schemas import FormCreate, FormRead
 from app.domains.forms.service import FormService
-from app.shared.exceptions import NotFoundError
+from app.shared.exceptions import ForbiddenError, NotFoundError
 
 
 class FakeFormRepository:
@@ -45,7 +49,9 @@ class TestCriarFormulario:
         organization_id = uuid.uuid4()
 
         criado = await servico(repository).create(
-            FormCreate(name="Plasticidade Humana", organization_id=organization_id)
+            FormCreate(name="Plasticidade Humana", organization_id=organization_id),
+            role="gestor",
+            organization_id=organization_id,
         )
 
         assert criado.name == "Plasticidade Humana"
@@ -56,11 +62,41 @@ class TestCriarFormulario:
         """Um formulário publicado sem perguntas não seria respondível."""
         repository = FakeFormRepository()
 
+        organization_id = uuid.uuid4()
+
         criado = await servico(repository).create(
-            FormCreate(name="Plasticidade Humana", organization_id=uuid.uuid4())
+            FormCreate(name="Plasticidade Humana", organization_id=organization_id),
+            role="gestor",
+            organization_id=organization_id,
         )
 
         assert criado.status is FormStatus.DRAFT
+
+    async def test_gestor_em_outra_organizacao_vira_forbidden_sem_gravar(
+        self,
+    ) -> None:
+        repository = FakeFormRepository()
+
+        with pytest.raises(ForbiddenError):
+            await servico(repository).create(
+                FormCreate(name="Plasticidade Humana", organization_id=uuid.uuid4()),
+                role="gestor",
+                organization_id=uuid.uuid4(),
+            )
+
+        assert repository.itens == []
+
+    async def test_admin_cadastra_em_qualquer_organizacao(self) -> None:
+        repository = FakeFormRepository()
+        outra_organizacao = uuid.uuid4()
+
+        criado = await servico(repository).create(
+            FormCreate(name="Plasticidade Humana", organization_id=outra_organizacao),
+            role="admin",
+            organization_id=uuid.uuid4(),
+        )
+
+        assert criado.organization_id == outra_organizacao
 
 
 class TestBuscarFormulario:
@@ -78,6 +114,48 @@ class TestBuscarFormulario:
 
         with pytest.raises(NotFoundError):
             await servico(repository).get(uuid.uuid4())
+
+
+class TestBuscarFormularioParaQuemPede:
+    async def test_mesma_organizacao_devolve_o_formulario(self) -> None:
+        form = um_form()
+        repository = FakeFormRepository([form])
+
+        encontrado = await servico(repository).get_for_user(
+            form.id, role="respondente", organization_id=form.organization_id
+        )
+
+        assert encontrado is form
+
+    async def test_outra_organizacao_vira_forbidden(self) -> None:
+        form = um_form()
+        repository = FakeFormRepository([form])
+
+        with pytest.raises(ForbiddenError):
+            await servico(repository).get_for_user(
+                form.id, role="gestor", organization_id=uuid.uuid4()
+            )
+
+    async def test_admin_le_de_qualquer_organizacao(self) -> None:
+        form = um_form()
+        repository = FakeFormRepository([form])
+
+        encontrado = await servico(repository).get_for_user(
+            form.id, role="admin", organization_id=uuid.uuid4()
+        )
+
+        assert encontrado is form
+
+    async def test_inexistente_vira_not_found_antes_de_conferir_organizacao(
+        self,
+    ) -> None:
+        """404 antes de 403: não há organização para comparar."""
+        repository = FakeFormRepository()
+
+        with pytest.raises(NotFoundError):
+            await servico(repository).get_for_user(
+                uuid.uuid4(), role="gestor", organization_id=uuid.uuid4()
+            )
 
 
 class TestFormRead:

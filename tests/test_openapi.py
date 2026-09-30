@@ -135,12 +135,27 @@ def test_success_error_and_bearer_authentication_responses_are_documented() -> N
     ) >= {"201", "422"}
     assert set(_operation(schema, "/api/v1/questions", "post")["responses"]) >= {
         "201",
+        "401",
+        "403",
         "409",
         "422",
     }
     assert set(
         _operation(schema, "/api/v1/forms/{form_id}/questions", "get")["responses"]
-    ) >= {"200", "404"}
+    ) >= {"200", "401", "403", "404"}
+    # Formulário e pergunta exigem login desde a CREED-47 (P-033).
+    assert set(_operation(schema, "/api/v1/forms", "post")["responses"]) >= {
+        "201",
+        "401",
+        "403",
+        "422",
+    }
+    assert set(_operation(schema, "/api/v1/forms/{form_id}", "get")["responses"]) >= {
+        "200",
+        "401",
+        "403",
+        "404",
+    }
     assert set(
         _operation(
             schema,

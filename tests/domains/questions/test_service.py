@@ -13,13 +13,21 @@ provados pela CREED-353, de ponta a ponta, com banco.
 import re
 import uuid
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import pytest
 
 from app.domains.questions.models import Question, QuestionSection, QuestionType
 from app.domains.questions.schemas import QuestionCreate
 from app.domains.questions.service import QuestionService
-from app.shared.exceptions import ConflictError, NotFoundError, ValidationError
+from app.shared.exceptions import (
+    ConflictError,
+    ForbiddenError,
+    NotFoundError,
+    ValidationError,
+)
+
+ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
 
 class FakeQuestionRepository:
@@ -81,19 +89,40 @@ def uma_question(**campos: object) -> Question:
 
 
 class FakeFormService:
-    """Duble do `FormService`: so responde se o formulario existe.
+    """Duble do `FormService`: responde "existe?" e a conferencia de organizacao.
 
-    `existe=False` faz toda consulta levantar `NotFoundError`, como o service
-    real faz para um id que nao esta no banco.
+    `existe=False` faz toda consulta levantar `NotFoundError`; `proibido=True` faz
+    a conferencia levantar `ForbiddenError`, como o service real faz para outra
+    organizacao. A regra em si (P-033) e provada em tests/domains/forms.
     """
 
-    def __init__(self, *, existe: bool = True) -> None:
+    def __init__(self, *, existe: bool = True, proibido: bool = False) -> None:
         self.existe = existe
+        self.proibido = proibido
 
-    async def get(self, form_id: uuid.UUID) -> object:
+    async def get(self, form_id: uuid.UUID) -> SimpleNamespace:
         if not self.existe:
             raise NotFoundError(f"Formulário {form_id} não encontrado")
-        return object()
+        return SimpleNamespace(id=form_id, organization_id=ORG)
+
+    async def get_for_user(
+        self, form_id: uuid.UUID, *, role: str, organization_id: uuid.UUID
+    ) -> SimpleNamespace:
+        form = await self.get(form_id)
+        self.check_organization(
+            form.organization_id, role=role, organization_id=organization_id
+        )
+        return form
+
+    def check_organization(
+        self,
+        form_organization_id: uuid.UUID,
+        *,
+        role: str,
+        organization_id: uuid.UUID,
+    ) -> None:
+        if self.proibido:
+            raise ForbiddenError("Sem acesso a formulário de outra organização")
 
 
 def servico(
@@ -121,7 +150,9 @@ class TestCriarQuestion:
                     order_index=0,
                     type=QuestionType.DESCRIPTIVE,
                     section=QuestionSection.PROFILE,
-                )
+                ),
+                role="gestor",
+                organization_id=ORG,
             )
 
         assert repository.itens == []
@@ -138,7 +169,9 @@ class TestCriarQuestion:
                     order_index=0,
                     type=QuestionType.OBJECTIVE,
                     section=QuestionSection.ASSESSMENT,
-                )
+                ),
+                role="gestor",
+                organization_id=ORG,
             )
 
         assert repository.itens == []
@@ -154,7 +187,9 @@ class TestCriarQuestion:
                 order_index=0,
                 type=QuestionType.OBJECTIVE,
                 section=QuestionSection.ASSESSMENT,
-            )
+            ),
+            role="gestor",
+            organization_id=ORG,
         )
 
         assert criada.form_id == form_id
@@ -172,7 +207,9 @@ class TestCriarQuestion:
                 order_index=0,
                 type=QuestionType.DESCRIPTIVE,
                 section=QuestionSection.PROFILE,
-            )
+            ),
+            role="gestor",
+            organization_id=ORG,
         )
 
         assert criada.required is True
@@ -192,7 +229,9 @@ class TestCriarQuestion:
                     order_index=2,
                     type=QuestionType.OBJECTIVE,
                     section=QuestionSection.CLOSING,
-                )
+                ),
+                role="gestor",
+                organization_id=ORG,
             )
 
         assert len(repository.itens) == 1
@@ -209,11 +248,34 @@ class TestCriarQuestion:
                 order_index=2,
                 type=QuestionType.OBJECTIVE,
                 section=QuestionSection.ASSESSMENT,
-            )
+            ),
+            role="gestor",
+            organization_id=ORG,
         )
 
         assert len(repository.itens) == 2
         assert criada.order_index == 2
+
+    async def test_formulario_de_outra_organizacao_vira_forbidden_sem_gravar(
+        self,
+    ) -> None:
+        """A regra (P-033) e do FormService; aqui se prova que ela e pedida."""
+        repository = FakeQuestionRepository()
+
+        with pytest.raises(ForbiddenError):
+            await servico(repository, FakeFormService(proibido=True)).create(
+                QuestionCreate(
+                    form_id=uuid.uuid4(),
+                    text="Pergunta em formulario alheio",
+                    order_index=0,
+                    type=QuestionType.DESCRIPTIVE,
+                    section=QuestionSection.PROFILE,
+                ),
+                role="gestor",
+                organization_id=uuid.uuid4(),
+            )
+
+        assert repository.itens == []
 
 
 class TestListarQuestionsDoFormulario:
@@ -222,7 +284,9 @@ class TestListarQuestionsDoFormulario:
         form_id = uuid.uuid4()
         repository = FakeQuestionRepository([uma_question(form_id=form_id)])
 
-        await servico(repository).list_for_form(form_id, QuestionSection.PROFILE)
+        await servico(repository).list_for_form(
+            form_id, QuestionSection.PROFILE, role="gestor", organization_id=ORG
+        )
 
         assert repository.secao_pedida is QuestionSection.PROFILE
 
@@ -230,14 +294,18 @@ class TestListarQuestionsDoFormulario:
         form_id = uuid.uuid4()
         repository = FakeQuestionRepository([uma_question(form_id=form_id)])
 
-        await servico(repository).list_for_form(form_id)
+        await servico(repository).list_for_form(
+            form_id, role="gestor", organization_id=ORG
+        )
 
         assert repository.secao_pedida is None
 
     async def test_formulario_sem_pergunta_devolve_lista_vazia(self) -> None:
         repository = FakeQuestionRepository()
 
-        resultado = await servico(repository).list_for_form(uuid.uuid4())
+        resultado = await servico(repository).list_for_form(
+            uuid.uuid4(), role="gestor", organization_id=ORG
+        )
 
         assert resultado == []
 
@@ -247,7 +315,17 @@ class TestListarQuestionsDoFormulario:
 
         with pytest.raises(NotFoundError):
             await servico(repository, FakeFormService(existe=False)).list_for_form(
-                uuid.uuid4()
+                uuid.uuid4(), role="gestor", organization_id=ORG
+            )
+
+        assert repository.secao_pedida == "nao chamado"
+
+    async def test_formulario_de_outra_organizacao_vira_forbidden(self) -> None:
+        repository = FakeQuestionRepository()
+
+        with pytest.raises(ForbiddenError):
+            await servico(repository, FakeFormService(proibido=True)).list_for_form(
+                uuid.uuid4(), role="respondente", organization_id=uuid.uuid4()
             )
 
         assert repository.secao_pedida == "nao chamado"

@@ -13,7 +13,7 @@ from app.domains.users.dependencies import get_service as get_user_service
 from app.domains.users.models import User
 from app.domains.users.service import UserAccess, UserService
 from app.external_services.keycloak.token import InvalidTokenError
-from app.shared.authorization import CurrentUserDep, require_role
+from app.shared.authorization import AuthenticatedUser, CurrentUserDep, require_role
 from app.shared.enums import RecordStatus
 
 
@@ -349,3 +349,31 @@ def test_user_without_an_active_account_returns_401(
     response = client.get(route, headers={"Authorization": "Bearer valid"})
 
     assert response.status_code == 401
+
+
+class TestVinculoDoUsuarioConferido:
+    """`role` e `organization_uuid` são o que os routers passam aos services."""
+
+    def test_conferido_expoe_papel_e_organizacao_como_uuid(self) -> None:
+        organization_id = uuid.uuid4()
+        user = AuthenticatedUser(
+            sub=str(uuid.uuid4()),
+            email="dev@creed.example.com",
+            roles=["gestor"],
+            link_id=str(uuid.uuid4()),
+            organization_id=str(organization_id),
+        )
+
+        assert user.role == "gestor"
+        assert user.organization_uuid == organization_id
+
+    def test_identidade_so_do_token_nao_expoe_o_vinculo(self) -> None:
+        """Antes da conferência no banco, `roles` são as do token: podem ser várias."""
+        user = AuthenticatedUser(
+            sub="sub-dev", email="dev@creed.example.com", roles=["admin", "gestor"]
+        )
+
+        with pytest.raises(RuntimeError):
+            _ = user.role
+        with pytest.raises(RuntimeError):
+            _ = user.organization_uuid

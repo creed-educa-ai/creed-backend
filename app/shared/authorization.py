@@ -1,6 +1,7 @@
 """Guarda de autenticação e nível de acesso"""
 
 import logging
+import uuid
 from typing import Annotated, Any
 
 from fastapi import Depends, HTTPException, status
@@ -48,6 +49,33 @@ class AuthenticatedUser:
 
     def has_role(self, role: str) -> bool:
         return role in self.roles
+
+    @property
+    def role(self) -> str:
+        """O papel do vínculo, o único que sobra depois da conferência no banco.
+
+        Antes dela (`_identity_from_token`) `roles` são as do token, que podem ser
+        várias ou nenhuma: por isso levanta em vez de escolher uma.
+        """
+        self._checked_organization_id()
+        return self.roles[0]
+
+    @property
+    def organization_uuid(self) -> uuid.UUID:
+        """A organização do vínculo, como `uuid.UUID`, para os services."""
+        return uuid.UUID(self._checked_organization_id())
+
+    def _checked_organization_id(self) -> str:
+        """A organização, se a identidade já passou pela conferência no banco.
+
+        Só `_check_against_database` preenche `link_id` e `organization_id`.
+        """
+        if self.link_id is None or self.organization_id is None:
+            raise RuntimeError(
+                "Identidade ainda não conferida no banco: use a guarda "
+                "(`require_role` ou `CurrentUserDep`) antes de ler o vínculo."
+            )
+        return self.organization_id
 
 
 def _extract_token(credentials: HTTPAuthorizationCredentials | None) -> str:

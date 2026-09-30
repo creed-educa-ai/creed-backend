@@ -12,7 +12,8 @@ levantar erro de negocio — test_arquitetura.py o proibe), e e este service
 que traduz `None` em ConflictError.
 
 Formulario e de outro dominio: a pergunta "ele existe?" vai ao `FormService`,
-nunca ao model de `forms` (CREED-47).
+nunca ao model de `forms` (CREED-47). A regra de organizacao (P-033) tambem mora
+la: aqui se pede a conferencia, sem repetir a comparacao.
 """
 
 import uuid
@@ -29,12 +30,19 @@ class QuestionService:
         self.repository = repository
         self.forms = forms
 
-    async def create(self, request: QuestionCreate) -> Question:
+    async def create(
+        self, request: QuestionCreate, *, role: str, organization_id: uuid.UUID
+    ) -> Question:
+        """`role` e `organization_id` sao de quem pede, nao do formulario."""
         # O formulario veio no corpo: inexistente e 422, nao 404 (CREED-47, item 11).
         try:
-            await self.forms.get(request.form_id)
+            form = await self.forms.get(request.form_id)
         except NotFoundError as exc:
             raise ValidationError(exc.message) from exc
+
+        self.forms.check_organization(
+            form.organization_id, role=role, organization_id=organization_id
+        )
 
         already_exists = await self.repository.get_by_form_and_order(
             request.form_id, request.order_index
@@ -58,14 +66,20 @@ class QuestionService:
         return created
 
     async def list_for_form(
-        self, form_id: uuid.UUID, section: QuestionSection | None = None
+        self,
+        form_id: uuid.UUID,
+        section: QuestionSection | None = None,
+        *,
+        role: str,
+        organization_id: uuid.UUID,
     ) -> list[Question]:
-        """Formulario inexistente levanta `NotFoundError` (404 no router).
+        """Formulario inexistente levanta `NotFoundError` (404 no router), e de
+        outra organizacao, `ForbiddenError` (403).
 
-        Sem essa conferencia, "formulario inexistente" e "formulario ainda sem
-        perguntas" devolviam o mesmo 200 com lista vazia.
+        Sem a primeira conferencia, "formulario inexistente" e "formulario ainda
+        sem perguntas" devolviam o mesmo 200 com lista vazia.
         """
-        await self.forms.get(form_id)
+        await self.forms.get_for_user(form_id, role=role, organization_id=organization_id)
         return await self.repository.list_by_form(form_id, section)
 
     def _conflito_de_posicao(self, request: QuestionCreate) -> ConflictError:
