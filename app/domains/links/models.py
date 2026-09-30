@@ -4,8 +4,11 @@ Vínculo é o elo entre uma pessoa (participante) e uma organização: guarda o 
 pessoa ali, o tipo do vínculo e o período. A mesma pessoa em duas organizações tem dois
 vínculos, e cada vínculo tem o próprio login (`user.link_id`, em `users/models.py`).
 
-`Participant`, `Organization` e `Department` ainda não têm tabela — por isso
 `participant_id`, `organization_id` e `department_id` são UUIDs soltos, sem `ForeignKey`.
+`Organization` e `Department` ainda não têm tabela. `Participant` tem (`participants`,
+desde o PR #28), mas a FK dele também fica para a amarração, junto com as outras duas: ela
+exige o seed criar o participante de dev e o `POST` de vínculo conferir se o participante
+existe, e isso é escopo que a CREED-32 não previu.
 """
 
 import enum
@@ -48,7 +51,7 @@ class Link(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
 
-    # FK para Participant — tabela ainda não criada
+    # FK para `participants` — a tabela existe, a FK entra na amarração (ver docstring)
     participant_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), nullable=False, index=True
     )

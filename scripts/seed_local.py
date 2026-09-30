@@ -35,7 +35,8 @@ NAME = "Dev CREED"
 USER_ROLE_COLUMN = UserRole.RESPONDENTE
 LINK_ROLE = Roles.ADMIN
 
-# Órfãos até `Participant` e `Organization` existirem: a amarração deve criar
+# Órfãos até a amarração: `Organization` ainda não tem tabela, e `participants`
+# tem, mas `links.participant_id` ainda não tem FK para ela. A amarração deve criar
 # as duas linhas com estes mesmos ids (spec da CREED-32, "Abordagem técnica",
 # item 13). Fixos, e não aleatórios, para o seed continuar idempotente.
 PARTICIPANT_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")

@@ -38,7 +38,8 @@ class TestLinksTable:
             )
 
     def test_has_no_foreign_key(self) -> None:
-        """Participant, Organization e Department ainda não têm tabela."""
+        """Organization e Department não têm tabela; a FK de participants fica
+        para a amarração (docstring de `links/models.py`)."""
         assert Link.__table__.foreign_keys == set()
 
     def test_has_index_on_the_three_reference_columns(self) -> None:
