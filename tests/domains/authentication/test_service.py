@@ -25,14 +25,14 @@ FAKE_CLAIMS = {
     "realm_access": {"roles": ["admin"]},
 }
 
-# `role`, `vinculo_id` e `organization_id` são os do vínculo (CREED-32), não os
+# `role`, `link_id` e `organization_id` são os do vínculo (CREED-32), não os
 # de uma coluna de `User` — por isso o dublê devolve `UserAccess`, o mesmo tipo
 # que `UserService.get_active_user_access_by_email` devolve de verdade.
 ACTIVE_ACCESS = UserAccess(
     id=uuid.uuid4(),
     email="dev@creed.example.com",
     role="admin",
-    vinculo_id=uuid.uuid4(),
+    link_id=uuid.uuid4(),
     organization_id=uuid.uuid4(),
 )
 
@@ -78,7 +78,7 @@ async def test_login_success_builds_session_from_database_user(
     assert session.user.id == str(ACTIVE_ACCESS.id)
     assert session.user.email == "dev@creed.example.com"
     assert session.user.role == "admin"
-    assert session.user.vinculo_id == str(ACTIVE_ACCESS.vinculo_id)
+    assert session.user.link_id == str(ACTIVE_ACCESS.link_id)
     assert session.user.organization_id == str(ACTIVE_ACCESS.organization_id)
 
 

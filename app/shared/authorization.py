@@ -27,7 +27,7 @@ bearer_scheme = HTTPBearer(
 class AuthenticatedUser:
     """Identidade do usuário autenticado.
 
-    `vinculo_id` e `organization_id` nascem `None`: quem monta a partir só do
+    `link_id` e `organization_id` nascem `None`: quem monta a partir só do
     token (`_identity_from_token`) não os tem. Só `_check_against_database`,
     que já consultou o vínculo, os preenche.
     """
@@ -37,13 +37,13 @@ class AuthenticatedUser:
         sub: str,
         email: str | None,
         roles: list[str],
-        vinculo_id: str | None = None,
+        link_id: str | None = None,
         organization_id: str | None = None,
     ) -> None:
         self.sub = sub
         self.email = email
         self.roles = roles
-        self.vinculo_id = vinculo_id
+        self.link_id = link_id
         self.organization_id = organization_id
 
     def has_role(self, role: str) -> bool:
@@ -80,7 +80,7 @@ async def _check_against_database(
     identity: AuthenticatedUser, users: UserService
 ) -> AuthenticatedUser:
     # `None` cobre usuário inexistente, inativo, sem vínculo, ou vínculo que o
-    # VinculoService não encontra — a guarda trata os quatro como "sem acesso"
+    # LinkService não encontra — a guarda trata os quatro como "sem acesso"
     # (P-008), sem distinguir. O papel comparado é o do vínculo, não mais o de
     # `user.role`: a coluna deixou de ser lida (CREED-32).
     access = (
@@ -105,7 +105,7 @@ async def _check_against_database(
         sub=str(access.id),
         email=access.email,
         roles=[access.role],
-        vinculo_id=str(access.vinculo_id),
+        link_id=str(access.link_id),
         organization_id=str(access.organization_id),
     )
 

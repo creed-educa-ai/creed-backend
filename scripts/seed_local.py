@@ -19,10 +19,10 @@ import httpx
 
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal
+from app.domains.links.models import Link, LinkType, Roles
+from app.domains.links.repository import LinkRepository
 from app.domains.users.models import RecordStatus, User, UserRole
 from app.domains.users.repository import UserRepository
-from app.domains.vinculos.models import Roles, VincType, Vinculo
-from app.domains.vinculos.repository import VinculoRepository
 
 EMAIL = "dev@creed.example.com"
 NAME = "Dev CREED"
@@ -31,7 +31,7 @@ NAME = "Dev CREED"
 # `user.role`. `USER_ROLE_COLUMN` só existe porque a coluna continua `NOT NULL`
 # até a task 6 — ninguém lê o valor.
 USER_ROLE_COLUMN = UserRole.RESPONDENTE
-VINCULO_ROLE = Roles.ADMIN
+LINK_ROLE = Roles.ADMIN
 
 # Órfãos até `Participant` e `Organization` existirem: a amarração deve criar
 # as duas linhas com estes mesmos ids (spec da CREED-32, "Abordagem técnica",
@@ -91,7 +91,7 @@ async def semear() -> None:
 
     async with AsyncSessionLocal() as session:
         users = UserRepository(session)
-        vinculos = VinculoRepository(session)
+        links = LinkRepository(session)
         existente = await users.get_user_by_email(EMAIL)
 
         if existente is not None:
@@ -102,20 +102,18 @@ async def semear() -> None:
                 existente.keycloak_id = keycloak_id
                 await session.commit()
 
-            if existente.vinculo_id is not None:
-                print(
-                    f"{EMAIL} já estava no banco, com o vínculo {existente.vinculo_id}."
-                )
+            if existente.link_id is not None:
+                print(f"{EMAIL} já estava no banco, com o vínculo {existente.link_id}.")
                 return
 
             # Banco de antes da CREED-32: o usuário existe, falta o vínculo.
-            vinculo = await vinculos.insert(_novo_vinculo())
-            existente.vinculo_id = vinculo.id
+            link = await links.insert(_new_link())
+            existente.link_id = link.id
             await session.commit()
-            print(f"{EMAIL} ganhou o vínculo {vinculo.id} ({VINCULO_ROLE.value}).")
+            print(f"{EMAIL} ganhou o vínculo {link.id} ({LINK_ROLE.value}).")
             return
 
-        vinculo = await vinculos.insert(_novo_vinculo())
+        link = await links.insert(_new_link())
         await users.create(
             User(
                 keycloak_id=keycloak_id,
@@ -123,22 +121,22 @@ async def semear() -> None:
                 email=EMAIL,
                 status=RecordStatus.ACTIVE,
                 role=USER_ROLE_COLUMN,
-                vinculo_id=vinculo.id,
+                link_id=link.id,
             )
         )
         await session.commit()
         print(
             f"{EMAIL} criado, keycloak_id={keycloak_id}, "
-            f"vínculo {vinculo.id} ({VINCULO_ROLE.value})."
+            f"vínculo {link.id} ({LINK_ROLE.value})."
         )
 
 
-def _novo_vinculo() -> Vinculo:
-    return Vinculo(
+def _new_link() -> Link:
+    return Link(
         participant_id=PARTICIPANT_ID,
         organization_id=ORGANIZATION_ID,
-        type=VincType.EMPREGO,
-        role=VINCULO_ROLE,
+        type=LinkType.EMPREGO,
+        role=LINK_ROLE,
     )
 
 

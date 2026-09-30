@@ -1,6 +1,6 @@
 """Testes do service do domínio users.
 
-Sem banco e sem HTTP: repository e `VinculoService` são substituídos por dublês em
+Sem banco e sem HTTP: repository e `LinkService` são substituídos por dublês em
 memória, que é o que a separação de camadas do ADR-0004 compra. O que se prova aqui é
 a regra de negócio — conflito de e-mail, vínculo inexistente ou já usado, usuário
 inexistente e o status de nascimento (P-013). O mapeamento para o Postgres não passa
@@ -13,10 +13,10 @@ from datetime import UTC, datetime
 
 import pytest
 
+from app.domains.links.models import Link, LinkType, Roles
 from app.domains.users.models import RecordStatus, User, UserRole
 from app.domains.users.schemas import UserCreate, UserResponse
 from app.domains.users.service import UserService
-from app.domains.vinculos.models import Roles, VincType, Vinculo
 from app.shared.exceptions import ConflictError, NotFoundError
 
 
@@ -33,8 +33,8 @@ class FakeUserRepository:
     async def get_user_by_email(self, user_email: str) -> User | None:
         return next((u for u in self.itens if u.email == user_email), None)
 
-    async def get_by_vinculo_id(self, vinculo_id: uuid.UUID) -> User | None:
-        return next((u for u in self.itens if u.vinculo_id == vinculo_id), None)
+    async def get_by_link_id(self, link_id: uuid.UUID) -> User | None:
+        return next((u for u in self.itens if u.link_id == link_id), None)
 
     async def create(self, user: User) -> User:
         self.itens.append(user)
@@ -45,30 +45,30 @@ class FakeUserRepository:
         self.removidos.append(user)
 
 
-class FakeVinculoService:
-    """Dublê do `VinculoService`: um dicionário `id -> Vinculo`."""
+class FakeLinkService:
+    """Dublê do `LinkService`: um dicionário `id -> Link`."""
 
-    def __init__(self, existentes: list[Vinculo] | None = None) -> None:
-        self.itens: dict[uuid.UUID, Vinculo] = {v.id: v for v in (existentes or [])}
+    def __init__(self, existing: list[Link] | None = None) -> None:
+        self.items: dict[uuid.UUID, Link] = {v.id: v for v in (existing or [])}
 
-    async def get_vinculo_by_id_service(self, vinculo_id: uuid.UUID) -> Vinculo | None:
-        return self.itens.get(vinculo_id)
+    async def get_link_by_id_service(self, link_id: uuid.UUID) -> Link | None:
+        return self.items.get(link_id)
 
 
-def um_vinculo(**campos: object) -> Vinculo:
-    padrao: dict[str, object] = {
+def make_link(**fields: object) -> Link:
+    defaults: dict[str, object] = {
         "id": uuid.uuid4(),
         "participant_id": uuid.uuid4(),
         "organization_id": uuid.uuid4(),
-        "setor_id": None,
-        "type": VincType.EMPREGO,
+        "department_id": None,
+        "type": LinkType.EMPREGO,
         "role": Roles.RESPONDENTE,
         "start_at": datetime(2026, 9, 24, tzinfo=UTC),
         "end_at": None,
         "created_at": datetime(2026, 9, 24, tzinfo=UTC),
         "updated_at": None,
     }
-    return Vinculo(**{**padrao, **campos})
+    return Link(**{**defaults, **fields})
 
 
 def um_user(**campos: object) -> User:
@@ -77,7 +77,7 @@ def um_user(**campos: object) -> User:
     Todo campo vai explícito: `default` e `server_default` só são aplicados no
     INSERT, então um User que nunca passou pela sessão tem `None` neles.
 
-    `vinculo_id` vem preenchido por padrão: é o caso comum a partir da
+    `link_id` vem preenchido por padrão: é o caso comum a partir da
     CREED-32. `role` continua no padrão só porque a coluna ainda é `NOT NULL`
     — ninguém mais lê o valor.
     """
@@ -88,130 +88,123 @@ def um_user(**campos: object) -> User:
         "email": "naira@pucrs.br",
         "status": RecordStatus.ACTIVE,
         "role": UserRole.RESPONDENTE,
-        "vinculo_id": uuid.uuid4(),
+        "link_id": uuid.uuid4(),
         "created_at": datetime(2026, 9, 13, tzinfo=UTC),
     }
     return User(**{**padrao, **campos})
 
 
 def servico(
-    repository: FakeUserRepository, vinculos: FakeVinculoService | None = None
+    repository: FakeUserRepository, links: FakeLinkService | None = None
 ) -> UserService:
-    return UserService(repository, vinculos or FakeVinculoService())  # type: ignore[arg-type]
+    return UserService(repository, links or FakeLinkService())  # type: ignore[arg-type]
 
 
 class TestCriarUsuario:
-    async def test_persiste_os_campos_do_payload_e_o_papel_do_vinculo(self) -> None:
-        vinculo = um_vinculo(role=Roles.GESTOR)
+    async def test_persists_payload_fields_and_link_role(self) -> None:
+        link = make_link(role=Roles.GESTOR)
         repository = FakeUserRepository()
         keycloak_id = uuid.uuid4()
 
-        criado = await servico(
-            repository, FakeVinculoService([vinculo])
-        ).create_user_service(
+        created = await servico(repository, FakeLinkService([link])).create_user_service(
             UserCreate(
                 name="Naira Libermann",
                 email="naira@pucrs.br",
                 keycloak_id=keycloak_id,
-                vinculo_id=vinculo.id,
+                link_id=link.id,
             )
         )
 
-        assert criado.user.email == "naira@pucrs.br"
-        assert criado.user.name == "Naira Libermann"
-        assert criado.user.keycloak_id == keycloak_id
-        assert criado.user.vinculo_id == vinculo.id
-        assert criado.role == "gestor"
-        assert criado.organization_id == vinculo.organization_id
-        assert repository.itens == [criado.user]
+        assert created.user.email == "naira@pucrs.br"
+        assert created.user.name == "Naira Libermann"
+        assert created.user.keycloak_id == keycloak_id
+        assert created.user.link_id == link.id
+        assert created.role == "gestor"
+        assert created.organization_id == link.organization_id
+        assert repository.itens == [created.user]
 
-    async def test_nao_passa_role_e_a_saida_usa_o_papel_do_vinculo(self) -> None:
+    async def test_does_not_pass_role_and_output_uses_link_role(self) -> None:
         """`role` não vai no construtor do `User`: quem responde é o vínculo."""
-        vinculo = um_vinculo(role=Roles.ADMIN)
+        link = make_link(role=Roles.ADMIN)
         repository = FakeUserRepository()
 
-        criado = await servico(
-            repository, FakeVinculoService([vinculo])
-        ).create_user_service(
+        created = await servico(repository, FakeLinkService([link])).create_user_service(
             UserCreate(
                 name="Naira Libermann",
                 email="naira@pucrs.br",
                 keycloak_id=uuid.uuid4(),
-                vinculo_id=vinculo.id,
+                link_id=link.id,
             )
         )
 
         # A coluna não recebe o papel do vínculo; só a saída o carrega.
-        assert criado.user.role is not UserRole.ADMIN
-        assert criado.role == "admin"
-        assert criado.role == "admin"
+        assert created.user.role is not UserRole.ADMIN
+        assert created.role == "admin"
 
     async def test_nasce_ativo(self) -> None:
         """P-013 — se isto virar `inactive`, o primeiro login para de funcionar."""
-        vinculo = um_vinculo()
+        link = make_link()
         repository = FakeUserRepository()
 
-        criado = await servico(
-            repository, FakeVinculoService([vinculo])
-        ).create_user_service(
+        criado = await servico(repository, FakeLinkService([link])).create_user_service(
             UserCreate(
                 name="Naira Libermann",
                 email="naira@pucrs.br",
                 keycloak_id=uuid.uuid4(),
-                vinculo_id=vinculo.id,
+                link_id=link.id,
             )
         )
 
         assert criado.user.status is RecordStatus.ACTIVE
 
     async def test_email_repetido_vira_conflito(self) -> None:
-        vinculo = um_vinculo()
+        link = make_link()
         repository = FakeUserRepository([um_user(email="naira@pucrs.br")])
 
         with pytest.raises(ConflictError, match=re.escape("naira@pucrs.br")):
-            await servico(repository, FakeVinculoService([vinculo])).create_user_service(
+            await servico(repository, FakeLinkService([link])).create_user_service(
                 UserCreate(
                     name="Outra Pessoa",
                     email="naira@pucrs.br",
                     keycloak_id=uuid.uuid4(),
-                    vinculo_id=vinculo.id,
+                    link_id=link.id,
                 )
             )
 
         assert len(repository.itens) == 1
 
-    async def test_vinculo_inexistente_vira_not_found(self) -> None:
+    async def test_unknown_link_raises_not_found(self) -> None:
         repository = FakeUserRepository()
-        vinculo_id = uuid.uuid4()
+        link_id = uuid.uuid4()
 
-        with pytest.raises(NotFoundError, match=re.escape(str(vinculo_id))):
-            await servico(repository, FakeVinculoService()).create_user_service(
+        with pytest.raises(NotFoundError, match=re.escape(str(link_id))):
+            await servico(repository, FakeLinkService()).create_user_service(
                 UserCreate(
                     name="Naira Libermann",
                     email="naira@pucrs.br",
                     keycloak_id=uuid.uuid4(),
-                    vinculo_id=vinculo_id,
+                    link_id=link_id,
                 )
             )
 
         assert repository.itens == []
 
-    async def test_vinculo_ja_usado_vira_conflito(self) -> None:
-        vinculo = um_vinculo()
-        dono_atual = um_user(vinculo_id=vinculo.id)
-        repository = FakeUserRepository([dono_atual])
+    async def test_link_already_used_raises_conflict(self) -> None:
+        link = make_link()
+        current_owner = um_user(link_id=link.id)
+        repository = FakeUserRepository([current_owner])
 
-        with pytest.raises(ConflictError, match=re.escape(str(vinculo.id))):
-            await servico(repository, FakeVinculoService([vinculo])).create_user_service(
+        with pytest.raises(ConflictError, match=re.escape(str(link.id))):
+            await servico(repository, FakeLinkService([link])).create_user_service(
                 UserCreate(
                     name="Outra Pessoa",
                     email="outra@pucrs.br",
                     keycloak_id=uuid.uuid4(),
-                    vinculo_id=vinculo.id,
+                    link_id=link.id,
                 )
             )
 
-        assert repository.itens == [dono_atual]
+        assert repository.itens == [current_owner]
 
 
 class TestRemoverUsuario:
@@ -235,74 +228,74 @@ class TestRemoverUsuario:
 class TestGetActiveUserAccessByEmail:
     """O método que a task 5 usa na guarda e no login."""
 
-    async def test_devolve_o_papel_do_vinculo_mesmo_com_a_coluna_divergindo(self) -> None:
-        vinculo = um_vinculo(role=Roles.ADMIN)
-        user = um_user(role=UserRole.RESPONDENTE, vinculo_id=vinculo.id)
+    async def test_returns_link_role_even_when_column_diverges(self) -> None:
+        link = make_link(role=Roles.ADMIN)
+        user = um_user(role=UserRole.RESPONDENTE, link_id=link.id)
         repository = FakeUserRepository([user])
 
-        acesso = await servico(
-            repository, FakeVinculoService([vinculo])
+        access = await servico(
+            repository, FakeLinkService([link])
         ).get_active_user_access_by_email(user.email)
 
-        assert acesso is not None
-        assert acesso.role == "admin"
-        assert acesso.vinculo_id == vinculo.id
-        assert acesso.organization_id == vinculo.organization_id
+        assert access is not None
+        assert access.role == "admin"
+        assert access.link_id == link.id
+        assert access.organization_id == link.organization_id
 
-    async def test_usuario_inexistente_devolve_none(self) -> None:
+    async def test_unknown_user_returns_none(self) -> None:
         repository = FakeUserRepository()
 
-        acesso = await servico(repository).get_active_user_access_by_email(
+        access = await servico(repository).get_active_user_access_by_email(
             "ninguem@pucrs.br"
         )
 
-        assert acesso is None
+        assert access is None
 
-    async def test_usuario_inativo_devolve_none(self) -> None:
+    async def test_inactive_user_returns_none(self) -> None:
         user = um_user(status=RecordStatus.INACTIVE)
         repository = FakeUserRepository([user])
 
-        acesso = await servico(
-            repository, FakeVinculoService([um_vinculo(id=user.vinculo_id)])
+        access = await servico(
+            repository, FakeLinkService([make_link(id=user.link_id)])
         ).get_active_user_access_by_email(user.email)
 
-        assert acesso is None
+        assert access is None
 
-    async def test_usuario_sem_vinculo_devolve_none(self) -> None:
-        user = um_user(vinculo_id=None)
+    async def test_user_without_link_returns_none(self) -> None:
+        user = um_user(link_id=None)
         repository = FakeUserRepository([user])
 
-        acesso = await servico(repository).get_active_user_access_by_email(user.email)
+        access = await servico(repository).get_active_user_access_by_email(user.email)
 
-        assert acesso is None
+        assert access is None
 
-    async def test_vinculo_que_o_vinculo_service_nao_encontra_devolve_none(self) -> None:
-        """`user.vinculo_id` aponta para algo que o `VinculoService` não acha."""
+    async def test_link_not_found_by_link_service_returns_none(self) -> None:
+        """`user.link_id` aponta para algo que o `LinkService` não acha."""
         user = um_user()
         repository = FakeUserRepository([user])
 
-        acesso = await servico(
-            repository, FakeVinculoService()
+        access = await servico(
+            repository, FakeLinkService()
         ).get_active_user_access_by_email(user.email)
 
-        assert acesso is None
+        assert access is None
 
 
 class TestUserResponse:
-    def test_de_model_monta_a_saida_com_o_papel_e_a_organizacao_do_vinculo(self) -> None:
-        vinculo_id = uuid.uuid4()
+    def test_de_model_builds_output_with_link_role_and_organization(self) -> None:
+        link_id = uuid.uuid4()
         organization_id = uuid.uuid4()
-        user = um_user(vinculo_id=vinculo_id)
+        user = um_user(link_id=link_id)
 
-        resposta = UserResponse.de_model(
-            user, role="admin", vinculo_id=vinculo_id, organization_id=organization_id
+        response = UserResponse.de_model(
+            user, role="admin", link_id=link_id, organization_id=organization_id
         )
 
-        assert resposta.id == user.id
-        assert resposta.email == user.email
-        assert resposta.role == "admin"
-        assert resposta.vinculo_id == vinculo_id
-        assert resposta.organization_id == organization_id
+        assert response.id == user.id
+        assert response.email == user.email
+        assert response.role == "admin"
+        assert response.link_id == link_id
+        assert response.organization_id == organization_id
 
     def test_nao_expoe_o_keycloak_id(self) -> None:
         """O contrato-api.md não tem `keycloak_id` no `User` de saída."""
@@ -311,7 +304,7 @@ class TestUserResponse:
         resposta = UserResponse.de_model(
             user,
             role="respondente",
-            vinculo_id=uuid.uuid4(),
+            link_id=uuid.uuid4(),
             organization_id=uuid.uuid4(),
         )
 
@@ -323,10 +316,10 @@ class TestUserResponse:
                 name="Alguém",
                 email="abc",
                 keycloak_id=uuid.uuid4(),
-                vinculo_id=uuid.uuid4(),
+                link_id=uuid.uuid4(),
             )
 
-    def test_recusa_corpo_sem_vinculo_id(self) -> None:
+    def test_rejects_body_without_link_id(self) -> None:
         with pytest.raises(ValueError):
             UserCreate.model_validate(
                 {

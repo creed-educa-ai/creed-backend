@@ -4,19 +4,19 @@ Esta camada não conhece HTTP nem detalhes de ORM. É onde a lógica vive,
 isolada e testável — o mesmo padrão que os dashboards usarão para o
 cálculo dos 5 prismas (ADR-001, secao 4.1).
 
-`users` conversa com `vinculos` só pelo `VinculoService`, injetado (spec da
-CREED-32, "Abordagem técnica", item 8) — nunca com `VinculoRepository` nem com
-`Vinculo` direto, que manteria o acoplamento na tabela e não no contrato do
+`users` conversa com `links` só pelo `LinkService`, injetado (spec da
+CREED-32, "Abordagem técnica", item 8) — nunca com `LinkRepository` nem com
+`Link` direto, que manteria o acoplamento na tabela e não no contrato do
 domínio dono.
 """
 
 import uuid
 from dataclasses import dataclass
 
+from app.domains.links.service import LinkService
 from app.domains.users.models import RecordStatus, User
 from app.domains.users.repository import UserRepository
 from app.domains.users.schemas import UserCreate
-from app.domains.vinculos.service import VinculoService
 from app.shared.exceptions import ConflictError, NotFoundError
 
 
@@ -24,7 +24,7 @@ from app.shared.exceptions import ConflictError, NotFoundError
 class CreatedUser:
     """O que o router precisa para montar o `UserResponse` do cadastro.
 
-    `role` e `organization_id` vêm do `Vinculo` que o service já consultou
+    `role` e `organization_id` vêm do `Link` que o service já consultou
     para validar o cadastro — não faz sentido o router buscá-los de novo.
     """
 
@@ -44,41 +44,37 @@ class UserAccess:
     id: uuid.UUID
     email: str
     role: str
-    vinculo_id: uuid.UUID
+    link_id: uuid.UUID
     organization_id: uuid.UUID
 
 
 class UserService:
-    def __init__(self, repository: UserRepository, vinculos: VinculoService) -> None:
+    def __init__(self, repository: UserRepository, links: LinkService) -> None:
         self.repository = repository
-        self.vinculos = vinculos
+        self.links = links
 
     async def get_active_user_access_by_email(self, email: str) -> UserAccess | None:
         """O que a guarda e o login usam para saber quem está logado.
 
-        `None` cobre usuário inexistente, inativo, sem `vinculo_id`, e
-        `vinculo_id` que o `VinculoService` não encontra — a guarda e o login
+        `None` cobre usuário inexistente, inativo, sem `link_id`, e
+        `link_id` que o `LinkService` não encontra — a guarda e o login
         tratam todos os quatro como "sem acesso" (401), sem distinguir.
         """
         user = await self.repository.get_user_by_email(email)
 
-        if (
-            user is None
-            or user.status is not RecordStatus.ACTIVE
-            or user.vinculo_id is None
-        ):
+        if user is None or user.status is not RecordStatus.ACTIVE or user.link_id is None:
             return None
 
-        vinculo = await self.vinculos.get_vinculo_by_id_service(user.vinculo_id)
-        if vinculo is None:
+        link = await self.links.get_link_by_id_service(user.link_id)
+        if link is None:
             return None
 
         return UserAccess(
             id=user.id,
             email=user.email,
-            role=vinculo.role.value,
-            vinculo_id=user.vinculo_id,
-            organization_id=vinculo.organization_id,
+            role=link.role.value,
+            link_id=user.link_id,
+            organization_id=link.organization_id,
         )
 
     async def create_user_service(self, request: UserCreate) -> CreatedUser:
@@ -87,13 +83,13 @@ class UserService:
         if already_exists is not None:
             raise ConflictError(f"Já existe usuário com o e-mail {request.email}")
 
-        vinculo = await self.vinculos.get_vinculo_by_id_service(request.vinculo_id)
-        if vinculo is None:
-            raise NotFoundError(f"Vínculo {request.vinculo_id} não encontrado")
+        link = await self.links.get_link_by_id_service(request.link_id)
+        if link is None:
+            raise NotFoundError(f"Vínculo {request.link_id} não encontrado")
 
-        vinculo_em_uso = await self.repository.get_by_vinculo_id(request.vinculo_id)
-        if vinculo_em_uso is not None:
-            raise ConflictError(f"Vínculo {request.vinculo_id} já está em uso")
+        link_in_use = await self.repository.get_by_link_id(request.link_id)
+        if link_in_use is not None:
+            raise ConflictError(f"Vínculo {request.link_id} já está em uso")
 
         # `status` é decisão de produto (P-013), então mora aqui e não no model
         # — ADR-0004: "se muda quando o produto muda de ideia, é service". O
@@ -108,11 +104,11 @@ class UserService:
             name=request.name,
             email=request.email,
             status=RecordStatus.ACTIVE,
-            vinculo_id=request.vinculo_id,
+            link_id=request.link_id,
         )
-        criado = await self.repository.create(user)
+        created = await self.repository.create(user)
         return CreatedUser(
-            user=criado, role=vinculo.role.value, organization_id=vinculo.organization_id
+            user=created, role=link.role.value, organization_id=link.organization_id
         )
 
     async def delete_user_service(self, user_id: uuid.UUID) -> None:

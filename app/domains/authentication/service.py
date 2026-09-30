@@ -73,7 +73,7 @@ class AuthenticationService:
                 id=str(access.id),
                 email=access.email,
                 role=access.role,
-                vinculo_id=str(access.vinculo_id),
+                link_id=str(access.link_id),
                 organization_id=str(access.organization_id),
             ),
         )

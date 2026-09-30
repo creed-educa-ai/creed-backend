@@ -1,4 +1,4 @@
-"""Testes de app/domains/vinculos/router.py — contrato HTTP e a guarda `admin`.
+"""Testes de app/domains/links/router.py — contrato HTTP e a guarda `admin`.
 
 `TestClient` com `dependency_overrides`, como em `tests/domains/authentication/
 test_router.py`. Para a guarda, o `validate_token` falso e o dublê de `UserService`
@@ -14,12 +14,12 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from app.domains.links.dependencies import get_service as get_link_service
+from app.domains.links.models import Link
+from app.domains.links.router import router
+from app.domains.links.schemas import LinkCreate
 from app.domains.users.dependencies import get_service as get_user_service
 from app.domains.users.service import UserAccess
-from app.domains.vinculos.dependencies import get_service as get_vinculo_service
-from app.domains.vinculos.models import Vinculo
-from app.domains.vinculos.router import router
-from app.domains.vinculos.schemas import VinculoCreate
 
 VALID_BODY = {
     "participant_id": "e5c0e7fa-3e57-427a-8d7b-a4ab5fb6c339",
@@ -28,27 +28,27 @@ VALID_BODY = {
 }
 
 
-class _FakeVinculoService:
-    """Dublê: monta o `Vinculo` do jeito que o repository faria no INSERT."""
+class _FakeLinkService:
+    """Dublê: monta o `Link` do jeito que o repository faria no INSERT."""
 
     def __init__(self) -> None:
-        self.chamadas: list[tuple[uuid.UUID, VinculoCreate]] = []
+        self.calls: list[tuple[uuid.UUID, LinkCreate]] = []
 
-    async def create_vinculo_service(
-        self, organization_id: uuid.UUID, request: VinculoCreate
-    ) -> Vinculo:
-        self.chamadas.append((organization_id, request))
-        agora = datetime(2026, 9, 27, tzinfo=UTC)
-        return Vinculo(
+    async def create_link_service(
+        self, organization_id: uuid.UUID, request: LinkCreate
+    ) -> Link:
+        self.calls.append((organization_id, request))
+        now = datetime(2026, 9, 27, tzinfo=UTC)
+        return Link(
             id=uuid.uuid4(),
             organization_id=organization_id,
             participant_id=request.participant_id,
-            setor_id=request.setor_id,
+            department_id=request.department_id,
             type=request.type,
             role=request.role,
-            start_at=agora,
+            start_at=now,
             end_at=None,
-            created_at=agora,
+            created_at=now,
             updated_at=None,
         )
 
@@ -66,7 +66,7 @@ def _build_access(role: str) -> UserAccess:
         id=uuid.uuid4(),
         email="dev@creed.example.com",
         role=role,
-        vinculo_id=uuid.uuid4(),
+        link_id=uuid.uuid4(),
         organization_id=uuid.uuid4(),
     )
 
@@ -83,15 +83,15 @@ def _install_validate_token(monkeypatch: pytest.MonkeyPatch, roles: list[str]) -
 
 
 @pytest.fixture
-def vinculo_service() -> _FakeVinculoService:
-    return _FakeVinculoService()
+def link_service() -> _FakeLinkService:
+    return _FakeLinkService()
 
 
 @pytest.fixture
-def app(vinculo_service: _FakeVinculoService) -> FastAPI:
+def app(link_service: _FakeLinkService) -> FastAPI:
     fastapi_app = FastAPI()
     fastapi_app.include_router(router, prefix="/api/v1")
-    fastapi_app.dependency_overrides[get_vinculo_service] = lambda: vinculo_service
+    fastapi_app.dependency_overrides[get_link_service] = lambda: link_service
     return fastapi_app
 
 
@@ -108,14 +108,14 @@ def _authorize_as(app: FastAPI, monkeypatch: pytest.MonkeyPatch, role: str) -> N
 
 
 ORG_ID = "8f14e45f-ceea-467e-adde-3f81905dbc1c"
-URL = f"/api/v1/organizacoes/{ORG_ID}/vinculos"
+URL = f"/api/v1/organizations/{ORG_ID}/links"
 
 
-def test_admin_com_corpo_valido_cria_e_devolve_201(
+def test_admin_with_valid_body_creates_and_returns_201(
     client: TestClient,
     app: FastAPI,
     monkeypatch: pytest.MonkeyPatch,
-    vinculo_service: _FakeVinculoService,
+    link_service: _FakeLinkService,
 ) -> None:
     _authorize_as(app, monkeypatch, "admin")
 
@@ -129,10 +129,10 @@ def test_admin_com_corpo_valido_cria_e_devolve_201(
     assert body["participant_id"] == VALID_BODY["participant_id"]
     assert body["type"] == "emprego"
     assert body["role"] == "gestor"
-    assert vinculo_service.chamadas[0][0] == uuid.UUID(ORG_ID)
+    assert link_service.calls[0][0] == uuid.UUID(ORG_ID)
 
 
-def test_sem_setor_id_no_corpo_cria_com_setor_id_nulo(
+def test_without_department_id_in_body_creates_with_null_department_id(
     client: TestClient, app: FastAPI, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _authorize_as(app, monkeypatch, "admin")
@@ -142,16 +142,16 @@ def test_sem_setor_id_no_corpo_cria_com_setor_id_nulo(
     )
 
     assert response.status_code == 201
-    assert response.json()["setor_id"] is None
+    assert response.json()["department_id"] is None
 
 
-def test_sem_authorization_retorna_401(client: TestClient) -> None:
+def test_without_authorization_returns_401(client: TestClient) -> None:
     response = client.post(URL, json=VALID_BODY)
 
     assert response.status_code == 401
 
 
-def test_papel_respondente_retorna_403(
+def test_respondente_role_returns_403(
     client: TestClient, app: FastAPI, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _authorize_as(app, monkeypatch, "respondente")
@@ -163,7 +163,7 @@ def test_papel_respondente_retorna_403(
     assert response.status_code == 403
 
 
-def test_type_fora_do_enum_retorna_422(
+def test_type_outside_enum_returns_422(
     client: TestClient, app: FastAPI, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _authorize_as(app, monkeypatch, "admin")
@@ -177,13 +177,13 @@ def test_type_fora_do_enum_retorna_422(
     assert response.status_code == 422
 
 
-def test_organization_id_na_url_que_nao_e_uuid_retorna_422(
+def test_organization_id_in_url_not_uuid_returns_422(
     client: TestClient, app: FastAPI, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _authorize_as(app, monkeypatch, "admin")
 
     response = client.post(
-        "/api/v1/organizacoes/nao-e-um-uuid/vinculos",
+        "/api/v1/organizations/nao-e-um-uuid/links",
         json=VALID_BODY,
         headers={"Authorization": "Bearer valid"},
     )

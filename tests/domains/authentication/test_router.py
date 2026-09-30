@@ -71,7 +71,7 @@ def test_login_with_valid_credentials_returns_200_in_the_contract_shape(
         "id",
         "email",
         "role",
-        "vinculo_id",
+        "link_id",
         "organization_id",
         "organization_name",
     }
@@ -144,14 +144,14 @@ def test_session_with_authenticated_user_returns_200(
     assert body["role"] == "admin"
 
 
-def test_session_devolve_vinculo_id_e_organization_id_do_usuario_autenticado(
+def test_session_returns_link_id_and_organization_id_of_authenticated_user(
     app: FastAPI, client: TestClient
 ) -> None:
     app.dependency_overrides[current_user] = lambda: AuthenticatedUser(
         sub="user-123",
         email="dev@creed.example.com",
         roles=["admin"],
-        vinculo_id="3f9a2b1c-4d5e-4f6a-8b7c-9d0e1f2a3b4c",
+        link_id="3f9a2b1c-4d5e-4f6a-8b7c-9d0e1f2a3b4c",
         organization_id="8f14e45f-ceea-467e-adde-3f81905dbc1c",
     )
 
@@ -161,5 +161,5 @@ def test_session_devolve_vinculo_id_e_organization_id_do_usuario_autenticado(
 
     assert response.status_code == 200
     body = response.json()
-    assert body["vinculo_id"] == "3f9a2b1c-4d5e-4f6a-8b7c-9d0e1f2a3b4c"
+    assert body["link_id"] == "3f9a2b1c-4d5e-4f6a-8b7c-9d0e1f2a3b4c"
     assert body["organization_id"] == "8f14e45f-ceea-467e-adde-3f81905dbc1c"

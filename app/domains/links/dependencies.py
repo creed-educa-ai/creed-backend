@@ -10,20 +10,20 @@ from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.domains.vinculos.repository import VinculoRepository
-from app.domains.vinculos.service import VinculoService
+from app.domains.links.repository import LinkRepository
+from app.domains.links.service import LinkService
 
 
 def get_repository(
     db: Annotated[AsyncSession, Depends(get_db)],
-) -> VinculoRepository:
-    return VinculoRepository(db)
+) -> LinkRepository:
+    return LinkRepository(db)
 
 
 def get_service(
-    repository: Annotated[VinculoRepository, Depends(get_repository)],
-) -> VinculoService:
-    return VinculoService(repository)
+    repository: Annotated[LinkRepository, Depends(get_repository)],
+) -> LinkService:
+    return LinkService(repository)
 
 
-ServiceDep = Annotated[VinculoService, Depends(get_service)]
+ServiceDep = Annotated[LinkService, Depends(get_service)]

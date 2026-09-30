@@ -1,11 +1,11 @@
-"""Models SQLAlchemy do domínio vinculos.
+"""Models SQLAlchemy do domínio links.
 
 Vínculo é o elo entre uma pessoa (participante) e uma organização: guarda o papel da
 pessoa ali, o tipo do vínculo e o período. A mesma pessoa em duas organizações tem dois
-vínculos, e cada vínculo tem o próprio login (`user.vinculo_id`, em `users/models.py`).
+vínculos, e cada vínculo tem o próprio login (`user.link_id`, em `users/models.py`).
 
-`Participant`, `Organization` e `Setor` ainda não têm tabela — por isso
-`participant_id`, `organization_id` e `setor_id` são UUIDs soltos, sem `ForeignKey`.
+`Participant`, `Organization` e `Department` ainda não têm tabela — por isso
+`participant_id`, `organization_id` e `department_id` são UUIDs soltos, sem `ForeignKey`.
 """
 
 import enum
@@ -19,7 +19,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.core.database import Base
 
 
-class VincType(enum.Enum):
+class LinkType(enum.Enum):
     """Tipo do vínculo entre a pessoa e a organização."""
 
     EMPREGO = "emprego"
@@ -41,8 +41,8 @@ class Roles(enum.Enum):
     RESPONDENTE = "respondente"
 
 
-class Vinculo(Base):
-    __tablename__ = "vinculos"
+class Link(Base):
+    __tablename__ = "links"
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -58,12 +58,12 @@ class Vinculo(Base):
         UUID(as_uuid=True), nullable=False, index=True
     )
 
-    # FK para Setor — tabela ainda não criada
-    setor_id: Mapped[uuid.UUID | None] = mapped_column(
+    # FK para Department — tabela ainda não criada
+    department_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), nullable=True, index=True
     )
 
-    type: Mapped[VincType] = mapped_column(Enum(VincType), nullable=False)
+    type: Mapped[LinkType] = mapped_column(Enum(LinkType), nullable=False)
 
     role: Mapped[Roles] = mapped_column(Enum(Roles), nullable=False)
 

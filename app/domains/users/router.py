@@ -62,17 +62,17 @@ router = APIRouter(prefix="/users", tags=["users"])
 )
 async def create_user(dados: UserCreate, service: ServiceDep) -> UserResponse:
     try:
-        criado = await service.create_user_service(dados)
+        created = await service.create_user_service(dados)
     except NotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, exc.message) from exc
     except ConflictError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, exc.message) from exc
 
     return UserResponse.de_model(
-        criado.user,
-        role=criado.role,
-        vinculo_id=dados.vinculo_id,
-        organization_id=criado.organization_id,
+        created.user,
+        role=created.role,
+        link_id=dados.link_id,
+        organization_id=created.organization_id,
     )
 
 

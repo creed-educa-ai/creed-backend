@@ -8,10 +8,10 @@ import pytest
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 
+from app.domains.links.models import Link, LinkType, Roles
 from app.domains.users.dependencies import get_service as get_user_service
 from app.domains.users.models import RecordStatus, User, UserRole
 from app.domains.users.service import UserAccess, UserService
-from app.domains.vinculos.models import Roles, VincType, Vinculo
 from app.external_services.keycloak.token import InvalidTokenError
 from app.shared.authorization import CurrentUserDep, require_role
 
@@ -30,7 +30,7 @@ def _build_access(role: str, email: str = "dev@creed.example.com") -> UserAccess
         id=uuid.uuid4(),
         email=email,
         role=role,
-        vinculo_id=uuid.uuid4(),
+        link_id=uuid.uuid4(),
         organization_id=uuid.uuid4(),
     )
 
@@ -189,7 +189,7 @@ def test_insufficient_role_does_not_query_the_database(
     assert calls["count"] == 0
 
 
-def test_role_mismatch_between_token_and_vinculo_returns_401_and_logs_error(
+def test_role_mismatch_between_token_and_link_returns_401_and_logs_error(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
     app: FastAPI,
@@ -226,15 +226,15 @@ class _OneUserRepository:
         return self._user if self._user.email == email else None
 
 
-class _OneVinculoService:
-    def __init__(self, vinculo: Vinculo) -> None:
-        self._vinculo = vinculo
+class _OneLinkService:
+    def __init__(self, link: Link) -> None:
+        self._link = link
 
-    async def get_vinculo_by_id_service(self, vinculo_id: uuid.UUID) -> Vinculo | None:
-        return self._vinculo if self._vinculo.id == vinculo_id else None
+    async def get_link_by_id_service(self, link_id: uuid.UUID) -> Link | None:
+        return self._link if self._link.id == link_id else None
 
 
-def test_column_says_admin_but_vinculo_says_gestor_returns_401(
+def test_column_says_admin_but_link_says_gestor_returns_401(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
     app: FastAPI,
@@ -246,11 +246,11 @@ def test_column_says_admin_but_vinculo_says_gestor_returns_401(
     coluna diz `admin`, igual ao claim; o vínculo diz `gestor`. Se alguém
     voltar a ler a coluna em qualquer ponto do caminho, a rota responde 200.
     """
-    vinculo = Vinculo(
+    link = Link(
         id=uuid.uuid4(),
         participant_id=uuid.uuid4(),
         organization_id=uuid.uuid4(),
-        type=VincType.EMPREGO,
+        type=LinkType.EMPREGO,
         role=Roles.GESTOR,
     )
     user = User(
@@ -260,11 +260,11 @@ def test_column_says_admin_but_vinculo_says_gestor_returns_401(
         email="dev@creed.example.com",
         status=RecordStatus.ACTIVE,
         role=UserRole.ADMIN,
-        vinculo_id=vinculo.id,
+        link_id=link.id,
     )
     service = UserService(
         _OneUserRepository(user),  # type: ignore[arg-type]
-        _OneVinculoService(vinculo),  # type: ignore[arg-type]
+        _OneLinkService(link),  # type: ignore[arg-type]
     )
     app.dependency_overrides[get_user_service] = lambda: service
     _install_validate_token(
@@ -301,7 +301,7 @@ def test_user_without_an_active_account_returns_401(
     assert response.status_code == 401
 
 
-def test_user_without_vinculo_returns_401(
+def test_user_without_link_returns_401(
     client: TestClient, monkeypatch: pytest.MonkeyPatch, app: FastAPI
 ) -> None:
     """P-008: usuário sem vínculo é usuário sem acesso, mesmo com token válido.

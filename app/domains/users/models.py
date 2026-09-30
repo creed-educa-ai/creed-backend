@@ -54,16 +54,16 @@ class User(Base):
     )
 
     # A partir da CREED-32 esta coluna não é mais lida: o papel passou a morar em
-    # `Vinculo.role`. Sai de vez na task 6 da CREED-32, junto com `UserRole`.
+    # `Link.role`. Sai de vez na task 6 da CREED-32, junto com `UserRole`.
     role: Mapped[UserRole] = mapped_column(
         Enum(UserRole), nullable=False, default=UserRole.RESPONDENTE
     )
 
     # Aponta para o vínculo que dá o papel deste login (modelo [C2]: 1 login = 1 vínculo).
     # Nulável só até a task 6 da CREED-32: aí vira NOT NULL e `role` sai.
-    vinculo_id: Mapped[uuid.UUID | None] = mapped_column(
+    link_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("vinculos.id", name="fk_user_vinculo_id_vinculos"),
+        ForeignKey("links.id", name="fk_user_link_id_links"),
         unique=True,
         nullable=True,
     )

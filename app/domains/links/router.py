@@ -1,8 +1,8 @@
-"""Endpoints HTTP do domínio vinculos (ADR-002, secao 2.2).
+"""Endpoints HTTP do domínio links (ADR-002, secao 2.2).
 
 Esta camada é fina de propósito: recebe, valida via Pydantic, delega ao
 service e devolve. Nenhuma regra de negócio aqui, e nenhum import de `models` —
-a montagem da resposta é `VinculoResponse.de_model()`, em `schemas.py`.
+a montagem da resposta é `LinkResponse.from_model()`, em `schemas.py`.
 """
 
 import uuid
@@ -10,19 +10,19 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Path, status
 
-from app.domains.vinculos.dependencies import ServiceDep
-from app.domains.vinculos.schemas import VinculoCreate, VinculoResponse
+from app.domains.links.dependencies import ServiceDep
+from app.domains.links.schemas import LinkCreate, LinkResponse
 from app.shared.authorization import require_role
 
 # O prefixo descreve o endereço da rota, não o dono do arquivo: o vínculo é
 # sub-recurso de organização na URL, mas `Organization` não tem tabela e este
-# domínio segue sendo `vinculos` (spec, "Abordagem técnica", item 5).
-router = APIRouter(prefix="/organizacoes/{organization_id}/vinculos", tags=["vinculos"])
+# domínio segue sendo `links` (spec, "Abordagem técnica", item 5).
+router = APIRouter(prefix="/organizations/{organization_id}/links", tags=["links"])
 
 
 @router.post(
     "",
-    response_model=VinculoResponse,
+    response_model=LinkResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Criar vínculo",
     description=(
@@ -31,10 +31,10 @@ router = APIRouter(prefix="/organizacoes/{organization_id}/vinculos", tags=["vin
         "criar um vínculo decide o acesso de alguém à plataforma."
     ),
     response_description="Vínculo criado.",
-    operation_id="create_vinculo",
+    operation_id="create_link",
     dependencies=[Depends(require_role("admin"))],
 )
-async def create_vinculo(
+async def create_link(
     organization_id: Annotated[
         uuid.UUID,
         Path(
@@ -42,8 +42,8 @@ async def create_vinculo(
             examples=["8f14e45f-ceea-467e-adde-3f81905dbc1c"],
         ),
     ],
-    dados: VinculoCreate,
+    request: LinkCreate,
     service: ServiceDep,
-) -> VinculoResponse:
-    vinculo = await service.create_vinculo_service(organization_id, dados)
-    return VinculoResponse.de_model(vinculo)
+) -> LinkResponse:
+    link = await service.create_link_service(organization_id, request)
+    return LinkResponse.from_model(link)
