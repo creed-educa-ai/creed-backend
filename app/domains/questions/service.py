@@ -19,7 +19,7 @@ la: aqui se pede a conferencia, sem repetir a comparacao.
 import uuid
 
 from app.domains.forms.service import FormService
-from app.domains.questions.models import Question, QuestionSection
+from app.domains.questions.models import Question, QuestionSection, QuestionType
 from app.domains.questions.repository import QuestionRepository
 from app.domains.questions.schemas import QuestionCreate
 from app.shared.exceptions import ConflictError, NotFoundError, ValidationError
@@ -81,6 +81,19 @@ class QuestionService:
         """
         await self.forms.get_for_user(form_id, role=role, organization_id=organization_id)
         return await self.repository.list_by_form(form_id, section)
+
+    async def get(self, question_id: uuid.UUID) -> Question:
+        """So "existe?", sem regra de acesso: e o que `responses` usa."""
+        question = await self.repository.get_by_id(question_id)
+
+        if question is None:
+            raise NotFoundError(f"Pergunta {question_id} não encontrada")
+
+        return question
+
+    def is_descriptive(self, question: Question) -> bool:
+        """Responde por `responses`, que nao pode importar `QuestionType`."""
+        return question.type is QuestionType.DESCRIPTIVE
 
     def _conflito_de_posicao(self, request: QuestionCreate) -> ConflictError:
         return ConflictError(

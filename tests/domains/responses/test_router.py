@@ -17,9 +17,10 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.domains.responses.dependencies import get_service
-from app.domains.responses.models import FormResponse, FormResponseStatus
+from app.domains.responses.dependencies import get_answer_service, get_service
+from app.domains.responses.models import Answer, FormResponse, FormResponseStatus
 from app.domains.responses.router import router
+from app.domains.responses.schemas import AnswerCreate
 from app.domains.users.dependencies import get_service as get_user_service
 from app.domains.users.service import UserAccess
 from app.shared.exceptions import (
@@ -271,5 +272,148 @@ class TestSubmeterResposta:
         _use_fake_service(app, _FakeFormResponseService([propria]))
 
         response = TestClient(app).patch(f"/form-responses/{propria.id}")
+
+        assert response.status_code == 401
+
+
+class _FakeAnswerService:
+    """Dublê do `AnswerService`: grava em lista e registra o vínculo que chegou.
+
+    `recusar` faz as duas rotas levantarem o erro dado. A ordem das conferências
+    e a regra de cada uma são provadas em test_service.py; aqui se prova só a
+    tradução de cada erro para o status documentado.
+    """
+
+    def __init__(self, *, recusar: Exception | None = None) -> None:
+        self.recusar = recusar
+        self.itens: list[Answer] = []
+        self.link_recebido: uuid.UUID | None = None
+
+    async def record(
+        self, form_response_id: uuid.UUID, dados: AnswerCreate, *, link_id: uuid.UUID
+    ) -> Answer:
+        self.link_recebido = link_id
+        if self.recusar is not None:
+            raise self.recusar
+        answer = Answer(
+            id=uuid.uuid4(),
+            form_response_id=form_response_id,
+            question_id=dados.question_id,
+            option_id=None,
+            value=dados.value,
+            created_at=datetime(2026, 9, 30, tzinfo=UTC),
+        )
+        self.itens.append(answer)
+        return answer
+
+    async def list_for_form_response(
+        self, form_response_id: uuid.UUID, *, link_id: uuid.UUID
+    ) -> list[Answer]:
+        self.link_recebido = link_id
+        if self.recusar is not None:
+            raise self.recusar
+        return [a for a in self.itens if a.form_response_id == form_response_id]
+
+
+def _use_fake_answer_service(app: FastAPI, fake_service: _FakeAnswerService) -> None:
+    app.dependency_overrides[get_answer_service] = lambda: fake_service
+
+
+ERROS_DO_SERVICE = [
+    (NotFoundError("FormResponse não encontrado"), 404),
+    (ForbiddenError("FormResponse pertence a outro vínculo"), 403),
+    (ConflictError("A pergunta já foi respondida nesta resposta"), 409),
+    (ValidationError("Respostas a perguntas objetivas chegam com as alternativas"), 422),
+]
+
+
+class TestGravarAnswer:
+    def test_devolve_201_com_a_resposta_de_formulario_e_a_pergunta(
+        self, app: FastAPI, client: TestClient
+    ) -> None:
+        fake = _FakeAnswerService()
+        _use_fake_answer_service(app, fake)
+        form_response_id, question_id = uuid.uuid4(), uuid.uuid4()
+
+        response = client.post(
+            f"/form-responses/{form_response_id}/answers",
+            json={"question_id": str(question_id), "value": "minha resposta"},
+        )
+
+        assert response.status_code == 201
+        body = response.json()
+        assert body["form_response_id"] == str(form_response_id)
+        assert body["question_id"] == str(question_id)
+        assert body["value"] == "minha resposta"
+        assert fake.link_recebido == LINK_ID
+
+    @pytest.mark.parametrize(("erro", "status_esperado"), ERROS_DO_SERVICE)
+    def test_erro_do_service_vira_o_status_documentado(
+        self,
+        app: FastAPI,
+        client: TestClient,
+        erro: Exception,
+        status_esperado: int,
+    ) -> None:
+        _use_fake_answer_service(app, _FakeAnswerService(recusar=erro))
+
+        response = client.post(
+            f"/form-responses/{uuid.uuid4()}/answers",
+            json={"question_id": str(uuid.uuid4()), "value": "texto"},
+        )
+
+        assert response.status_code == status_esperado
+        assert response.json()["detail"] == str(erro)
+
+    def test_sem_token_devolve_401(self, app: FastAPI) -> None:
+        _use_fake_answer_service(app, _FakeAnswerService())
+
+        response = TestClient(app).post(
+            f"/form-responses/{uuid.uuid4()}/answers",
+            json={"question_id": str(uuid.uuid4()), "value": "texto"},
+        )
+
+        assert response.status_code == 401
+
+
+class TestListarAnswers:
+    def test_devolve_200_com_o_que_foi_gravado_em_ordem(
+        self, app: FastAPI, client: TestClient
+    ) -> None:
+        _use_fake_answer_service(app, _FakeAnswerService())
+        form_response_id = uuid.uuid4()
+        url = f"/form-responses/{form_response_id}/answers"
+        for texto in ("primeira", "segunda"):
+            client.post(url, json={"question_id": str(uuid.uuid4()), "value": texto})
+
+        response = client.get(url)
+
+        assert response.status_code == 200
+        assert [item["value"] for item in response.json()] == ["primeira", "segunda"]
+
+    @pytest.mark.parametrize(
+        ("erro", "status_esperado"),
+        [
+            (NotFoundError("FormResponse não encontrado"), 404),
+            (ForbiddenError("FormResponse pertence a outro vínculo"), 403),
+        ],
+    )
+    def test_erro_do_service_vira_o_status_documentado(
+        self,
+        app: FastAPI,
+        client: TestClient,
+        erro: Exception,
+        status_esperado: int,
+    ) -> None:
+        _use_fake_answer_service(app, _FakeAnswerService(recusar=erro))
+
+        response = client.get(f"/form-responses/{uuid.uuid4()}/answers")
+
+        assert response.status_code == status_esperado
+
+    def test_sem_token_devolve_401(self, app: FastAPI) -> None:
+        _use_fake_answer_service(app, _FakeAnswerService())
+
+        response = TestClient(app).get(f"/form-responses/{uuid.uuid4()}/answers")
 
         assert response.status_code == 401

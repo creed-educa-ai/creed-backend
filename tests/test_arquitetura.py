@@ -48,7 +48,7 @@ COMPOE_COM_SERVICE_DE: dict[str, str] = {
     "links": "confere o participante pelo ParticipantService",
     "participants": "consulta documento pelo DocumentService",
     "questions": "confere o formulario pelo FormService",
-    "responses": "confere o formulario pelo FormService",
+    "responses": "confere formulario e pergunta pelo FormService e QuestionService",
     "users": "le o papel e a organizacao do vinculo pelo LinkService",
 }
 

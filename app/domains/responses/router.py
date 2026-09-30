@@ -13,8 +13,13 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, HTTPException, Path, status
 
-from app.domains.responses.dependencies import ServiceDep
-from app.domains.responses.schemas import FormResponseCreate, FormResponseResponse
+from app.domains.responses.dependencies import AnswerServiceDep, ServiceDep
+from app.domains.responses.schemas import (
+    AnswerCreate,
+    AnswerResponse,
+    FormResponseCreate,
+    FormResponseResponse,
+)
 from app.shared.authorization import CurrentUserDep
 from app.shared.exceptions import (
     ConflictError,
@@ -172,3 +177,122 @@ async def submeter_form_response(
     except ConflictError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, exc.message) from exc
     return FormResponseResponse.de_model(form_response)
+
+
+_FORM_RESPONSE_ID = Path(
+    description="Identificador da resposta de formulário.",
+    examples=["3b1bb89a-471f-48b0-9025-cfda3b20d240"],
+)
+
+_NOT_OWNER: dict[int | str, dict[str, Any]] = {
+    status.HTTP_403_FORBIDDEN: {
+        "model": ErrorResponse,
+        "description": "A resposta de formulário é de outro vínculo.",
+        "content": {
+            "application/json": {
+                "example": {"detail": "FormResponse pertence a outro vínculo"}
+            }
+        },
+    },
+    status.HTTP_404_NOT_FOUND: {
+        "model": ErrorResponse,
+        "description": "Resposta de formulário não encontrada.",
+        "content": {
+            "application/json": {"example": {"detail": "FormResponse não encontrado"}}
+        },
+    },
+}
+
+
+@router.post(
+    "/{form_response_id}/answers",
+    response_model=AnswerResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Gravar resposta de uma pergunta",
+    description=(
+        "Grava o texto de uma pergunta descritiva numa resposta de formulário em "
+        "andamento. Só o vínculo que abriu a resposta grava, e cada pergunta "
+        "recebe uma resposta só. Perguntas objetivas ainda são recusadas."
+    ),
+    response_description="Resposta gravada.",
+    operation_id="record_answer",
+    responses={
+        **_UNAUTHORIZED,
+        **_NOT_OWNER,
+        status.HTTP_409_CONFLICT: {
+            "model": ErrorResponse,
+            "description": (
+                "A resposta de formulário já foi submetida, ou a pergunta já foi "
+                "respondida nela."
+            ),
+            "content": {
+                "application/json": {
+                    "example": {"detail": "A pergunta já foi respondida nesta resposta"}
+                }
+            },
+        },
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {
+            "model": ErrorResponse | ValidationErrorResponse,
+            "description": (
+                "Pergunta inexistente, de outro formulário ou objetiva, texto vazio "
+                "ou alternativa marcada: `detail` é texto. Corpo inválido: `detail` "
+                "é uma lista, um item por campo recusado."
+            ),
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": (
+                            "Respostas a perguntas objetivas chegam com as "
+                            "alternativas (CREED-37)"
+                        )
+                    }
+                }
+            },
+        },
+    },
+)
+async def gravar_answer(
+    form_response_id: Annotated[uuid.UUID, _FORM_RESPONSE_ID],
+    dados: AnswerCreate,
+    service: AnswerServiceDep,
+    user: CurrentUserDep,
+) -> AnswerResponse:
+    try:
+        answer = await service.record(form_response_id, dados, link_id=user.link_uuid)
+    except NotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, exc.message) from exc
+    except ForbiddenError as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, exc.message) from exc
+    except ConflictError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, exc.message) from exc
+    except ValidationError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, exc.message) from exc
+    return AnswerResponse.de_model(answer)
+
+
+@router.get(
+    "/{form_response_id}/answers",
+    response_model=list[AnswerResponse],
+    summary="Listar respostas gravadas",
+    description=(
+        "Lista as respostas gravadas numa resposta de formulário, em ordem de "
+        "gravação. Só o vínculo que abriu a resposta lê, antes ou depois do envio."
+    ),
+    response_description="Respostas gravadas, em ordem de gravação.",
+    operation_id="list_answers",
+    responses={**_UNAUTHORIZED, **_NOT_OWNER},
+)
+async def listar_answers(
+    form_response_id: Annotated[uuid.UUID, _FORM_RESPONSE_ID],
+    service: AnswerServiceDep,
+    user: CurrentUserDep,
+) -> list[AnswerResponse]:
+    try:
+        answers = await service.list_for_form_response(
+            form_response_id, link_id=user.link_uuid
+        )
+    except NotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, exc.message) from exc
+    except ForbiddenError as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, exc.message) from exc
+    return [AnswerResponse.de_model(answer) for answer in answers]

@@ -89,6 +89,9 @@ class AnswerResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID = Field(description="Identificador da resposta.")
+    form_response_id: uuid.UUID = Field(
+        description="Identificador da resposta de formulário a que esta pertence."
+    )
     question_id: uuid.UUID = Field(description="Identificador da pergunta respondida.")
     option_id: uuid.UUID | None = Field(
         default=None, description="Alternativa marcada, quando objetiva."

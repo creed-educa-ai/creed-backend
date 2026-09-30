@@ -48,6 +48,9 @@ class FakeQuestionRepository:
         self.itens.append(question)
         return question
 
+    async def get_by_id(self, question_id: uuid.UUID) -> Question | None:
+        return next((q for q in self.itens if q.id == question_id), None)
+
     async def list_by_form(
         self, form_id: uuid.UUID, section: QuestionSection | None = None
     ) -> list[Question]:
@@ -329,3 +332,30 @@ class TestListarQuestionsDoFormulario:
             )
 
         assert repository.secao_pedida == "nao chamado"
+
+
+class TestBuscarQuestion:
+    async def test_devolve_a_pergunta_encontrada(self) -> None:
+        question = uma_question()
+
+        encontrada = await servico(FakeQuestionRepository([question])).get(question.id)
+
+        assert encontrada is question
+
+    async def test_inexistente_vira_not_found(self) -> None:
+        question_id = uuid.uuid4()
+
+        with pytest.raises(NotFoundError, match=re.escape(str(question_id))):
+            await servico(FakeQuestionRepository()).get(question_id)
+
+
+class TestPerguntaDescritiva:
+    def test_descritiva(self) -> None:
+        question = uma_question(type=QuestionType.DESCRIPTIVE)
+
+        assert servico(FakeQuestionRepository()).is_descriptive(question)
+
+    def test_objetiva_nao_e_descritiva(self) -> None:
+        question = uma_question(type=QuestionType.OBJECTIVE)
+
+        assert not servico(FakeQuestionRepository()).is_descriptive(question)

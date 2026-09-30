@@ -10,6 +10,7 @@ from fastapi import Depends
 
 from app.core.database import SessionDep
 from app.domains.forms.dependencies import ServiceDep as FormServiceDep
+from app.domains.questions.dependencies import ServiceDep as QuestionServiceDep
 from app.domains.responses.repository import AnswerRepository, FormResponseRepository
 from app.domains.responses.service import AnswerService, FormResponseService
 
@@ -37,9 +38,11 @@ def get_answer_repository(
 
 
 def get_answer_service(
-    repository: Annotated[AnswerRepository, Depends(get_answer_repository)],
+    answers: Annotated[AnswerRepository, Depends(get_answer_repository)],
+    form_responses: Annotated[FormResponseRepository, Depends(get_repository)],
+    questions: QuestionServiceDep,
 ) -> AnswerService:
-    return AnswerService(repository)
+    return AnswerService(answers, form_responses, questions)
 
 
 AnswerServiceDep = Annotated[AnswerService, Depends(get_answer_service)]

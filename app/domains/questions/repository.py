@@ -40,6 +40,10 @@ class QuestionRepository:
         await self.db.refresh(question)
         return question
 
+    async def get_by_id(self, question_id: uuid.UUID) -> Question | None:
+        result = await self.db.execute(select(Question).where(Question.id == question_id))
+        return result.scalar_one_or_none()
+
     async def list_by_form(
         self, form_id: uuid.UUID, section: QuestionSection | None = None
     ) -> list[Question]:

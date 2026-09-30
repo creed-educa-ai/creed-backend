@@ -32,6 +32,8 @@ def test_all_endpoints_have_method_summary_description_and_operation_id() -> Non
         ("/api/v1/forms/{form_id}", "get"),
         ("/api/v1/form-responses", "post"),
         ("/api/v1/form-responses/{form_response_id}", "patch"),
+        ("/api/v1/form-responses/{form_response_id}/answers", "post"),
+        ("/api/v1/form-responses/{form_response_id}/answers", "get"),
         ("/api/v1/participants", "post"),
         ("/api/v1/participants/{participant_id}", "get"),
         ("/api/v1/questions", "post"),
@@ -166,6 +168,22 @@ def test_success_error_and_bearer_authentication_responses_are_documented() -> N
             "patch",
         )["responses"]
     ) >= {"200", "401", "403", "404", "409", "422"}
+    # Gravar e ler respostas: só o dono da resposta de formulário (CREED-47).
+    answers = "/api/v1/form-responses/{form_response_id}/answers"
+    assert set(_operation(schema, answers, "post")["responses"]) >= {
+        "201",
+        "401",
+        "403",
+        "404",
+        "409",
+        "422",
+    }
+    assert set(_operation(schema, answers, "get")["responses"]) >= {
+        "200",
+        "401",
+        "403",
+        "404",
+    }
     assert set(_operation(schema, "/api/v1/participants", "post")["responses"]) >= {
         "201",
         "401",
