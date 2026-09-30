@@ -120,7 +120,18 @@ def require_role(*roles: str) -> Any:
                 status.HTTP_403_FORBIDDEN, "Cargo insuficiente para acessar"
             )
 
-        return await _check_against_database(identity, users)
+        user = await _check_against_database(identity, users)
+
+        # O token pode trazer mais de um papel (`admin` e `gestor`, por exemplo), e
+        # `_check_against_database` só confere se o papel do vínculo está entre
+        # eles. Quem decide a rota é o vínculo (CREED-32), então a conferência se
+        # repete sobre o usuário já verificado no banco.
+        if not any(user.has_role(role) for role in roles):
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN, "Cargo insuficiente para acessar"
+            )
+
+        return user
 
     return _dependency
 

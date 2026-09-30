@@ -219,6 +219,49 @@ def test_role_mismatch_between_token_and_link_returns_401_and_logs_error(
     assert "Divergência" in caplog.text
 
 
+def test_token_with_two_roles_is_judged_by_the_link_role(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, app: FastAPI
+) -> None:
+    """Token com `admin` e `gestor`, vínculo `gestor`: a rota admin responde 403.
+
+    O papel do vínculo está entre os do token, então não há divergência (401). Mas
+    quem decide a rota é o vínculo, não o `admin` a mais no realm, que é
+    configurado à mão (review da CREED-32).
+    """
+    _install_validate_token(
+        monkeypatch,
+        lambda _token: {
+            "sub": "user-123",
+            "email": "dev@creed.example.com",
+            "realm_access": {"roles": ["admin", "gestor"]},
+        },
+    )
+    _install_access(app, _build_access("gestor"))
+
+    response = client.get("/admin", headers={"Authorization": "Bearer valid"})
+
+    assert response.status_code == 403
+
+
+def test_token_with_two_roles_passes_when_the_link_has_the_route_role(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, app: FastAPI
+) -> None:
+    """O par do teste acima: token com dois papéis não é recusado por si só."""
+    _install_validate_token(
+        monkeypatch,
+        lambda _token: {
+            "sub": "user-123",
+            "email": "dev@creed.example.com",
+            "realm_access": {"roles": ["admin", "gestor"]},
+        },
+    )
+    _install_access(app, _build_access("admin"))
+
+    response = client.get("/admin", headers={"Authorization": "Bearer valid"})
+
+    assert response.status_code == 200
+
+
 class _OneUserRepository:
     def __init__(self, user: User) -> None:
         self._user = user
