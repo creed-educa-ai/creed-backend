@@ -122,7 +122,8 @@ async def criar_form_response(
     description=(
         "Finaliza uma resposta em andamento, alterando o status para `submitted` "
         "e registrando a data de submissão. Só o vínculo que abriu a resposta "
-        "pode submetê-la."
+        "pode submetê-la, e só com todas as perguntas descritivas obrigatórias "
+        "respondidas. Objetivas obrigatórias ainda não são exigidas."
     ),
     response_description="Resposta finalizada com a data de submissão.",
     operation_id="submit_form_response",
@@ -153,6 +154,26 @@ async def criar_form_response(
                 }
             },
         },
+        # Dois formatos no mesmo 422: o do service (`detail` texto) e o da
+        # validação do caminho pelo FastAPI (`detail` lista).
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {
+            "model": ErrorResponse | ValidationErrorResponse,
+            "description": (
+                "Pergunta descritiva obrigatória sem resposta: `detail` é texto e "
+                "cita posição e id de cada uma. Identificador inválido no caminho: "
+                "`detail` é uma lista."
+            ),
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": (
+                            "Perguntas obrigatórias sem resposta: posição 2 "
+                            "(7c1f3f0e-9a52-4a8e-8f0e-2d6f5b1c9a10)"
+                        )
+                    }
+                }
+            },
+        },
     },
 )
 async def submeter_form_response(
@@ -176,6 +197,8 @@ async def submeter_form_response(
         raise HTTPException(status.HTTP_403_FORBIDDEN, exc.message) from exc
     except ConflictError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, exc.message) from exc
+    except ValidationError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, exc.message) from exc
     return FormResponseResponse.de_model(form_response)
 
 

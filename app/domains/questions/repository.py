@@ -17,7 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domains.questions.models import Question, QuestionSection
+from app.domains.questions.models import Question, QuestionSection, QuestionType
 
 
 class QuestionRepository:
@@ -55,6 +55,21 @@ class QuestionRepository:
         query = query.order_by(Question.order_index)
 
         result = await self.db.execute(query)
+        return list(result.scalars().all())
+
+    async def list_required_by_type(
+        self, form_id: uuid.UUID, question_type: QuestionType
+    ) -> list[Question]:
+        """Obrigatorias do tipo pedido, em ordem de posicao; o filtro e no banco."""
+        result = await self.db.execute(
+            select(Question)
+            .where(
+                Question.form_id == form_id,
+                Question.required.is_(True),
+                Question.type == question_type,
+            )
+            .order_by(Question.order_index)
+        )
         return list(result.scalars().all())
 
     async def get_by_form_and_order(

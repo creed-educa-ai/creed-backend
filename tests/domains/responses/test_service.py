@@ -94,12 +94,95 @@ class FakeFormService:
             raise ForbiddenError("Sem acesso a formulário de outra organização")
 
 
+class FakeAnswerRepository:
+    """Dublê do repository: guarda em lista, não decide nada, não toca no banco."""
+
+    def __init__(self, existentes: list[Answer] | None = None) -> None:
+        self.itens: list[Answer] = list(existentes or [])
+
+    async def get_by_id(self, answer_id: uuid.UUID) -> Answer | None:
+        return next((a for a in self.itens if a.id == answer_id), None)
+
+    async def get_by_form_response_and_question(
+        self, form_response_id: uuid.UUID, question_id: uuid.UUID
+    ) -> Answer | None:
+        return next(
+            (
+                a
+                for a in self.itens
+                if a.form_response_id == form_response_id and a.question_id == question_id
+            ),
+            None,
+        )
+
+    async def list_by_form_response(self, form_response_id: uuid.UUID) -> list[Answer]:
+        """Filtra na ordem da lista: a ordenação real (`created_at`) é do banco."""
+        return [a for a in self.itens if a.form_response_id == form_response_id]
+
+    async def insert(self, answer: Answer) -> Answer:
+        """O id e o created_at seriam preenchidos pelo banco."""
+        answer.id = uuid.uuid4()
+        answer.created_at = datetime.now(UTC)
+        self.itens.append(answer)
+        return answer
+
+
+def uma_pergunta(
+    form_id: uuid.UUID,
+    *,
+    descritiva: bool = True,
+    obrigatoria: bool = True,
+    posicao: int = 0,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        id=uuid.uuid4(),
+        form_id=form_id,
+        descritiva=descritiva,
+        obrigatoria=obrigatoria,
+        order_index=posicao,
+    )
+
+
+class FakeQuestionService:
+    """Dublê do `QuestionService`: "existe?", "é descritiva?" e "quais o envio exige?".
+
+    `list_required_descriptive` filtra em memória. O filtro real é SQL, no
+    repository de `questions`, e não é exercido por estes testes.
+    """
+
+    def __init__(self, perguntas: list[SimpleNamespace] | None = None) -> None:
+        self.perguntas = {p.id: p for p in perguntas or []}
+
+    async def list_required_descriptive(
+        self, form_id: uuid.UUID
+    ) -> list[SimpleNamespace]:
+        exigidas = [
+            p
+            for p in self.perguntas.values()
+            if p.form_id == form_id and p.descritiva and p.obrigatoria
+        ]
+        return sorted(exigidas, key=lambda p: p.order_index)
+
+    async def get(self, question_id: uuid.UUID) -> SimpleNamespace:
+        if question_id not in self.perguntas:
+            raise NotFoundError(f"Pergunta {question_id} não encontrada")
+        return self.perguntas[question_id]
+
+    def is_descriptive(self, question: SimpleNamespace) -> bool:
+        return bool(question.descritiva)
+
+
 def servico(
-    repository: FakeFormResponseRepository, forms: FakeFormService | None = None
+    repository: FakeFormResponseRepository,
+    forms: FakeFormService | None = None,
+    questions: FakeQuestionService | None = None,
+    answers: FakeAnswerRepository | None = None,
 ) -> FormResponseService:
     return FormResponseService(
         repository,  # type: ignore[arg-type]
         forms or FakeFormService(),  # type: ignore[arg-type]
+        questions or FakeQuestionService(),  # type: ignore[arg-type]
+        answers or FakeAnswerRepository(),  # type: ignore[arg-type]
     )
 
 
@@ -160,6 +243,123 @@ class TestSubmitFormResponse:
             )
 
 
+def uma_resposta(form_response: FormResponse, pergunta: SimpleNamespace) -> Answer:
+    return Answer(
+        id=uuid.uuid4(),
+        form_response_id=form_response.id,
+        question_id=pergunta.id,
+        option_id=None,
+        value="texto",
+        created_at=datetime(2026, 9, 30, tzinfo=UTC),
+    )
+
+
+async def enviar(
+    form_response: FormResponse,
+    perguntas: list[SimpleNamespace],
+    respostas: list[Answer],
+) -> FormResponse:
+    """Envia `form_response` pelo dono, com as perguntas e respostas dadas."""
+    return await servico(
+        FakeFormResponseRepository([form_response]),
+        questions=FakeQuestionService(perguntas),
+        answers=FakeAnswerRepository(respostas),
+    ).submit_form_response(form_response.id, link_id=form_response.vinculo_id)
+
+
+class TestEnvioExigeObrigatorias:
+    async def test_descritiva_obrigatoria_sem_resposta_vira_validation_error(
+        self,
+    ) -> None:
+        form_response = um_form_response()
+        pergunta = uma_pergunta(form_response.form_id, posicao=2)
+
+        with pytest.raises(ValidationError) as erro:
+            await enviar(form_response, [pergunta], [])
+
+        assert "posição 2" in erro.value.message
+        assert str(pergunta.id) in erro.value.message
+        assert form_response.status is FormResponseStatus.IN_PROGRESS
+        assert form_response.submitted_at is None
+
+    async def test_cita_todas_as_que_faltam_em_ordem_de_posicao(self) -> None:
+        form_response = um_form_response()
+        terceira = uma_pergunta(form_response.form_id, posicao=3)
+        primeira = uma_pergunta(form_response.form_id, posicao=1)
+        respondida = uma_pergunta(form_response.form_id, posicao=2)
+
+        with pytest.raises(ValidationError) as erro:
+            await enviar(
+                form_response,
+                [terceira, primeira, respondida],
+                [uma_resposta(form_response, respondida)],
+            )
+
+        mensagem = erro.value.message
+        assert mensagem.index("posição 1") < mensagem.index("posição 3")
+        assert str(respondida.id) not in mensagem
+
+    async def test_descritiva_opcional_sem_resposta_nao_impede(self) -> None:
+        form_response = um_form_response()
+        opcional = uma_pergunta(form_response.form_id, obrigatoria=False)
+
+        resultado = await enviar(form_response, [opcional], [])
+
+        assert resultado.status is FormResponseStatus.SUBMITTED
+
+    async def test_objetiva_obrigatoria_sem_resposta_nao_impede(self) -> None:
+        """D2: a objetiva ainda não pode ser respondida (CREED-37)."""
+        form_response = um_form_response()
+        objetiva = uma_pergunta(form_response.form_id, descritiva=False)
+
+        resultado = await enviar(form_response, [objetiva], [])
+
+        assert resultado.status is FormResponseStatus.SUBMITTED
+
+    async def test_todas_as_obrigatorias_respondidas_envia(self) -> None:
+        form_response = um_form_response()
+        perguntas = [
+            uma_pergunta(form_response.form_id, posicao=0),
+            uma_pergunta(form_response.form_id, posicao=1),
+        ]
+
+        resultado = await enviar(
+            form_response,
+            perguntas,
+            [uma_resposta(form_response, p) for p in perguntas],
+        )
+
+        assert resultado.status is FormResponseStatus.SUBMITTED
+        assert resultado.submitted_at is not None
+
+    async def test_formulario_sem_pergunta_envia(self) -> None:
+        form_response = um_form_response()
+
+        resultado = await enviar(form_response, [], [])
+
+        assert resultado.status is FormResponseStatus.SUBMITTED
+
+    async def test_resposta_gravada_em_outra_resposta_de_formulario_nao_conta(
+        self,
+    ) -> None:
+        form_response = um_form_response()
+        pergunta = uma_pergunta(form_response.form_id)
+        de_outra_pessoa = um_form_response(form_id=form_response.form_id)
+
+        with pytest.raises(ValidationError):
+            await enviar(
+                form_response, [pergunta], [uma_resposta(de_outra_pessoa, pergunta)]
+            )
+
+    async def test_ja_submetida_vira_conflict_antes_das_obrigatorias(self) -> None:
+        """409 antes de 422: a resposta enviada não tem mais o que completar."""
+        form_response = um_form_response(status=FormResponseStatus.SUBMITTED)
+        pergunta = uma_pergunta(form_response.form_id)
+
+        with pytest.raises(ConflictError):
+            await enviar(form_response, [pergunta], [])
+
+
 class TestCreateFormResponse:
     async def test_nasce_em_progresso_com_o_vinculo_do_login(self) -> None:
         repository = FakeFormResponseRepository()
@@ -215,58 +415,6 @@ class TestCreateFormResponse:
             await servico(repository, forms).create_form_response(
                 form_id, link_id=link_id, organization_id=ORG_A
             )
-
-
-class FakeAnswerRepository:
-    """Dublê do repository: guarda em lista, não decide nada, não toca no banco."""
-
-    def __init__(self, existentes: list[Answer] | None = None) -> None:
-        self.itens: list[Answer] = list(existentes or [])
-
-    async def get_by_id(self, answer_id: uuid.UUID) -> Answer | None:
-        return next((a for a in self.itens if a.id == answer_id), None)
-
-    async def get_by_form_response_and_question(
-        self, form_response_id: uuid.UUID, question_id: uuid.UUID
-    ) -> Answer | None:
-        return next(
-            (
-                a
-                for a in self.itens
-                if a.form_response_id == form_response_id and a.question_id == question_id
-            ),
-            None,
-        )
-
-    async def list_by_form_response(self, form_response_id: uuid.UUID) -> list[Answer]:
-        """Filtra na ordem da lista: a ordenação real (`created_at`) é do banco."""
-        return [a for a in self.itens if a.form_response_id == form_response_id]
-
-    async def insert(self, answer: Answer) -> Answer:
-        """O id e o created_at seriam preenchidos pelo banco."""
-        answer.id = uuid.uuid4()
-        answer.created_at = datetime.now(UTC)
-        self.itens.append(answer)
-        return answer
-
-
-def uma_pergunta(form_id: uuid.UUID, *, descritiva: bool = True) -> SimpleNamespace:
-    return SimpleNamespace(id=uuid.uuid4(), form_id=form_id, descritiva=descritiva)
-
-
-class FakeQuestionService:
-    """Dublê do `QuestionService`: "existe?" e "é descritiva?", sem regra própria."""
-
-    def __init__(self, perguntas: list[SimpleNamespace]) -> None:
-        self.perguntas = {p.id: p for p in perguntas}
-
-    async def get(self, question_id: uuid.UUID) -> SimpleNamespace:
-        if question_id not in self.perguntas:
-            raise NotFoundError(f"Pergunta {question_id} não encontrada")
-        return self.perguntas[question_id]
-
-    def is_descriptive(self, question: SimpleNamespace) -> bool:
-        return bool(question.descritiva)
 
 
 class Cenario:

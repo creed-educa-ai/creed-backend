@@ -50,9 +50,17 @@ def _check_in_progress(form_response: FormResponse) -> None:
 
 
 class FormResponseService:
-    def __init__(self, repository: FormResponseRepository, forms: FormService) -> None:
+    def __init__(
+        self,
+        repository: FormResponseRepository,
+        forms: FormService,
+        questions: QuestionService,
+        answers: AnswerRepository,
+    ) -> None:
         self.repository = repository
         self.forms = forms
+        self.questions = questions
+        self.answers = answers
 
     async def create_form_response(
         self,
@@ -101,11 +109,27 @@ class FormResponseService:
         *,
         link_id: uuid.UUID,
     ) -> FormResponse:
-        """Só o dono envia: a resposta de outro vínculo levanta `ForbiddenError`."""
+        """Só o dono envia, e só com as descritivas obrigatórias respondidas.
+
+        Ordem: existe (404), é do dono (403), em andamento (409), obrigatórias
+        (422). A obrigatória objetiva não conta até a CREED-37 (D2): ver
+        `QuestionService.list_required_descriptive`.
+        """
         form_response = await _own_form_response(
             self.repository, form_response_id, link_id=link_id
         )
         _check_in_progress(form_response)
+
+        required = await self.questions.list_required_descriptive(form_response.form_id)
+        answers = await self.answers.list_by_form_response(form_response_id)
+        answered = {answer.question_id for answer in answers}
+        missing = [question for question in required if question.id not in answered]
+
+        if missing:
+            listed = ", ".join(
+                f"posição {question.order_index} ({question.id})" for question in missing
+            )
+            raise ValidationError(f"Perguntas obrigatórias sem resposta: {listed}")
 
         form_response.status = FormResponseStatus.SUBMITTED
         form_response.submitted_at = datetime.now(UTC)

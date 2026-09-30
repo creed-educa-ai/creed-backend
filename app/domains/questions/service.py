@@ -91,6 +91,17 @@ class QuestionService:
 
         return question
 
+    async def list_required_descriptive(self, form_id: uuid.UUID) -> list[Question]:
+        """As perguntas que o envio de uma resposta exige, em ordem de posicao.
+
+        So as descritivas: a objetiva ainda nao pode ser respondida (CREED-47, D2),
+        e contar a obrigatoria objetiva travaria todo envio. Quando a CREED-37
+        trouxer as alternativas, a objetiva obrigatoria passa a contar aqui.
+        """
+        return await self.repository.list_required_by_type(
+            form_id, QuestionType.DESCRIPTIVE
+        )
+
     def is_descriptive(self, question: Question) -> bool:
         """Responde por `responses`, que nao pode importar `QuestionType`."""
         return question.type is QuestionType.DESCRIPTIVE

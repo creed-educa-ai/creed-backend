@@ -40,6 +40,7 @@ class FakeQuestionRepository:
     ) -> None:
         self.itens: list[Question] = list(existentes or [])
         self.secao_pedida: QuestionSection | str | None = "nao chamado"
+        self.tipo_pedido: QuestionType | None = None
         self.recusar_insert = recusar_insert
 
     async def insert(self, question: Question) -> Question | None:
@@ -50,6 +51,12 @@ class FakeQuestionRepository:
 
     async def get_by_id(self, question_id: uuid.UUID) -> Question | None:
         return next((q for q in self.itens if q.id == question_id), None)
+
+    async def list_required_by_type(
+        self, form_id: uuid.UUID, question_type: QuestionType
+    ) -> list[Question]:
+        self.tipo_pedido = question_type
+        return [q for q in self.itens if q.form_id == form_id]
 
     async def list_by_form(
         self, form_id: uuid.UUID, section: QuestionSection | None = None
@@ -347,6 +354,20 @@ class TestBuscarQuestion:
 
         with pytest.raises(NotFoundError, match=re.escape(str(question_id))):
             await servico(FakeQuestionRepository()).get(question_id)
+
+
+class TestObrigatoriasDoEnvio:
+    async def test_pede_ao_banco_so_as_descritivas(self) -> None:
+        """A objetiva não conta até a CREED-37 (D2). O filtro de `required` e de
+        tipo é SQL, no repository: este teste só prova qual tipo é pedido."""
+        form_id = uuid.uuid4()
+        question = uma_question(form_id=form_id, type=QuestionType.DESCRIPTIVE)
+        repository = FakeQuestionRepository([question])
+
+        resultado = await servico(repository).list_required_descriptive(form_id)
+
+        assert resultado == [question]
+        assert repository.tipo_pedido is QuestionType.DESCRIPTIVE
 
 
 class TestPerguntaDescritiva:

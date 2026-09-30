@@ -21,20 +21,22 @@ def get_repository(
     return FormResponseRepository(db)
 
 
-def get_service(
-    repository: Annotated[FormResponseRepository, Depends(get_repository)],
-    forms: FormServiceDep,
-) -> FormResponseService:
-    return FormResponseService(repository, forms)
-
-
-ServiceDep = Annotated[FormResponseService, Depends(get_service)]
-
-
 def get_answer_repository(
     db: SessionDep,
 ) -> AnswerRepository:
     return AnswerRepository(db)
+
+
+def get_service(
+    repository: Annotated[FormResponseRepository, Depends(get_repository)],
+    forms: FormServiceDep,
+    questions: QuestionServiceDep,
+    answers: Annotated[AnswerRepository, Depends(get_answer_repository)],
+) -> FormResponseService:
+    return FormResponseService(repository, forms, questions, answers)
+
+
+ServiceDep = Annotated[FormResponseService, Depends(get_service)]
 
 
 def get_answer_service(

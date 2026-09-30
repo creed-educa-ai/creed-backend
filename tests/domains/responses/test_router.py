@@ -40,8 +40,8 @@ class _FakeFormResponseService:
 
     `recusar` faz `create_form_response` levantar o erro dado, sem gravar. O
     `submit_form_response` recusa com `ForbiddenError` a resposta de outro
-    vínculo, como o service real; a ordem das conferências é provada em
-    test_service.py.
+    vínculo, como o service real, e `faltam_obrigatorias=True` o faz recusar com
+    `ValidationError`; a ordem das conferências é provada em test_service.py.
     """
 
     def __init__(
@@ -49,9 +49,11 @@ class _FakeFormResponseService:
         existentes: list[FormResponse] | None = None,
         *,
         recusar: Exception | None = None,
+        faltam_obrigatorias: bool = False,
     ) -> None:
         self.itens = {fr.id: fr for fr in existentes or []}
         self.recusar = recusar
+        self.faltam_obrigatorias = faltam_obrigatorias
         self.quem_pediu: tuple[uuid.UUID, uuid.UUID] | None = None
 
     async def create_form_response(
@@ -80,6 +82,8 @@ class _FakeFormResponseService:
             )
         if form_response.status is not FormResponseStatus.IN_PROGRESS:
             raise ConflictError(f"FormResponse {form_response_id} já foi submetido")
+        if self.faltam_obrigatorias:
+            raise ValidationError("Perguntas obrigatórias sem resposta: posição 0")
         form_response.status = FormResponseStatus.SUBMITTED
         form_response.submitted_at = datetime(2026, 9, 30, tzinfo=UTC)
         return form_response
@@ -259,6 +263,19 @@ class TestSubmeterResposta:
 
         assert response.status_code == 409
         assert response.json()["detail"].endswith("já foi submetido")
+
+    def test_com_obrigatoria_sem_resposta_devolve_422_com_detail_texto(
+        self, app: FastAPI, client: TestClient
+    ) -> None:
+        propria = um_form_response()
+        _use_fake_service(
+            app, _FakeFormResponseService([propria], faltam_obrigatorias=True)
+        )
+
+        response = client.patch(f"/form-responses/{propria.id}")
+
+        assert response.status_code == 422
+        assert response.json()["detail"].startswith("Perguntas obrigatórias")
 
     def test_inexistente_devolve_404(self, app: FastAPI, client: TestClient) -> None:
         _use_fake_service(app, _FakeFormResponseService())
