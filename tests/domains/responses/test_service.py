@@ -61,8 +61,29 @@ def um_form_response(**campos: object) -> FormResponse:
     return FormResponse(**{**padrao, **campos})
 
 
-def servico(repository: FakeFormResponseRepository) -> FormResponseService:
-    return FormResponseService(repository)  # type: ignore[arg-type]
+class FakeFormService:
+    """Dublê do `FormService`: só responde se o formulário existe.
+
+    `existe=False` faz toda consulta levantar `NotFoundError`, como o service
+    real faz para um id que não está no banco.
+    """
+
+    def __init__(self, *, existe: bool = True) -> None:
+        self.existe = existe
+
+    async def get(self, form_id: uuid.UUID) -> object:
+        if not self.existe:
+            raise NotFoundError(f"Formulário {form_id} não encontrado")
+        return object()
+
+
+def servico(
+    repository: FakeFormResponseRepository, forms: FakeFormService | None = None
+) -> FormResponseService:
+    return FormResponseService(
+        repository,  # type: ignore[arg-type]
+        forms or FakeFormService(),  # type: ignore[arg-type]
+    )
 
 
 class TestSubmitFormResponse:
@@ -99,6 +120,20 @@ class TestCreateFormResponse:
         assert resultado.vinculo_id == vinculo_id
         assert resultado.status == FormResponseStatus.IN_PROGRESS
         assert resultado.submitted_at is None
+
+    async def test_formulario_inexistente_vira_validation_error_sem_gravar(
+        self,
+    ) -> None:
+        """O formulário veio no corpo: inexistente é 422, não 404 (CREED-47)."""
+        repository = FakeFormResponseRepository()
+        form_id = uuid.uuid4()
+
+        with pytest.raises(ValidationError, match=str(form_id)):
+            await servico(repository, FakeFormService(existe=False)).create_form_response(
+                form_id=form_id, vinculo_id=uuid.uuid4()
+            )
+
+        assert repository.itens == []
 
 
 class FakeAnswerRepository:

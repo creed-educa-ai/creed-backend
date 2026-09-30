@@ -12,8 +12,8 @@ from fastapi import APIRouter, HTTPException, Path, status
 
 from app.domains.responses.dependencies import ServiceDep
 from app.domains.responses.schemas import FormResponseCreate, FormResponseResponse
-from app.shared.exceptions import ConflictError, NotFoundError
-from app.shared.schemas import ErrorResponse
+from app.shared.exceptions import ConflictError, NotFoundError, ValidationError
+from app.shared.schemas import ErrorResponse, ValidationErrorResponse
 
 router = APIRouter(prefix="/form-responses", tags=["form-responses"])
 
@@ -25,7 +25,8 @@ router = APIRouter(prefix="/form-responses", tags=["form-responses"])
     summary="Iniciar resposta de formulário",
     description=(
         "Abre uma resposta em andamento para a combinação de formulário e vínculo. "
-        "Cada vínculo pode abrir somente uma resposta por formulário."
+        "Cada vínculo pode abrir somente uma resposta por formulário. O "
+        "formulário precisa já existir."
     ),
     response_description="Resposta de formulário criada em andamento.",
     operation_id="create_form_response",
@@ -40,7 +41,26 @@ router = APIRouter(prefix="/form-responses", tags=["form-responses"])
                     }
                 }
             },
-        }
+        },
+        # Dois formatos no mesmo 422: o do service (`detail` texto) e o da
+        # validação do Pydantic (`detail` lista).
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {
+            "model": ErrorResponse | ValidationErrorResponse,
+            "description": (
+                "Formulário inexistente: `detail` é texto. Corpo inválido: "
+                "`detail` é uma lista, um item por campo recusado."
+            ),
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": (
+                            "Formulário 7d94e9bb-25ca-4df9-9c08-d90251dd8d68 "
+                            "não encontrado"
+                        )
+                    }
+                }
+            },
+        },
     },
 )
 async def criar_form_response(
@@ -50,6 +70,8 @@ async def criar_form_response(
         form_response = await service.create_form_response(
             form_id=dados.form_id, vinculo_id=dados.vinculo_id
         )
+    except ValidationError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, exc.message) from exc
     except ConflictError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, exc.message) from exc
     return FormResponseResponse.de_model(form_response)

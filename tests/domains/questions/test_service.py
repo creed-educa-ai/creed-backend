@@ -1,8 +1,9 @@
 """Testes do service do dominio questions.
 
-Sem banco e sem HTTP: o repository e substituido por um duble em memoria.
-O que se prova aqui e a regra de negocio — conflito de posicao repetida e
-que a secao pedida chega ate a camada de banco.
+Sem banco e sem HTTP: o repository e o `FormService` sao substituidos por
+dubles em memoria. O que se prova aqui e a regra de negocio — o formulario
+precisa existir, conflito de posicao repetida e que a secao pedida chega ate
+a camada de banco.
 
 ⚠️ Este teste NAO prova ordenacao nem filtro por secao de verdade: o duble
 filtra em memoria, sem rodar consulta nenhuma. Ordenacao e filtro reais sao
@@ -18,7 +19,7 @@ import pytest
 from app.domains.questions.models import Question, QuestionSection, QuestionType
 from app.domains.questions.schemas import QuestionCreate
 from app.domains.questions.service import QuestionService
-from app.shared.exceptions import ConflictError
+from app.shared.exceptions import ConflictError, NotFoundError, ValidationError
 
 
 class FakeQuestionRepository:
@@ -79,11 +80,52 @@ def uma_question(**campos: object) -> Question:
     return Question(**{**padrao, **campos})
 
 
-def servico(repository: FakeQuestionRepository) -> QuestionService:
-    return QuestionService(repository)  # type: ignore[arg-type]
+class FakeFormService:
+    """Duble do `FormService`: so responde se o formulario existe.
+
+    `existe=False` faz toda consulta levantar `NotFoundError`, como o service
+    real faz para um id que nao esta no banco.
+    """
+
+    def __init__(self, *, existe: bool = True) -> None:
+        self.existe = existe
+
+    async def get(self, form_id: uuid.UUID) -> object:
+        if not self.existe:
+            raise NotFoundError(f"Formulário {form_id} não encontrado")
+        return object()
+
+
+def servico(
+    repository: FakeQuestionRepository, forms: FakeFormService | None = None
+) -> QuestionService:
+    return QuestionService(
+        repository,  # type: ignore[arg-type]
+        forms or FakeFormService(),  # type: ignore[arg-type]
+    )
 
 
 class TestCriarQuestion:
+    async def test_formulario_inexistente_vira_validation_error_sem_gravar(
+        self,
+    ) -> None:
+        """O formulario veio no corpo: inexistente e 422, nao 404 (CREED-47)."""
+        repository = FakeQuestionRepository()
+        form_id = uuid.uuid4()
+
+        with pytest.raises(ValidationError, match=re.escape(str(form_id))):
+            await servico(repository, FakeFormService(existe=False)).create(
+                QuestionCreate(
+                    form_id=form_id,
+                    text="Pergunta de formulario que nao existe",
+                    order_index=0,
+                    type=QuestionType.DESCRIPTIVE,
+                    section=QuestionSection.PROFILE,
+                )
+            )
+
+        assert repository.itens == []
+
     async def test_corrida_na_gravacao_vira_conflito_sem_gravar(self) -> None:
         form_id = uuid.uuid4()
         repository = FakeQuestionRepository(recusar_insert=True)
@@ -198,3 +240,14 @@ class TestListarQuestionsDoFormulario:
         resultado = await servico(repository).list_for_form(uuid.uuid4())
 
         assert resultado == []
+
+    async def test_formulario_inexistente_vira_not_found(self) -> None:
+        """Antes da CREED-47, devolvia lista vazia, igual a formulario sem pergunta."""
+        repository = FakeQuestionRepository()
+
+        with pytest.raises(NotFoundError):
+            await servico(repository, FakeFormService(existe=False)).list_for_form(
+                uuid.uuid4()
+            )
+
+        assert repository.secao_pedida == "nao chamado"

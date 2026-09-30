@@ -127,6 +127,20 @@ def test_success_error_and_bearer_authentication_responses_are_documented() -> N
         "409",
         "422",
     }
+    # Referência inexistente no corpo é 422; no caminho, 404 (CREED-47).
+    assert set(
+        _operation(schema, "/api/v1/organizations/{organization_id}/links", "post")[
+            "responses"
+        ]
+    ) >= {"201", "422"}
+    assert set(_operation(schema, "/api/v1/questions", "post")["responses"]) >= {
+        "201",
+        "409",
+        "422",
+    }
+    assert set(
+        _operation(schema, "/api/v1/forms/{form_id}/questions", "get")["responses"]
+    ) >= {"200", "404"}
     assert set(
         _operation(
             schema,

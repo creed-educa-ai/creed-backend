@@ -20,6 +20,7 @@ from app.domains.links.router import router
 from app.domains.links.schemas import LinkCreate
 from app.domains.users.dependencies import get_service as get_user_service
 from app.domains.users.service import UserAccess
+from app.shared.exceptions import ValidationError
 
 VALID_BODY = {
     "participant_id": "e5c0e7fa-3e57-427a-8d7b-a4ab5fb6c339",
@@ -51,6 +52,15 @@ class _FakeLinkService:
             created_at=now,
             updated_at=None,
         )
+
+
+class _UnknownParticipantLinkService:
+    """Dublê que recusa como o service real recusa um participante inexistente."""
+
+    async def create_link_service(
+        self, organization_id: uuid.UUID, request: LinkCreate
+    ) -> Link:
+        raise ValidationError(f"Participante {request.participant_id} não encontrado")
 
 
 class _FakeUserService:
@@ -189,3 +199,23 @@ def test_organization_id_in_url_not_uuid_returns_422(
     )
 
     assert response.status_code == 422
+
+
+def test_unknown_participant_returns_422_with_text_detail(
+    client: TestClient, app: FastAPI, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Prova só a tradução do router: `ValidationError` -> 422.
+
+    A regra (o participante precisa existir) é provada em `test_service.py`.
+    """
+    _authorize_as(app, monkeypatch, "admin")
+    app.dependency_overrides[get_link_service] = _UnknownParticipantLinkService
+
+    response = client.post(
+        URL, json=VALID_BODY, headers={"Authorization": "Bearer valid"}
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == (
+        f"Participante {VALID_BODY['participant_id']} não encontrado"
+    )

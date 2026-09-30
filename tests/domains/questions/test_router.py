@@ -18,7 +18,7 @@ from app.domains.questions.dependencies import get_service
 from app.domains.questions.models import Question, QuestionSection, QuestionType
 from app.domains.questions.router import router
 from app.domains.questions.schemas import QuestionCreate
-from app.shared.exceptions import ConflictError
+from app.shared.exceptions import ConflictError, NotFoundError, ValidationError
 
 
 class _FakeQuestionService:
@@ -28,6 +28,10 @@ class _FakeQuestionService:
     lógica real de "mesma posição no mesmo formulário". Essa regra já está
     coberta em tests/domains/questions/test_service.py; aqui o que se prova é
     só a tradução ConflictError -> 409, que é trabalho do router.
+
+    `formulario_inexistente=True` faz as duas rotas recusarem como o service real
+    recusa um formulário que não existe: `ValidationError` no cadastro e
+    `NotFoundError` na listagem.
     """
 
     def __init__(
@@ -35,11 +39,15 @@ class _FakeQuestionService:
         existentes: list[Question] | None = None,
         *,
         conflito: bool = False,
+        formulario_inexistente: bool = False,
     ) -> None:
         self.itens: list[Question] = list(existentes or [])
         self.conflito = conflito
+        self.formulario_inexistente = formulario_inexistente
 
     async def create(self, request: QuestionCreate) -> Question:
+        if self.formulario_inexistente:
+            raise ValidationError(f"Formulário {request.form_id} não encontrado")
         if self.conflito:
             raise ConflictError(
                 f"Já existe pergunta na posição {request.order_index} "
@@ -63,6 +71,8 @@ class _FakeQuestionService:
     async def list_for_form(
         self, form_id: uuid.UUID, section: QuestionSection | None = None
     ) -> list[Question]:
+        if self.formulario_inexistente:
+            raise NotFoundError(f"Formulário {form_id} não encontrado")
         resultado = [
             q
             for q in self.itens
@@ -135,6 +145,19 @@ class TestCriarPergunta:
         response = client.post("/questions", json=_payload())
 
         assert response.status_code == 409
+
+    def test_com_formulario_inexistente_devolve_422_com_detail_texto(
+        self, app: FastAPI, client: TestClient
+    ) -> None:
+        _use_fake_service(app, _FakeQuestionService(formulario_inexistente=True))
+        payload = _payload()
+
+        response = client.post("/questions", json=payload)
+
+        assert response.status_code == 422
+        assert response.json()["detail"] == (
+            f"Formulário {payload['form_id']} não encontrado"
+        )
 
     def test_com_texto_vazio_devolve_422(self, app: FastAPI, client: TestClient) -> None:
         _use_fake_service(app, _FakeQuestionService())
@@ -243,6 +266,15 @@ class TestListarPerguntasDoFormulario:
 
         assert response.status_code == 200
         assert response.json() == []
+
+    def test_formulario_inexistente_devolve_404(
+        self, app: FastAPI, client: TestClient
+    ) -> None:
+        _use_fake_service(app, _FakeQuestionService(formulario_inexistente=True))
+
+        response = client.get(f"/forms/{uuid.uuid4()}/questions")
+
+        assert response.status_code == 404
 
     def test_filtro_por_secao_devolve_so_as_daquela_secao_em_ordem(
         self, app: FastAPI, client: TestClient

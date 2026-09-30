@@ -1,12 +1,14 @@
 """Regra de negócio do domínio responses.
 
 Esta camada não conhece HTTP nem detalhes de ORM. É onde ficam
-as regras próprias das entidades FormResponse e Answer.
+as regras próprias das entidades FormResponse e Answer. Formulário é de
+outro domínio: a pergunta "ele existe?" vai ao `FormService` (CREED-47).
 """
 
 import uuid
 from datetime import UTC, datetime
 
+from app.domains.forms.service import FormService
 from app.domains.responses.models import Answer, FormResponse, FormResponseStatus
 from app.domains.responses.repository import AnswerRepository, FormResponseRepository
 from app.domains.responses.schemas import AnswerCreate
@@ -14,14 +16,21 @@ from app.shared.exceptions import ConflictError, NotFoundError, ValidationError
 
 
 class FormResponseService:
-    def __init__(self, repository: FormResponseRepository) -> None:
+    def __init__(self, repository: FormResponseRepository, forms: FormService) -> None:
         self.repository = repository
+        self.forms = forms
 
     async def create_form_response(
         self,
         form_id: uuid.UUID,
         vinculo_id: uuid.UUID,
     ) -> FormResponse:
+        # O formulário veio no corpo: inexistente é 422, não 404 (CREED-47, item 11).
+        try:
+            await self.forms.get(form_id)
+        except NotFoundError as exc:
+            raise ValidationError(exc.message) from exc
+
         existing = await self.repository.get_by_form_and_vinculo(
             form_id,
             vinculo_id,
