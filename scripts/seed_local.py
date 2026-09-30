@@ -22,6 +22,8 @@ from app.core.config import settings
 from app.core.database import AsyncSessionLocal
 from app.domains.links.models import Link, LinkType, Roles
 from app.domains.links.repository import LinkRepository
+from app.domains.participants.models import Participant
+from app.domains.participants.repository import ParticipantRepository
 from app.domains.users.models import User
 from app.domains.users.repository import UserRepository
 from app.shared.enums import RecordStatus
@@ -32,10 +34,10 @@ NAME = "Dev CREED"
 # O papel de acesso é o do vínculo (CREED-32): `user` não guarda papel.
 LINK_ROLE = Roles.ADMIN
 
-# Órfãos até a amarração: `Organization` ainda não tem tabela, e `participants`
-# tem, mas `links.participant_id` ainda não tem FK para ela. A amarração deve criar
-# as duas linhas com estes mesmos ids (spec da CREED-32, "Abordagem técnica",
-# item 13). Fixos, e não aleatórios, para o seed continuar idempotente.
+# Fixos, e não aleatórios, para o seed continuar idempotente. O participante é
+# criado por este seed, porque `links.participant_id` tem FK desde a CREED-47. A
+# organização segue órfã até `Organization` ter tabela: a CREED-38 precisa criá-la
+# com este mesmo id, senão a FK dela não sobe.
 PARTICIPANT_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 ORGANIZATION_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
@@ -92,6 +94,13 @@ async def semear() -> None:
     async with AsyncSessionLocal() as session:
         users = UserRepository(session)
         links = LinkRepository(session)
+
+        # Antes de tudo, inclusive do `return` abaixo: um banco que já tinha o
+        # usuário de dev também precisa do participante, senão a revisão
+        # `d53324b9b5a2` recusa o vínculo do seed.
+        if await _ensure_participant(ParticipantRepository(session)):
+            await session.commit()
+
         existente = await users.get_user_by_email(EMAIL)
 
         if existente is not None:
@@ -131,6 +140,18 @@ async def semear() -> None:
             f"{EMAIL} criado, keycloak_id={keycloak_id}, "
             f"vínculo {link.id} ({LINK_ROLE.value})."
         )
+
+
+async def _ensure_participant(participants: ParticipantRepository) -> bool:
+    """Cria o participante de dev se ele ainda não existe. Diz se criou."""
+    if await participants.get_by_id(PARTICIPANT_ID) is not None:
+        return False
+
+    await participants.create(
+        Participant(id=PARTICIPANT_ID, name=NAME, status=RecordStatus.ACTIVE)
+    )
+    print(f"participante {PARTICIPANT_ID} criado.")
+    return True
 
 
 def _new_link() -> Link:

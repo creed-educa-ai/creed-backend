@@ -1,15 +1,24 @@
 """Models SQLAlchemy do domínio questions.
 
-Uma pergunta pertence a um formulário (`form_id`), sem chave estrangeira: a tabela
-de formulários nasce em paralelo, na CREED-33, e pode não existir ainda quando esta
-migration rodar. A ligação por FK é tarefa futura, de amarração entre os domínios.
+Uma pergunta pertence a um formulário (`form_id`). A `ForeignKey` para `form` entrou
+na integração da sprint 2 (CREED-47): as duas tabelas nasceram em paralelo, na CREED-33
+e na CREED-35, e só puderam ser ligadas depois de as duas existirem.
 """
 
 import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Enum, Integer, Text, UniqueConstraint, func
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Integer,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -69,7 +78,10 @@ class Question(Base):
     )
 
     form_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), nullable=False, index=True
+        UUID(as_uuid=True),
+        ForeignKey("form.id", name="fk_questions_form_id_form"),
+        nullable=False,
+        index=True,
     )
 
     text: Mapped[str] = mapped_column(Text, nullable=False)

@@ -4,18 +4,16 @@ Vínculo é o elo entre uma pessoa (participante) e uma organização: guarda o 
 pessoa ali, o tipo do vínculo e o período. A mesma pessoa em duas organizações tem dois
 vínculos, e cada vínculo tem o próprio login (`user.link_id`, em `users/models.py`).
 
-`participant_id`, `organization_id` e `department_id` são UUIDs soltos, sem `ForeignKey`.
-`Organization` e `Department` ainda não têm tabela. `Participant` tem (`participants`,
-desde o PR #28), mas a FK dele também fica para a amarração, junto com as outras duas: ela
-exige o seed criar o participante de dev e o `POST` de vínculo conferir se o participante
-existe, e isso é escopo que a CREED-32 não previu.
+`participant_id` tem `ForeignKey` para `participants` desde a integração da sprint 2
+(CREED-47). `organization_id` e `department_id` seguem UUIDs soltos: `Organization` e
+`Department` ainda não têm tabela, e as FKs deles entram com a CREED-38 e a CREED-39.
 """
 
 import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Enum, func
+from sqlalchemy import DateTime, Enum, ForeignKey, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -49,17 +47,19 @@ class Link(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
 
-    # FK para `participants` — a tabela existe, a FK entra na amarração (ver docstring)
     participant_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), nullable=False, index=True
+        UUID(as_uuid=True),
+        ForeignKey("participants.id", name="fk_links_participant_id_participants"),
+        nullable=False,
+        index=True,
     )
 
-    # FK para Organization — tabela ainda não criada
+    # FK para Organization — tabela ainda não criada (CREED-38)
     organization_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), nullable=False, index=True
     )
 
-    # FK para Department — tabela ainda não criada
+    # FK para Department — tabela ainda não criada (CREED-39)
     department_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), nullable=True, index=True
     )

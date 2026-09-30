@@ -62,8 +62,10 @@ def test_prisma_tem_as_cinco_dimensoes() -> None:
     assert len(list(Prisma)) == 5
 
 
-def test_nao_tem_nenhuma_chave_estrangeira() -> None:
-    assert not TABELA.foreign_keys
+def test_a_unica_chave_estrangeira_e_form_id() -> None:
+    fks = {fk.parent.name: (fk.target_fullname, fk.name) for fk in TABELA.foreign_keys}
+
+    assert fks == {"form_id": ("form.id", "fk_questions_form_id_form")}
 
 
 def test_indice_existe_so_em_form_id() -> None:
