@@ -10,9 +10,11 @@ router não pode conhecer (ADR-0004, item 7).
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
-from app.domains.users.models import RecordStatus, User
+from app.domains.users.models import User
+from app.shared.enums import RecordStatus
+from app.shared.validators import sem_caractere_de_controle
 
 
 class UserBase(BaseModel):
@@ -61,6 +63,12 @@ class UserCreate(UserBase):
         description="Vínculo que dá o papel e a organização deste login.",
         examples=["3f9a2b1c-4d5e-4f6a-8b7c-9d0e1f2a3b4c"],
     )
+
+    @field_validator("name")
+    @classmethod
+    def _sem_caractere_de_controle(cls, name: str) -> str:
+        """Só na entrada: a saída devolve o que está gravado."""
+        return sem_caractere_de_controle(name)
 
 
 class UserResponse(UserBase):

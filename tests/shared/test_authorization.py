@@ -10,10 +10,11 @@ from fastapi.testclient import TestClient
 
 from app.domains.links.models import Link, LinkType, Roles
 from app.domains.users.dependencies import get_service as get_user_service
-from app.domains.users.models import RecordStatus, User, UserRole
+from app.domains.users.models import User, UserRole
 from app.domains.users.service import UserAccess, UserService
 from app.external_services.keycloak.token import InvalidTokenError
 from app.shared.authorization import CurrentUserDep, require_role
+from app.shared.enums import RecordStatus
 
 
 class _FakeUserService:

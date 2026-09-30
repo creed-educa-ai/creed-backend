@@ -14,9 +14,10 @@ import uuid
 from dataclasses import dataclass
 
 from app.domains.links.service import LinkService
-from app.domains.users.models import RecordStatus, User
+from app.domains.users.models import User
 from app.domains.users.repository import UserRepository
 from app.domains.users.schemas import UserCreate
+from app.shared.enums import RecordStatus
 from app.shared.exceptions import ConflictError, NotFoundError
 
 

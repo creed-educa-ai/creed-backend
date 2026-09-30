@@ -13,10 +13,11 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.domains.users.dependencies import get_service
-from app.domains.users.models import RecordStatus, User
+from app.domains.users.models import User
 from app.domains.users.router import router
 from app.domains.users.schemas import UserCreate
 from app.domains.users.service import CreatedUser
+from app.shared.enums import RecordStatus
 from app.shared.exceptions import ConflictError, NotFoundError
 
 LINK_ID = "3f9a2b1c-4d5e-4f6a-8b7c-9d0e1f2a3b4c"
