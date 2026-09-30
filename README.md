@@ -97,11 +97,10 @@ python scripts/seed_local.py
 Rode-o de novo depois de todo `docker compose down -v`: ele reata o usuário ao `sub`
 novo em vez de estourar na constraint única.
 
-> ⚠️ **Rode o seed de novo depois do `alembic upgrade head` da CREED-32.** O papel de
-> acesso passou a vir do vínculo, não mais da coluna `user.role`. O seed passa a criar
-> esse vínculo e ligar o usuário de dev a ele; sem rodá-lo de novo, o login responde
-> "e-mail ou senha inválidos" com a senha certa — porque o usuário existe, mas ainda
-> sem vínculo.
+> ⚠️ **O papel de acesso vem do vínculo (CREED-32)**, e todo usuário precisa de um:
+> `user.link_id` é obrigatório. Se o `alembic upgrade head` parar dizendo que há
+> usuário sem vínculo, siga a mensagem: ela manda apagar esses usuários locais e rodar
+> o seed de novo, que recria o de dev já com vínculo.
 
 **O que muda no realm, muda no arquivo.** Alterou pela UI para testar? Ou refaça no
 JSON, ou perca a alteração no próximo `down -v` — e é assim de propósito.

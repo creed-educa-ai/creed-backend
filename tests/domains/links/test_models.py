@@ -74,8 +74,13 @@ class TestLinksTable:
 
 
 class TestUserLinkIdColumn:
-    def test_is_nullable(self) -> None:
-        assert User.__table__.c.link_id.nullable is True
+    def test_is_not_nullable(self) -> None:
+        """Todo login nasce de um vínculo (P-008, [C2])."""
+        assert User.__table__.c.link_id.nullable is False
+
+    def test_user_has_no_role_column(self) -> None:
+        """O papel mora em `links.role`; `user` não guarda uma segunda cópia."""
+        assert "role" not in User.__table__.c
 
     def test_is_unique(self) -> None:
         assert User.__table__.c.link_id.unique is True

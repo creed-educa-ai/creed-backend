@@ -5,7 +5,6 @@ o Keycloak (P-012), e o elo entre as duas pontas é o `keycloak_id` — o `sub` 
 JWT, que é como se acha o usuário a partir do token sem depender do e-mail.
 """
 
-import enum
 import uuid
 from datetime import datetime
 
@@ -15,14 +14,6 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
 from app.shared.enums import RecordStatus
-
-
-class UserRole(enum.Enum):
-    """Papéis do realm, na lista fixada pela P-006."""
-
-    ADMIN = "admin"
-    GESTOR = "gestor"
-    RESPONDENTE = "respondente"
 
 
 class User(Base):
@@ -47,19 +38,13 @@ class User(Base):
         Enum(RecordStatus), nullable=False, default=RecordStatus.ACTIVE
     )
 
-    # A partir da CREED-32 esta coluna não é mais lida: o papel passou a morar em
-    # `Link.role`. Sai de vez na task 6 da CREED-32, junto com `UserRole`.
-    role: Mapped[UserRole] = mapped_column(
-        Enum(UserRole), nullable=False, default=UserRole.RESPONDENTE
-    )
-
     # Aponta para o vínculo que dá o papel deste login (modelo [C2]: 1 login = 1 vínculo).
-    # Nulável só até a task 6 da CREED-32: aí vira NOT NULL e `role` sai.
-    link_id: Mapped[uuid.UUID | None] = mapped_column(
+    # O papel não mora aqui: é `Link.role`, lido pelo `UserService`.
+    link_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("links.id", name="fk_user_link_id_links"),
         unique=True,
-        nullable=True,
+        nullable=False,
     )
 
     created_at: Mapped[datetime] = mapped_column(

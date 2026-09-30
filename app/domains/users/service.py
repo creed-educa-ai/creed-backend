@@ -38,8 +38,7 @@ class CreatedUser:
 class UserAccess:
     """O que a guarda e o login precisam saber sobre um login autenticado.
 
-    `role` e `organization_id` são os do vínculo, não os de `user.role` —
-    é o contrato que a task 5 vai consumir.
+    `role` e `organization_id` são os do vínculo: `user` não guarda papel.
     """
 
     id: uuid.UUID
@@ -57,13 +56,14 @@ class UserService:
     async def get_active_user_access_by_email(self, email: str) -> UserAccess | None:
         """O que a guarda e o login usam para saber quem está logado.
 
-        `None` cobre usuário inexistente, inativo, sem `link_id`, e
-        `link_id` que o `LinkService` não encontra — a guarda e o login
-        tratam todos os quatro como "sem acesso" (401), sem distinguir.
+        `None` cobre usuário inexistente, inativo, e `link_id` que o
+        `LinkService` não encontra — a guarda e o login tratam os três como
+        "sem acesso" (401), sem distinguir. Usuário sem `link_id` não existe:
+        a coluna é `NOT NULL`.
         """
         user = await self.repository.get_user_by_email(email)
 
-        if user is None or user.status is not RecordStatus.ACTIVE or user.link_id is None:
+        if user is None or user.status is not RecordStatus.ACTIVE:
             return None
 
         link = await self.links.get_link_by_id_service(user.link_id)
@@ -96,10 +96,6 @@ class UserService:
         # — ADR-0004: "se muda quando o produto muda de ideia, é service". O
         # default do model é só a rede para quem construir um User por outro
         # caminho; em conflito, esta linha é a que vale.
-        #
-        # `role` fica de fora: a partir da CREED-32 o papel é o do vínculo, e
-        # ninguém mais lê a coluna. O default do model (`respondente`) só
-        # preenche a linha porque ela ainda é `NOT NULL` — sai na task 6.
         user = User(
             keycloak_id=request.keycloak_id,
             name=request.name,

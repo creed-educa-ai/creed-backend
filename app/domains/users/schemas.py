@@ -77,7 +77,7 @@ class UserResponse(UserBase):
     `keycloak_id` fica de fora de propósito: é o elo interno com o realm, e o
     contrato não o expõe.
 
-    `role` é `str`, não `UserRole`: o papel de saída vem do `Link`, e este
+    `role` é `str`, não `Roles`: o papel de saída vem do `Link`, e este
     schema não pode importar `app.domains.links.models` (`schemas.py` não
     está entre os submódulos de composição de `tests/test_arquitetura.py`).
     A sessão de login (`UserSessionResponse.role`) já segue essa mesma forma.
