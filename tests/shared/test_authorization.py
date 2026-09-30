@@ -326,31 +326,15 @@ def test_real_user_service_claim_admin_but_link_says_gestor_returns_401(
     assert "Divergência" in caplog.text
 
 
+@pytest.mark.parametrize("route", ["/authenticated", "/admin"])
 def test_user_without_an_active_account_returns_401(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch, app: FastAPI
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, app: FastAPI, route: str
 ) -> None:
-    _install_validate_token(
-        monkeypatch,
-        lambda _token: {
-            "sub": "user-123",
-            "email": "dev@creed.example.com",
-            "realm_access": {"roles": ["admin"]},
-        },
-    )
-    _install_access(app, None)
+    """P-008: sem acesso no banco, 401 nas duas guardas, mesmo com token válido.
 
-    response = client.get("/authenticated", headers={"Authorization": "Bearer valid"})
-
-    assert response.status_code == 401
-
-
-def test_user_without_link_returns_401(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch, app: FastAPI
-) -> None:
-    """P-008: usuário sem vínculo é usuário sem acesso, mesmo com token válido.
-
-    `UserService.get_active_user_access_by_email` já devolve `None` para esse
-    caso (task 4) — aqui só se confirma que a guarda trata `None` como 401.
+    O `UserService` devolve `None` para usuário inexistente, inativo, ou com
+    vínculo que o `LinkService` não encontra. Na rota `admin` o claim passa na
+    conferência de papel, e quem recusa é o banco.
     """
     _install_validate_token(
         monkeypatch,
@@ -362,6 +346,6 @@ def test_user_without_link_returns_401(
     )
     _install_access(app, None)
 
-    response = client.get("/admin", headers={"Authorization": "Bearer valid"})
+    response = client.get(route, headers={"Authorization": "Bearer valid"})
 
     assert response.status_code == 401
