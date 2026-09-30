@@ -1,4 +1,8 @@
-"""Testes de app/domains/questions/router.py — só contrato HTTP.
+"""Testes de app/domains/questions/router.py — contrato HTTP e guarda.
+
+A guarda roda de verdade: só o `validate_token` e o `UserService` são dublês, como
+em `tests/domains/participants/test_router.py`. O `client` padrão já entra como
+`admin`; os testes de papel e de token trocam isso explicitamente.
 
 Não existe banco de teste no projeto: a app é montada só com este
 roteador, e a service é trocada por um dublê em memória. Quem prova a
@@ -9,6 +13,7 @@ descrita na própria tarefa CREED-353.
 
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 
 import pytest
 from fastapi import FastAPI
@@ -18,7 +23,17 @@ from app.domains.questions.dependencies import get_service
 from app.domains.questions.models import Question, QuestionSection, QuestionType
 from app.domains.questions.router import router
 from app.domains.questions.schemas import QuestionCreate
-from app.shared.exceptions import ConflictError
+from app.domains.users.dependencies import get_service as get_user_service
+from app.domains.users.service import UserAccess
+from app.shared.exceptions import (
+    ConflictError,
+    ForbiddenError,
+    NotFoundError,
+    ValidationError,
+)
+
+ORGANIZATION_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+TOKEN = {"Authorization": "Bearer valido"}
 
 
 class _FakeQuestionService:
@@ -28,6 +43,11 @@ class _FakeQuestionService:
     lógica real de "mesma posição no mesmo formulário". Essa regra já está
     coberta em tests/domains/questions/test_service.py; aqui o que se prova é
     só a tradução ConflictError -> 409, que é trabalho do router.
+
+    `formulario_inexistente=True` faz as duas rotas recusarem como o service real
+    recusa um formulário que não existe: `ValidationError` no cadastro e
+    `NotFoundError` na listagem. `proibido=True` faz as duas levantarem
+    `ForbiddenError`, como o service real faz para formulário de outra organização.
     """
 
     def __init__(
@@ -35,11 +55,23 @@ class _FakeQuestionService:
         existentes: list[Question] | None = None,
         *,
         conflito: bool = False,
+        formulario_inexistente: bool = False,
+        proibido: bool = False,
     ) -> None:
         self.itens: list[Question] = list(existentes or [])
         self.conflito = conflito
+        self.formulario_inexistente = formulario_inexistente
+        self.proibido = proibido
+        self.quem_pediu: tuple[str, uuid.UUID] | None = None
 
-    async def create(self, request: QuestionCreate) -> Question:
+    async def create(
+        self, request: QuestionCreate, *, role: str, organization_id: uuid.UUID
+    ) -> Question:
+        self.quem_pediu = (role, organization_id)
+        if self.proibido:
+            raise ForbiddenError("Sem acesso a formulário de outra organização")
+        if self.formulario_inexistente:
+            raise ValidationError(f"Formulário {request.form_id} não encontrado")
         if self.conflito:
             raise ConflictError(
                 f"Já existe pergunta na posição {request.order_index} "
@@ -61,8 +93,18 @@ class _FakeQuestionService:
         return question
 
     async def list_for_form(
-        self, form_id: uuid.UUID, section: QuestionSection | None = None
+        self,
+        form_id: uuid.UUID,
+        section: QuestionSection | None = None,
+        *,
+        role: str,
+        organization_id: uuid.UUID,
     ) -> list[Question]:
+        self.quem_pediu = (role, organization_id)
+        if self.proibido:
+            raise ForbiddenError("Sem acesso a formulário de outra organização")
+        if self.formulario_inexistente:
+            raise NotFoundError(f"Formulário {form_id} não encontrado")
         resultado = [
             q
             for q in self.itens
@@ -78,9 +120,42 @@ def app() -> FastAPI:
     return fastapi_app
 
 
+class _FakeUserService:
+    def __init__(self, access: UserAccess) -> None:
+        self._access = access
+
+    async def get_active_user_access_by_email(self, email: str) -> UserAccess | None:
+        return self._access
+
+
+def autenticar_como(
+    app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+    role: str,
+    organization_id: uuid.UUID = ORGANIZATION_ID,
+) -> None:
+    """Faz o token de teste valer como um usuário ativo com o papel indicado."""
+    email = "dev@creed.example.com"
+
+    async def _fake_validate_token(token: str) -> dict[str, Any]:
+        return {"sub": "sub-dev", "email": email, "realm_access": {"roles": [role]}}
+
+    monkeypatch.setattr("app.shared.authorization.validate_token", _fake_validate_token)
+    access = UserAccess(
+        id=uuid.uuid4(),
+        email=email,
+        role=role,
+        link_id=uuid.uuid4(),
+        organization_id=organization_id,
+    )
+    app.dependency_overrides[get_user_service] = lambda: _FakeUserService(access)
+
+
 @pytest.fixture
-def client(app: FastAPI) -> TestClient:
-    return TestClient(app)
+def client(app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    """Entra como `admin`, com o token em toda requisição."""
+    autenticar_como(app, monkeypatch, "admin")
+    return TestClient(app, headers=TOKEN)
 
 
 def _use_fake_service(app: FastAPI, fake_service: _FakeQuestionService) -> None:
@@ -135,6 +210,19 @@ class TestCriarPergunta:
         response = client.post("/questions", json=_payload())
 
         assert response.status_code == 409
+
+    def test_com_formulario_inexistente_devolve_422_com_detail_texto(
+        self, app: FastAPI, client: TestClient
+    ) -> None:
+        _use_fake_service(app, _FakeQuestionService(formulario_inexistente=True))
+        payload = _payload()
+
+        response = client.post("/questions", json=payload)
+
+        assert response.status_code == 422
+        assert response.json()["detail"] == (
+            f"Formulário {payload['form_id']} não encontrado"
+        )
 
     def test_com_texto_vazio_devolve_422(self, app: FastAPI, client: TestClient) -> None:
         _use_fake_service(app, _FakeQuestionService())
@@ -244,6 +332,15 @@ class TestListarPerguntasDoFormulario:
         assert response.status_code == 200
         assert response.json() == []
 
+    def test_formulario_inexistente_devolve_404(
+        self, app: FastAPI, client: TestClient
+    ) -> None:
+        _use_fake_service(app, _FakeQuestionService(formulario_inexistente=True))
+
+        response = client.get(f"/forms/{uuid.uuid4()}/questions")
+
+        assert response.status_code == 404
+
     def test_filtro_por_secao_devolve_so_as_daquela_secao_em_ordem(
         self, app: FastAPI, client: TestClient
     ) -> None:
@@ -299,3 +396,45 @@ class TestListarPerguntasDoFormulario:
         response = client.get(f"/forms/{uuid.uuid4()}/questions?section=inexistente")
 
         assert response.status_code == 422
+
+
+class TestGuarda:
+    def test_sem_token_criar_e_listar_devolvem_401(self, app: FastAPI) -> None:
+        _use_fake_service(app, _FakeQuestionService())
+        sem_token = TestClient(app)
+
+        assert sem_token.post("/questions", json=_payload()).status_code == 401
+        assert sem_token.get(f"/forms/{uuid.uuid4()}/questions").status_code == 401
+
+    def test_respondente_criando_devolve_403_pela_guarda(
+        self, app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        autenticar_como(app, monkeypatch, "respondente")
+        service = _FakeQuestionService()
+        _use_fake_service(app, service)
+
+        response = client.post("/questions", json=_payload())
+
+        assert response.status_code == 403
+        assert service.quem_pediu is None
+
+    def test_respondente_listando_passa_papel_e_organizacao_ao_service(
+        self, app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        autenticar_como(app, monkeypatch, "respondente")
+        service = _FakeQuestionService()
+        _use_fake_service(app, service)
+
+        response = client.get(f"/forms/{uuid.uuid4()}/questions")
+
+        assert response.status_code == 200
+        assert service.quem_pediu == ("respondente", ORGANIZATION_ID)
+
+    def test_formulario_de_outra_organizacao_devolve_403_nas_duas_rotas(
+        self, app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        autenticar_como(app, monkeypatch, "gestor")
+        _use_fake_service(app, _FakeQuestionService(proibido=True))
+
+        assert client.post("/questions", json=_payload()).status_code == 403
+        assert client.get(f"/forms/{uuid.uuid4()}/questions").status_code == 403

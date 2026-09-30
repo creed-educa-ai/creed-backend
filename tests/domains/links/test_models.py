@@ -37,10 +37,16 @@ class TestLinksTable:
                 f"{column.name}: nullable={column.nullable}, esperado {expected_nullable}"
             )
 
-    def test_has_no_foreign_key(self) -> None:
-        """Organization e Department não têm tabela; a FK de participants fica
-        para a amarração (docstring de `links/models.py`)."""
-        assert Link.__table__.foreign_keys == set()
+    def test_only_participant_id_has_foreign_key(self) -> None:
+        """Organization e Department ainda não têm tabela (CREED-38 e CREED-39)."""
+        fks = {fk.parent.name: fk.target_fullname for fk in Link.__table__.foreign_keys}
+
+        assert fks == {"participant_id": "participants.id"}
+
+    def test_participant_fk_has_the_name_the_migration_uses(self) -> None:
+        fk = next(iter(Link.__table__.c.participant_id.foreign_keys))
+
+        assert fk.name == "fk_links_participant_id_participants"
 
     def test_has_index_on_the_three_reference_columns(self) -> None:
         indexed_columns = {c.name for c in Link.__table__.columns if c.index}

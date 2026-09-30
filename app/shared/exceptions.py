@@ -21,6 +21,14 @@ class ValidationError(DomainError):
     """Regra de negócio violada. Traduzido para 422 no router."""
 
 
+class ForbiddenError(DomainError):
+    """Quem pediu não pode agir sobre este recurso. Traduzido para 403 no router.
+
+    Diferente do 403 de `require_role`: aquele decide pelo papel, antes de chegar
+    ao service; este é regra de negócio (ex.: organização alheia, P-033).
+    """
+
+
 class ConflictError(DomainError):
     """Conflito de estado (ex: duplicidade). Traduzido para 409 no router."""
 

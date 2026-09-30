@@ -51,6 +51,28 @@ class AnswerRepository:
         result = await self.db.execute(select(Answer).where(Answer.id == answer_id))
         return result.scalar_one_or_none()
 
+    async def get_by_form_response_and_question(
+        self, form_response_id: uuid.UUID, question_id: uuid.UUID
+    ) -> Answer | None:
+        """`first()`, não `scalar_one_or_none()`: sem `unique` no banco, uma corrida
+        pode ter gravado duas linhas, e isso não deve virar erro 500 aqui."""
+        result = await self.db.execute(
+            select(Answer).where(
+                Answer.form_response_id == form_response_id,
+                Answer.question_id == question_id,
+            )
+        )
+        return result.scalars().first()
+
+    async def list_by_form_response(self, form_response_id: uuid.UUID) -> list[Answer]:
+        """Em ordem de gravação."""
+        result = await self.db.execute(
+            select(Answer)
+            .where(Answer.form_response_id == form_response_id)
+            .order_by(Answer.created_at)
+        )
+        return list(result.scalars().all())
+
     async def insert(self, answer: Answer) -> Answer:
         """Grava a resposta. O id e o created_at vêm do banco."""
         self.db.add(answer)

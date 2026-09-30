@@ -1,8 +1,9 @@
 """Testes do service do domínio links.
 
-Sem banco e sem HTTP: o repository é substituído por um dublê em memória. Não há
-regra de conflito para provar aqui — o `.dbml` não define unicidade no vínculo —,
-então o que se prova é que o service monta a entidade certa e delega ao repository.
+Sem banco e sem HTTP: o repository e o `ParticipantService` são substituídos por
+dublês em memória. Não há regra de conflito para provar aqui — o `.dbml` não define
+unicidade no vínculo —, então o que se prova é que o service confere o participante,
+monta a entidade certa e delega ao repository.
 """
 
 import uuid
@@ -14,6 +15,8 @@ from pydantic import ValidationError
 from app.domains.links.models import Link, LinkType, Roles
 from app.domains.links.schemas import LinkCreate, LinkResponse
 from app.domains.links.service import LinkService
+from app.shared.exceptions import NotFoundError
+from app.shared.exceptions import ValidationError as DomainValidationError
 
 
 class FakeLinkRepository:
@@ -51,8 +54,30 @@ def make_link(**fields: object) -> Link:
     return Link(**{**defaults, **fields})
 
 
-def service(repository: FakeLinkRepository) -> LinkService:
-    return LinkService(repository)  # type: ignore[arg-type]
+class FakeParticipantService:
+    """Dublê do `ParticipantService`: só responde se o participante existe.
+
+    `existe=False` faz toda consulta levantar `NotFoundError`, como o service real
+    faz para um id que não está no banco.
+    """
+
+    def __init__(self, *, existe: bool = True) -> None:
+        self.existe = existe
+
+    async def get_participant(self, participant_id: uuid.UUID) -> object:
+        if not self.existe:
+            raise NotFoundError(f"Participante {participant_id} não encontrado")
+        return object()
+
+
+def service(
+    repository: FakeLinkRepository,
+    participants: FakeParticipantService | None = None,
+) -> LinkService:
+    return LinkService(
+        repository,  # type: ignore[arg-type]
+        participants or FakeParticipantService(),  # type: ignore[arg-type]
+    )
 
 
 class TestCreateLink:
@@ -94,6 +119,27 @@ class TestCreateLink:
         )
 
         assert created.department_id is None
+
+    async def test_unknown_participant_is_validation_error_and_saves_nothing(
+        self,
+    ) -> None:
+        """O participante veio no corpo: inexistente é 422, não 404 (CREED-47)."""
+        repository = FakeLinkRepository()
+        participant_id = uuid.uuid4()
+
+        with pytest.raises(DomainValidationError, match=str(participant_id)):
+            await service(
+                repository, FakeParticipantService(existe=False)
+            ).create_link_service(
+                uuid.uuid4(),
+                LinkCreate(
+                    participant_id=participant_id,
+                    type=LinkType.EMPREGO,
+                    role=Roles.RESPONDENTE,
+                ),
+            )
+
+        assert repository.items == []
 
 
 class TestGetLink:

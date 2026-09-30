@@ -9,6 +9,7 @@ from typing import Annotated
 from fastapi import Depends
 
 from app.core.database import SessionDep
+from app.domains.forms.dependencies import ServiceDep as FormServiceDep
 from app.domains.questions.repository import QuestionRepository
 from app.domains.questions.service import QuestionService
 
@@ -21,8 +22,9 @@ def get_repository(
 
 def get_service(
     repository: Annotated[QuestionRepository, Depends(get_repository)],
+    forms: FormServiceDep,
 ) -> QuestionService:
-    return QuestionService(repository)
+    return QuestionService(repository, forms)
 
 
 ServiceDep = Annotated[QuestionService, Depends(get_service)]

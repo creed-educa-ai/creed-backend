@@ -3,19 +3,41 @@
 Esta camada é fina de propósito: recebe, valida via Pydantic, delega ao
 service e devolve. Nenhuma regra de negócio aqui, e nenhum import de `models` —
 a montagem da resposta é `FormResponseResponse.de_model()`, em `schemas.py`.
+
+Qualquer papel responde (P-031), então a guarda é só `CurrentUserDep`. O vínculo
+de quem responde vem do login, nunca do corpo.
 """
 
 import uuid
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, HTTPException, Path, status
 
-from app.domains.responses.dependencies import ServiceDep
-from app.domains.responses.schemas import FormResponseCreate, FormResponseResponse
-from app.shared.exceptions import ConflictError, NotFoundError
-from app.shared.schemas import ErrorResponse
+from app.domains.responses.dependencies import AnswerServiceDep, ServiceDep
+from app.domains.responses.schemas import (
+    AnswerCreate,
+    AnswerResponse,
+    FormResponseCreate,
+    FormResponseResponse,
+)
+from app.shared.authorization import CurrentUserDep
+from app.shared.exceptions import (
+    ConflictError,
+    ForbiddenError,
+    NotFoundError,
+    ValidationError,
+)
+from app.shared.schemas import ErrorResponse, ValidationErrorResponse
 
 router = APIRouter(prefix="/form-responses", tags=["form-responses"])
+
+_UNAUTHORIZED: dict[int | str, dict[str, Any]] = {
+    status.HTTP_401_UNAUTHORIZED: {
+        "model": ErrorResponse,
+        "description": "Token ausente, inválido ou expirado.",
+        "content": {"application/json": {"example": {"detail": "Não autenticado"}}},
+    },
+}
 
 
 @router.post(
@@ -24,15 +46,28 @@ router = APIRouter(prefix="/form-responses", tags=["form-responses"])
     status_code=status.HTTP_201_CREATED,
     summary="Iniciar resposta de formulário",
     description=(
-        "Abre uma resposta em andamento para a combinação de formulário e vínculo. "
-        "Cada vínculo pode abrir somente uma resposta por formulário."
+        "Abre uma resposta em andamento para o formulário, com o vínculo de quem "
+        "está logado. Cada vínculo pode abrir somente uma resposta por formulário. "
+        "O formulário precisa já existir e ser da organização do vínculo, "
+        "qualquer que seja o papel. O corpo leva só `form_id`: um `vinculo_id` "
+        "enviado é ignorado, sem erro."
     ),
     response_description="Resposta de formulário criada em andamento.",
     operation_id="create_form_response",
     responses={
+        **_UNAUTHORIZED,
+        status.HTTP_403_FORBIDDEN: {
+            "model": ErrorResponse,
+            "description": "O formulário é de outra organização.",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Sem acesso a formulário de outra organização"}
+                }
+            },
+        },
         status.HTTP_409_CONFLICT: {
             "model": ErrorResponse,
-            "description": "A combinação de formulário e vínculo já possui resposta.",
+            "description": "O vínculo já possui resposta para este formulário.",
             "content": {
                 "application/json": {
                     "example": {
@@ -40,16 +75,41 @@ router = APIRouter(prefix="/form-responses", tags=["form-responses"])
                     }
                 }
             },
-        }
+        },
+        # Dois formatos no mesmo 422: o do service (`detail` texto) e o da
+        # validação do Pydantic (`detail` lista).
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {
+            "model": ErrorResponse | ValidationErrorResponse,
+            "description": (
+                "Formulário inexistente: `detail` é texto. Corpo inválido: "
+                "`detail` é uma lista, um item por campo recusado."
+            ),
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": (
+                            "Formulário 7d94e9bb-25ca-4df9-9c08-d90251dd8d68 "
+                            "não encontrado"
+                        )
+                    }
+                }
+            },
+        },
     },
 )
 async def criar_form_response(
-    dados: FormResponseCreate, service: ServiceDep
+    dados: FormResponseCreate, service: ServiceDep, user: CurrentUserDep
 ) -> FormResponseResponse:
     try:
         form_response = await service.create_form_response(
-            form_id=dados.form_id, vinculo_id=dados.vinculo_id
+            dados.form_id,
+            link_id=user.link_uuid,
+            organization_id=user.organization_uuid,
         )
+    except ValidationError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, exc.message) from exc
+    except ForbiddenError as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, exc.message) from exc
     except ConflictError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, exc.message) from exc
     return FormResponseResponse.de_model(form_response)
@@ -61,11 +121,23 @@ async def criar_form_response(
     summary="Submeter resposta de formulário",
     description=(
         "Finaliza uma resposta em andamento, alterando o status para `submitted` "
-        "e registrando a data de submissão."
+        "e registrando a data de submissão. Só o vínculo que abriu a resposta "
+        "pode submetê-la, e só com todas as perguntas descritivas obrigatórias "
+        "respondidas. Objetivas obrigatórias ainda não são exigidas."
     ),
     response_description="Resposta finalizada com a data de submissão.",
     operation_id="submit_form_response",
     responses={
+        **_UNAUTHORIZED,
+        status.HTTP_403_FORBIDDEN: {
+            "model": ErrorResponse,
+            "description": "A resposta de formulário é de outro vínculo.",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "FormResponse pertence a outro vínculo"}
+                }
+            },
+        },
         status.HTTP_404_NOT_FOUND: {
             "model": ErrorResponse,
             "description": "Resposta de formulário não encontrada.",
@@ -82,6 +154,26 @@ async def criar_form_response(
                 }
             },
         },
+        # Dois formatos no mesmo 422: o do service (`detail` texto) e o da
+        # validação do caminho pelo FastAPI (`detail` lista).
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {
+            "model": ErrorResponse | ValidationErrorResponse,
+            "description": (
+                "Pergunta descritiva obrigatória sem resposta: `detail` é texto e "
+                "cita posição e id de cada uma. Identificador inválido no caminho: "
+                "`detail` é uma lista."
+            ),
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": (
+                            "Perguntas obrigatórias sem resposta: posição 2 "
+                            "(7c1f3f0e-9a52-4a8e-8f0e-2d6f5b1c9a10)"
+                        )
+                    }
+                }
+            },
+        },
     },
 )
 async def submeter_form_response(
@@ -93,11 +185,137 @@ async def submeter_form_response(
         ),
     ],
     service: ServiceDep,
+    user: CurrentUserDep,
 ) -> FormResponseResponse:
     try:
-        form_response = await service.submit_form_response(form_response_id)
+        form_response = await service.submit_form_response(
+            form_response_id, link_id=user.link_uuid
+        )
     except NotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, exc.message) from exc
+    except ForbiddenError as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, exc.message) from exc
     except ConflictError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, exc.message) from exc
+    except ValidationError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, exc.message) from exc
     return FormResponseResponse.de_model(form_response)
+
+
+_FORM_RESPONSE_ID = Path(
+    description="Identificador da resposta de formulário.",
+    examples=["3b1bb89a-471f-48b0-9025-cfda3b20d240"],
+)
+
+_NOT_OWNER: dict[int | str, dict[str, Any]] = {
+    status.HTTP_403_FORBIDDEN: {
+        "model": ErrorResponse,
+        "description": "A resposta de formulário é de outro vínculo.",
+        "content": {
+            "application/json": {
+                "example": {"detail": "FormResponse pertence a outro vínculo"}
+            }
+        },
+    },
+    status.HTTP_404_NOT_FOUND: {
+        "model": ErrorResponse,
+        "description": "Resposta de formulário não encontrada.",
+        "content": {
+            "application/json": {"example": {"detail": "FormResponse não encontrado"}}
+        },
+    },
+}
+
+
+@router.post(
+    "/{form_response_id}/answers",
+    response_model=AnswerResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Gravar resposta de uma pergunta",
+    description=(
+        "Grava o texto de uma pergunta descritiva numa resposta de formulário em "
+        "andamento. Só o vínculo que abriu a resposta grava, e cada pergunta "
+        "recebe uma resposta só. Perguntas objetivas ainda são recusadas."
+    ),
+    response_description="Resposta gravada.",
+    operation_id="record_answer",
+    responses={
+        **_UNAUTHORIZED,
+        **_NOT_OWNER,
+        status.HTTP_409_CONFLICT: {
+            "model": ErrorResponse,
+            "description": (
+                "A resposta de formulário já foi submetida, ou a pergunta já foi "
+                "respondida nela."
+            ),
+            "content": {
+                "application/json": {
+                    "example": {"detail": "A pergunta já foi respondida nesta resposta"}
+                }
+            },
+        },
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {
+            "model": ErrorResponse | ValidationErrorResponse,
+            "description": (
+                "Pergunta inexistente, de outro formulário ou objetiva, texto vazio "
+                "ou alternativa marcada: `detail` é texto. Corpo inválido: `detail` "
+                "é uma lista, um item por campo recusado."
+            ),
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": (
+                            "Respostas a perguntas objetivas chegam com as "
+                            "alternativas (CREED-37)"
+                        )
+                    }
+                }
+            },
+        },
+    },
+)
+async def gravar_answer(
+    form_response_id: Annotated[uuid.UUID, _FORM_RESPONSE_ID],
+    dados: AnswerCreate,
+    service: AnswerServiceDep,
+    user: CurrentUserDep,
+) -> AnswerResponse:
+    try:
+        answer = await service.record(form_response_id, dados, link_id=user.link_uuid)
+    except NotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, exc.message) from exc
+    except ForbiddenError as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, exc.message) from exc
+    except ConflictError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, exc.message) from exc
+    except ValidationError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, exc.message) from exc
+    return AnswerResponse.de_model(answer)
+
+
+@router.get(
+    "/{form_response_id}/answers",
+    response_model=list[AnswerResponse],
+    summary="Listar respostas gravadas",
+    description=(
+        "Lista as respostas gravadas numa resposta de formulário, em ordem de "
+        "gravação. Só o vínculo que abriu a resposta lê, antes ou depois do envio."
+    ),
+    response_description="Respostas gravadas, em ordem de gravação.",
+    operation_id="list_answers",
+    responses={**_UNAUTHORIZED, **_NOT_OWNER},
+)
+async def listar_answers(
+    form_response_id: Annotated[uuid.UUID, _FORM_RESPONSE_ID],
+    service: AnswerServiceDep,
+    user: CurrentUserDep,
+) -> list[AnswerResponse]:
+    try:
+        answers = await service.list_for_form_response(
+            form_response_id, link_id=user.link_uuid
+        )
+    except NotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, exc.message) from exc
+    except ForbiddenError as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, exc.message) from exc
+    return [AnswerResponse.de_model(answer) for answer in answers]
