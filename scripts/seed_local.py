@@ -1,4 +1,5 @@
-"""Seed do ambiente local: põe o usuário de teste do realm na tabela `user`.
+"""Seed do ambiente local: põe o usuário de teste do realm na tabela `user`, e um
+formulário de demonstração para ele responder.
 
 Por que isto existe: depois de o Keycloak aprovar a senha, o login ainda lê o
 usuário no **nosso** banco (decisão D2). Realm com usuário e banco vazio dá 401
@@ -20,10 +21,14 @@ import httpx
 from app import models  # noqa: F401  (registra todas as tabelas; ver app/models.py)
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal
+from app.domains.forms.models import Form, FormStatus
+from app.domains.forms.repository import FormRepository
 from app.domains.links.models import Link, LinkType, Roles
 from app.domains.links.repository import LinkRepository
 from app.domains.participants.models import Participant
 from app.domains.participants.repository import ParticipantRepository
+from app.domains.questions.models import Question, QuestionSection, QuestionType
+from app.domains.questions.repository import QuestionRepository
 from app.domains.users.models import User
 from app.domains.users.repository import UserRepository
 from app.shared.enums import RecordStatus
@@ -40,6 +45,35 @@ LINK_ROLE = Roles.ADMIN
 # com este mesmo id, senão a FK dela não sobe.
 PARTICIPANT_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 ORGANIZATION_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+
+# Formulário de demonstração (CREED-47), na organização do vínculo de dev: é o que
+# o `dev` abre, responde e envia. Fica em rascunho, que já pode ser respondido
+# (P-030). Id fixo pelo mesmo motivo do participante; as perguntas se reconhecem
+# por (formulário, posição), que já é único.
+DEMO_FORM_ID = uuid.UUID("00000000-0000-0000-0000-000000000003")
+DEMO_FORM_NAME = "[Demonstração] Formulário de teste"
+
+# Texto sintético de propósito: o conteúdo do instrumento é da cliente. Uma por
+# seção (P-020), todas descritivas (a objetiva espera a CREED-37). Duas
+# obrigatórias e uma opcional, para o envio ser barrado e depois aceito.
+# A posição é o índice na lista.
+DEMO_QUESTIONS = [
+    (
+        QuestionSection.PROFILE,
+        "[Demonstração] Pergunta de perfil, obrigatória. Escreva qualquer texto.",
+        True,
+    ),
+    (
+        QuestionSection.ASSESSMENT,
+        "[Demonstração] Pergunta de avaliação, obrigatória. Escreva qualquer texto.",
+        True,
+    ),
+    (
+        QuestionSection.CLOSING,
+        "[Demonstração] Pergunta de encerramento, opcional. Pode ficar em branco.",
+        False,
+    ),
+]
 
 
 class SeedError(Exception):
@@ -97,8 +131,12 @@ async def semear() -> None:
 
         # Antes de tudo, inclusive do `return` abaixo: um banco que já tinha o
         # usuário de dev também precisa do participante, senão a revisão
-        # `d53324b9b5a2` recusa o vínculo do seed.
-        if await _ensure_participant(ParticipantRepository(session)):
+        # `d53324b9b5a2` recusa o vínculo do seed. E do formulário de demonstração.
+        criou_participante = await _ensure_participant(ParticipantRepository(session))
+        criou_formulario = await _ensure_demo_form(
+            FormRepository(session), QuestionRepository(session)
+        )
+        if criou_participante or criou_formulario:
             await session.commit()
 
         existente = await users.get_user_by_email(EMAIL)
@@ -152,6 +190,42 @@ async def _ensure_participant(participants: ParticipantRepository) -> bool:
     )
     print(f"participante {PARTICIPANT_ID} criado.")
     return True
+
+
+async def _ensure_demo_form(forms: FormRepository, questions: QuestionRepository) -> bool:
+    """Cria o formulário de demonstração e as perguntas que faltam. Diz se criou."""
+    criou = False
+
+    if await forms.get_by_id(DEMO_FORM_ID) is None:
+        await forms.create(
+            Form(
+                id=DEMO_FORM_ID,
+                name=DEMO_FORM_NAME,
+                organization_id=ORGANIZATION_ID,
+                status=FormStatus.DRAFT,
+            )
+        )
+        criou = True
+
+    for order_index, (section, text, required) in enumerate(DEMO_QUESTIONS):
+        if await questions.get_by_form_and_order(DEMO_FORM_ID, order_index) is not None:
+            continue
+        await questions.insert(
+            Question(
+                form_id=DEMO_FORM_ID,
+                text=text,
+                order_index=order_index,
+                type=QuestionType.DESCRIPTIVE,
+                section=section,
+                required=required,
+                prisma=None,
+            )
+        )
+        criou = True
+
+    situacao = "criado" if criou else "já estava no banco"
+    print(f"formulário de demonstração {DEMO_FORM_ID} {situacao}.")
+    return criou
 
 
 def _new_link() -> Link:
