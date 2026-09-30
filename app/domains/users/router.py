@@ -8,10 +8,11 @@ a montagem da resposta é `UserResponse.de_model()`, em `schemas.py`.
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Path, status
+from fastapi import APIRouter, Depends, HTTPException, Path, status
 
 from app.domains.users.dependencies import ServiceDep
 from app.domains.users.schemas import UserCreate, UserResponse
+from app.shared.authorization import require_role
 from app.shared.exceptions import ConflictError, NotFoundError
 from app.shared.schemas import ErrorResponse
 
@@ -26,11 +27,27 @@ router = APIRouter(prefix="/users", tags=["users"])
     description=(
         "Registra na plataforma um usuário já provisionado no Keycloak, "
         "vinculado a um vínculo existente. O status inicial é ativo, e o "
-        "papel é o do vínculo informado."
+        "papel é o do vínculo informado. Exige o papel admin (P-008): amarrar "
+        "um login a um vínculo decide o acesso de alguém à plataforma."
     ),
     response_description="Usuário criado na plataforma.",
     operation_id="create_user",
+    dependencies=[Depends(require_role("admin"))],
     responses={
+        status.HTTP_401_UNAUTHORIZED: {
+            "model": ErrorResponse,
+            "description": "Token ausente, inválido ou expirado.",
+            "content": {"application/json": {"example": {"detail": "Não autenticado"}}},
+        },
+        status.HTTP_403_FORBIDDEN: {
+            "model": ErrorResponse,
+            "description": "O usuário autenticado não tem o papel admin.",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Cargo insuficiente para acessar"}
+                }
+            },
+        },
         status.HTTP_404_NOT_FOUND: {
             "model": ErrorResponse,
             "description": "O vínculo informado não existe.",
