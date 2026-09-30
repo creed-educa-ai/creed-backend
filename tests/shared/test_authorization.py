@@ -352,19 +352,21 @@ def test_user_without_an_active_account_returns_401(
 
 
 class TestVinculoDoUsuarioConferido:
-    """`role` e `organization_uuid` são o que os routers passam aos services."""
+    """`role`, `link_uuid` e `organization_uuid` são o que os routers passam aos
+    services."""
 
-    def test_conferido_expoe_papel_e_organizacao_como_uuid(self) -> None:
-        organization_id = uuid.uuid4()
+    def test_conferido_expoe_papel_vinculo_e_organizacao_como_uuid(self) -> None:
+        link_id, organization_id = uuid.uuid4(), uuid.uuid4()
         user = AuthenticatedUser(
             sub=str(uuid.uuid4()),
             email="dev@creed.example.com",
             roles=["gestor"],
-            link_id=str(uuid.uuid4()),
+            link_id=str(link_id),
             organization_id=str(organization_id),
         )
 
         assert user.role == "gestor"
+        assert user.link_uuid == link_id
         assert user.organization_uuid == organization_id
 
     def test_identidade_so_do_token_nao_expoe_o_vinculo(self) -> None:
@@ -375,5 +377,7 @@ class TestVinculoDoUsuarioConferido:
 
         with pytest.raises(RuntimeError):
             _ = user.role
+        with pytest.raises(RuntimeError):
+            _ = user.link_uuid
         with pytest.raises(RuntimeError):
             _ = user.organization_uuid

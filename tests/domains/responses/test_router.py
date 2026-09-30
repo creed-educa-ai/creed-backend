@@ -1,77 +1,275 @@
-"""Testes de contrato HTTP do domínio responses."""
+"""Testes de contrato HTTP do domínio responses — contrato HTTP e guarda.
+
+A guarda roda de verdade: só o `validate_token` e o `UserService` são dublês, como
+em `tests/domains/participants/test_router.py`. O `client` padrão entra como
+`respondente`, com o vínculo `LINK_ID`; os testes de token trocam isso
+explicitamente.
+
+A regra de dono e de organização é provada em test_service.py. Aqui se prova que
+o vínculo chega do login ao service e que cada erro vira o status documentado.
+"""
 
 import uuid
+from datetime import UTC, datetime
+from typing import Any
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.domains.responses.dependencies import get_service
+from app.domains.responses.models import FormResponse, FormResponseStatus
 from app.domains.responses.router import router
-from app.domains.responses.schemas import FormResponseCreate
-from app.shared.exceptions import ConflictError, ValidationError
+from app.domains.users.dependencies import get_service as get_user_service
+from app.domains.users.service import UserAccess
+from app.shared.exceptions import (
+    ConflictError,
+    ForbiddenError,
+    NotFoundError,
+    ValidationError,
+)
+
+ORGANIZATION_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+LINK_ID = uuid.UUID("00000000-0000-0000-0000-0000000000aa")
+TOKEN = {"Authorization": "Bearer valido"}
 
 
-class _ConflictingService:
+class _FakeFormResponseService:
+    """Dublê do service: guarda as respostas abertas e registra quem pediu.
+
+    `recusar` faz `create_form_response` levantar o erro dado, sem gravar. O
+    `submit_form_response` recusa com `ForbiddenError` a resposta de outro
+    vínculo, como o service real; a ordem das conferências é provada em
+    test_service.py.
+    """
+
+    def __init__(
+        self,
+        existentes: list[FormResponse] | None = None,
+        *,
+        recusar: Exception | None = None,
+    ) -> None:
+        self.itens = {fr.id: fr for fr in existentes or []}
+        self.recusar = recusar
+        self.quem_pediu: tuple[uuid.UUID, uuid.UUID] | None = None
+
     async def create_form_response(
         self,
         form_id: uuid.UUID,
-        vinculo_id: uuid.UUID,
-    ) -> None:
-        raise ConflictError(
-            f"Já existe uma resposta para o formulário {form_id} e vínculo {vinculo_id}"
-        )
+        *,
+        link_id: uuid.UUID,
+        organization_id: uuid.UUID,
+    ) -> FormResponse:
+        self.quem_pediu = (link_id, organization_id)
+        if self.recusar is not None:
+            raise self.recusar
+        form_response = um_form_response(form_id=form_id, vinculo_id=link_id)
+        self.itens[form_response.id] = form_response
+        return form_response
 
-    async def submit_form_response(self, form_response_id: uuid.UUID) -> None:
-        raise ConflictError(f"FormResponse {form_response_id} já foi submetido")
+    async def submit_form_response(
+        self, form_response_id: uuid.UUID, *, link_id: uuid.UUID
+    ) -> FormResponse:
+        form_response = self.itens.get(form_response_id)
+        if form_response is None:
+            raise NotFoundError(f"FormResponse {form_response_id} não encontrado")
+        if form_response.vinculo_id != link_id:
+            raise ForbiddenError(
+                f"FormResponse {form_response_id} pertence a outro vínculo"
+            )
+        if form_response.status is not FormResponseStatus.IN_PROGRESS:
+            raise ConflictError(f"FormResponse {form_response_id} já foi submetido")
+        form_response.status = FormResponseStatus.SUBMITTED
+        form_response.submitted_at = datetime(2026, 9, 30, tzinfo=UTC)
+        return form_response
 
 
-class _UnknownFormService:
-    async def create_form_response(
-        self,
-        form_id: uuid.UUID,
-        vinculo_id: uuid.UUID,
-    ) -> None:
-        raise ValidationError(f"Formulário {form_id} não encontrado")
+def um_form_response(**campos: object) -> FormResponse:
+    """FormResponse montado à mão, com todo campo explícito."""
+    padrao: dict[str, object] = {
+        "id": uuid.uuid4(),
+        "form_id": uuid.uuid4(),
+        "vinculo_id": LINK_ID,
+        "status": FormResponseStatus.IN_PROGRESS,
+        "started_at": datetime(2026, 9, 30, tzinfo=UTC),
+        "submitted_at": None,
+    }
+    return FormResponse(**{**padrao, **campos})
+
+
+class _FakeUserService:
+    def __init__(self, access: UserAccess) -> None:
+        self._access = access
+
+    async def get_active_user_access_by_email(self, email: str) -> UserAccess | None:
+        return self._access
+
+
+def autenticar_como(
+    app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+    role: str,
+    link_id: uuid.UUID = LINK_ID,
+) -> None:
+    """Faz o token de teste valer como um usuário ativo com o papel e o vínculo."""
+    email = "dev@creed.example.com"
+
+    async def _fake_validate_token(token: str) -> dict[str, Any]:
+        return {"sub": "sub-dev", "email": email, "realm_access": {"roles": [role]}}
+
+    monkeypatch.setattr("app.shared.authorization.validate_token", _fake_validate_token)
+    access = UserAccess(
+        id=uuid.uuid4(),
+        email=email,
+        role=role,
+        link_id=link_id,
+        organization_id=ORGANIZATION_ID,
+    )
+    app.dependency_overrides[get_user_service] = lambda: _FakeUserService(access)
 
 
 @pytest.fixture
-def client() -> TestClient:
+def app() -> FastAPI:
     fastapi_app = FastAPI()
     fastapi_app.include_router(router)
-    fastapi_app.dependency_overrides[get_service] = lambda: _ConflictingService()
-    return TestClient(fastapi_app)
+    return fastapi_app
 
 
-def test_create_existing_form_response_returns_documented_409(
-    client: TestClient,
-) -> None:
-    data = FormResponseCreate(form_id=uuid.uuid4(), vinculo_id=uuid.uuid4())
-
-    response = client.post("/form-responses", json=data.model_dump(mode="json"))
-
-    assert response.status_code == 409
-    assert response.json()["detail"].startswith("Já existe uma resposta")
+@pytest.fixture
+def client(app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    """Entra como `respondente`, com o token em toda requisição."""
+    autenticar_como(app, monkeypatch, "respondente")
+    return TestClient(app, headers=TOKEN)
 
 
-def test_submit_already_submitted_form_response_returns_documented_409(
-    client: TestClient,
-) -> None:
-    response = client.patch(f"/form-responses/{uuid.uuid4()}")
-
-    assert response.status_code == 409
-    assert response.json()["detail"].endswith("já foi submetido")
+def _use_fake_service(app: FastAPI, fake_service: _FakeFormResponseService) -> None:
+    app.dependency_overrides[get_service] = lambda: fake_service
 
 
-def test_create_with_unknown_form_returns_422_with_text_detail() -> None:
-    fastapi_app = FastAPI()
-    fastapi_app.include_router(router)
-    fastapi_app.dependency_overrides[get_service] = lambda: _UnknownFormService()
-    data = FormResponseCreate(form_id=uuid.uuid4(), vinculo_id=uuid.uuid4())
+class TestIniciarResposta:
+    def test_devolve_201_com_o_vinculo_do_login(
+        self, app: FastAPI, client: TestClient
+    ) -> None:
+        fake = _FakeFormResponseService()
+        _use_fake_service(app, fake)
+        form_id = uuid.uuid4()
 
-    response = TestClient(fastapi_app).post(
-        "/form-responses", json=data.model_dump(mode="json")
-    )
+        response = client.post("/form-responses", json={"form_id": str(form_id)})
 
-    assert response.status_code == 422
-    assert response.json()["detail"] == f"Formulário {data.form_id} não encontrado"
+        assert response.status_code == 201
+        assert response.json()["form_id"] == str(form_id)
+        assert response.json()["vinculo_id"] == str(LINK_ID)
+        assert fake.quem_pediu == (LINK_ID, ORGANIZATION_ID)
+
+    def test_vinculo_id_no_corpo_e_ignorado(
+        self, app: FastAPI, client: TestClient
+    ) -> None:
+        _use_fake_service(app, _FakeFormResponseService())
+        payload = {"form_id": str(uuid.uuid4()), "vinculo_id": str(uuid.uuid4())}
+
+        response = client.post("/form-responses", json=payload)
+
+        assert response.status_code == 201
+        assert response.json()["vinculo_id"] == str(LINK_ID)
+
+    def test_formulario_de_outra_organizacao_devolve_403(
+        self, app: FastAPI, client: TestClient
+    ) -> None:
+        _use_fake_service(
+            app,
+            _FakeFormResponseService(
+                recusar=ForbiddenError("Sem acesso a formulário de outra organização")
+            ),
+        )
+
+        response = client.post("/form-responses", json={"form_id": str(uuid.uuid4())})
+
+        assert response.status_code == 403
+
+    def test_resposta_ja_aberta_devolve_409(
+        self, app: FastAPI, client: TestClient
+    ) -> None:
+        _use_fake_service(
+            app,
+            _FakeFormResponseService(
+                recusar=ConflictError("Já existe uma resposta para o formulário")
+            ),
+        )
+
+        response = client.post("/form-responses", json={"form_id": str(uuid.uuid4())})
+
+        assert response.status_code == 409
+        assert response.json()["detail"].startswith("Já existe uma resposta")
+
+    def test_formulario_inexistente_devolve_422_com_detail_texto(
+        self, app: FastAPI, client: TestClient
+    ) -> None:
+        form_id = uuid.uuid4()
+        _use_fake_service(
+            app,
+            _FakeFormResponseService(
+                recusar=ValidationError(f"Formulário {form_id} não encontrado")
+            ),
+        )
+
+        response = client.post("/form-responses", json={"form_id": str(form_id)})
+
+        assert response.status_code == 422
+        assert response.json()["detail"] == f"Formulário {form_id} não encontrado"
+
+    def test_sem_token_devolve_401(self, app: FastAPI) -> None:
+        _use_fake_service(app, _FakeFormResponseService())
+
+        response = TestClient(app).post(
+            "/form-responses", json={"form_id": str(uuid.uuid4())}
+        )
+
+        assert response.status_code == 401
+
+
+class TestSubmeterResposta:
+    def test_a_propria_devolve_200_submetida(
+        self, app: FastAPI, client: TestClient
+    ) -> None:
+        propria = um_form_response()
+        _use_fake_service(app, _FakeFormResponseService([propria]))
+
+        response = client.patch(f"/form-responses/{propria.id}")
+
+        assert response.status_code == 200
+        assert response.json()["status"] == "submitted"
+
+    def test_a_de_outro_vinculo_devolve_403(
+        self, app: FastAPI, client: TestClient
+    ) -> None:
+        alheia = um_form_response(vinculo_id=uuid.uuid4())
+        _use_fake_service(app, _FakeFormResponseService([alheia]))
+
+        response = client.patch(f"/form-responses/{alheia.id}")
+
+        assert response.status_code == 403
+        assert alheia.status is FormResponseStatus.IN_PROGRESS
+
+    def test_ja_submetida_devolve_409(self, app: FastAPI, client: TestClient) -> None:
+        submetida = um_form_response(status=FormResponseStatus.SUBMITTED)
+        _use_fake_service(app, _FakeFormResponseService([submetida]))
+
+        response = client.patch(f"/form-responses/{submetida.id}")
+
+        assert response.status_code == 409
+        assert response.json()["detail"].endswith("já foi submetido")
+
+    def test_inexistente_devolve_404(self, app: FastAPI, client: TestClient) -> None:
+        _use_fake_service(app, _FakeFormResponseService())
+
+        response = client.patch(f"/form-responses/{uuid.uuid4()}")
+
+        assert response.status_code == 404
+
+    def test_sem_token_devolve_401(self, app: FastAPI) -> None:
+        propria = um_form_response()
+        _use_fake_service(app, _FakeFormResponseService([propria]))
+
+        response = TestClient(app).patch(f"/form-responses/{propria.id}")
+
+        assert response.status_code == 401

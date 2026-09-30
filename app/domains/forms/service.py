@@ -4,8 +4,9 @@ Esta camada não conhece HTTP nem detalhes de ORM. É onde a lógica vive,
 isolada e testável.
 
 O formulário pertence a uma organização, e é aqui que mora a regra de quem age
-em qual organização (P-033). `questions` e `responses` a usam pela composição
-(`check_organization`), em vez de repetir a comparação.
+em qual organização. `questions` (`check_organization`, P-033) e `responses`
+(`check_same_organization`, P-031) a usam pela composição, em vez de repetir a
+comparação.
 """
 
 import uuid
@@ -72,3 +73,14 @@ class FormService:
             return
 
         raise ForbiddenError("Sem acesso a formulário de outra organização")
+
+    def check_same_organization(
+        self, form_organization_id: uuid.UUID, *, organization_id: uuid.UUID
+    ) -> None:
+        """Como `check_organization`, mas sem exceção para o `admin`.
+
+        É a regra de quem responde (P-031): a resposta sai com o vínculo do login,
+        e o vínculo tem uma organização só, qualquer que seja o papel.
+        """
+        if form_organization_id != organization_id:
+            raise ForbiddenError("Sem acesso a formulário de outra organização")

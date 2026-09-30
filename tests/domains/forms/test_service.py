@@ -1,7 +1,8 @@
 """Testes do service do domínio forms.
 
 Inclui a regra de organização (P-033): o `admin` age em qualquer organização,
-`gestor` e `respondente` só na do próprio vínculo.
+`gestor` e `respondente` só na do próprio vínculo. E a de quem responde (P-031):
+só na própria organização, qualquer que seja o papel.
 """
 
 import uuid
@@ -155,6 +156,23 @@ class TestBuscarFormularioParaQuemPede:
         with pytest.raises(NotFoundError):
             await servico(repository).get_for_user(
                 uuid.uuid4(), role="gestor", organization_id=uuid.uuid4()
+            )
+
+
+class TestConferirMesmaOrganizacao:
+    """A regra de quem responde (P-031): sem exceção para o `admin`."""
+
+    def test_mesma_organizacao_passa(self) -> None:
+        organization_id = uuid.uuid4()
+
+        servico(FakeFormRepository()).check_same_organization(
+            organization_id, organization_id=organization_id
+        )
+
+    def test_outra_organizacao_vira_forbidden(self) -> None:
+        with pytest.raises(ForbiddenError):
+            servico(FakeFormRepository()).check_same_organization(
+                uuid.uuid4(), organization_id=uuid.uuid4()
             )
 
 

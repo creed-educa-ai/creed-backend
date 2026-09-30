@@ -6,13 +6,22 @@ Sem banco e sem HTTP: o repository é substituído por um dublê em memória
 
 import uuid
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import pytest
 
 from app.domains.responses.models import Answer, FormResponse, FormResponseStatus
 from app.domains.responses.schemas import AnswerCreate
 from app.domains.responses.service import AnswerService, FormResponseService
-from app.shared.exceptions import NotFoundError, ValidationError
+from app.shared.exceptions import (
+    ConflictError,
+    ForbiddenError,
+    NotFoundError,
+    ValidationError,
+)
+
+ORG_A = uuid.UUID("00000000-0000-0000-0000-00000000000a")
+ORG_B = uuid.UUID("00000000-0000-0000-0000-00000000000b")
 
 
 class FakeFormResponseRepository:
@@ -62,19 +71,27 @@ def um_form_response(**campos: object) -> FormResponse:
 
 
 class FakeFormService:
-    """Dublê do `FormService`: só responde se o formulário existe.
+    """Dublê do `FormService`: formulários conhecidos, cada um da sua organização.
 
-    `existe=False` faz toda consulta levantar `NotFoundError`, como o service
-    real faz para um id que não está no banco.
+    Formulário fora de `formularios` levanta `NotFoundError`, como o service real
+    faz para um id que não está no banco. Só existe `check_same_organization`: se
+    o service chamasse a `check_organization`, que libera o `admin`, o teste
+    quebraria. A regra em si é provada em tests/domains/forms.
     """
 
-    def __init__(self, *, existe: bool = True) -> None:
-        self.existe = existe
+    def __init__(self, formularios: dict[uuid.UUID, uuid.UUID] | None = None) -> None:
+        self.formularios = formularios or {}
 
-    async def get(self, form_id: uuid.UUID) -> object:
-        if not self.existe:
+    async def get(self, form_id: uuid.UUID) -> SimpleNamespace:
+        if form_id not in self.formularios:
             raise NotFoundError(f"Formulário {form_id} não encontrado")
-        return object()
+        return SimpleNamespace(id=form_id, organization_id=self.formularios[form_id])
+
+    def check_same_organization(
+        self, form_organization_id: uuid.UUID, *, organization_id: uuid.UUID
+    ) -> None:
+        if form_organization_id != organization_id:
+            raise ForbiddenError("Sem acesso a formulário de outra organização")
 
 
 def servico(
@@ -92,7 +109,9 @@ class TestSubmitFormResponse:
         repository = FakeFormResponseRepository([form_response])
 
         antes = datetime.now(UTC)
-        resultado = await servico(repository).submit_form_response(form_response.id)
+        resultado = await servico(repository).submit_form_response(
+            form_response.id, link_id=form_response.vinculo_id
+        )
         depois = datetime.now(UTC)
 
         assert resultado.status == FormResponseStatus.SUBMITTED
@@ -103,21 +122,56 @@ class TestSubmitFormResponse:
         repository = FakeFormResponseRepository()
 
         with pytest.raises(NotFoundError):
-            await servico(repository).submit_form_response(uuid.uuid4())
+            await servico(repository).submit_form_response(
+                uuid.uuid4(), link_id=uuid.uuid4()
+            )
+
+    async def test_de_outro_vinculo_vira_forbidden_sem_submeter(self) -> None:
+        form_response = um_form_response()
+        repository = FakeFormResponseRepository([form_response])
+
+        with pytest.raises(ForbiddenError):
+            await servico(repository).submit_form_response(
+                form_response.id, link_id=uuid.uuid4()
+            )
+
+        assert form_response.status is FormResponseStatus.IN_PROGRESS
+        assert form_response.submitted_at is None
+
+    async def test_de_outro_vinculo_ja_submetida_vira_forbidden_antes_do_conflito(
+        self,
+    ) -> None:
+        """403 antes de 409: quem não é dono não descobre o estado da resposta."""
+        form_response = um_form_response(status=FormResponseStatus.SUBMITTED)
+        repository = FakeFormResponseRepository([form_response])
+
+        with pytest.raises(ForbiddenError):
+            await servico(repository).submit_form_response(
+                form_response.id, link_id=uuid.uuid4()
+            )
+
+    async def test_do_dono_ja_submetida_vira_conflict(self) -> None:
+        form_response = um_form_response(status=FormResponseStatus.SUBMITTED)
+        repository = FakeFormResponseRepository([form_response])
+
+        with pytest.raises(ConflictError):
+            await servico(repository).submit_form_response(
+                form_response.id, link_id=form_response.vinculo_id
+            )
 
 
 class TestCreateFormResponse:
-    async def test_nasce_em_progresso_com_os_ids_do_payload(self) -> None:
+    async def test_nasce_em_progresso_com_o_vinculo_do_login(self) -> None:
         repository = FakeFormResponseRepository()
-        form_id, vinculo_id = uuid.uuid4(), uuid.uuid4()
+        form_id, link_id = uuid.uuid4(), uuid.uuid4()
+        forms = FakeFormService({form_id: ORG_A})
 
-        resultado = await servico(repository).create_form_response(
-            form_id=form_id,
-            vinculo_id=vinculo_id,
+        resultado = await servico(repository, forms).create_form_response(
+            form_id, link_id=link_id, organization_id=ORG_A
         )
 
         assert resultado.form_id == form_id
-        assert resultado.vinculo_id == vinculo_id
+        assert resultado.vinculo_id == link_id
         assert resultado.status == FormResponseStatus.IN_PROGRESS
         assert resultado.submitted_at is None
 
@@ -129,11 +183,38 @@ class TestCreateFormResponse:
         form_id = uuid.uuid4()
 
         with pytest.raises(ValidationError, match=str(form_id)):
-            await servico(repository, FakeFormService(existe=False)).create_form_response(
-                form_id=form_id, vinculo_id=uuid.uuid4()
+            await servico(repository).create_form_response(
+                form_id, link_id=uuid.uuid4(), organization_id=ORG_A
             )
 
         assert repository.itens == []
+
+    async def test_formulario_de_outra_organizacao_vira_forbidden_sem_gravar(
+        self,
+    ) -> None:
+        """Vale para qualquer papel: o service nem recebe o papel (P-031)."""
+        repository = FakeFormResponseRepository()
+        form_id = uuid.uuid4()
+        forms = FakeFormService({form_id: ORG_B})
+
+        with pytest.raises(ForbiddenError):
+            await servico(repository, forms).create_form_response(
+                form_id, link_id=uuid.uuid4(), organization_id=ORG_A
+            )
+
+        assert repository.itens == []
+
+    async def test_segunda_resposta_do_mesmo_vinculo_vira_conflict(self) -> None:
+        form_id, link_id = uuid.uuid4(), uuid.uuid4()
+        repository = FakeFormResponseRepository(
+            [um_form_response(form_id=form_id, vinculo_id=link_id)]
+        )
+        forms = FakeFormService({form_id: ORG_A})
+
+        with pytest.raises(ConflictError):
+            await servico(repository, forms).create_form_response(
+                form_id, link_id=link_id, organization_id=ORG_A
+            )
 
 
 class FakeAnswerRepository:

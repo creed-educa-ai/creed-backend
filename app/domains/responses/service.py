@@ -2,7 +2,8 @@
 
 Esta camada não conhece HTTP nem detalhes de ORM. É onde ficam
 as regras próprias das entidades FormResponse e Answer. Formulário é de
-outro domínio: a pergunta "ele existe?" vai ao `FormService` (CREED-47).
+outro domínio: a pergunta "ele existe?" e a conferência de organização vão ao
+`FormService` (CREED-47).
 """
 
 import uuid
@@ -12,7 +13,12 @@ from app.domains.forms.service import FormService
 from app.domains.responses.models import Answer, FormResponse, FormResponseStatus
 from app.domains.responses.repository import AnswerRepository, FormResponseRepository
 from app.domains.responses.schemas import AnswerCreate
-from app.shared.exceptions import ConflictError, NotFoundError, ValidationError
+from app.shared.exceptions import (
+    ConflictError,
+    ForbiddenError,
+    NotFoundError,
+    ValidationError,
+)
 
 
 class FormResponseService:
@@ -23,28 +29,39 @@ class FormResponseService:
     async def create_form_response(
         self,
         form_id: uuid.UUID,
-        vinculo_id: uuid.UUID,
+        *,
+        link_id: uuid.UUID,
+        organization_id: uuid.UUID,
     ) -> FormResponse:
+        """`link_id` e `organization_id` são do vínculo de quem está logado.
+
+        🟡 Premissa P-031 — qualquer papel responde, sempre com o próprio vínculo,
+        e só formulário da própria organização (inclusive o `admin`).
+        Confirmar na próxima reunião.
+
+        🟡 Premissa P-030 — o status do formulário não é conferido: um formulário
+        em `draft` pode ser respondido enquanto não houver transição de status.
+        """
         # O formulário veio no corpo: inexistente é 422, não 404 (CREED-47, item 11).
         try:
-            await self.forms.get(form_id)
+            form = await self.forms.get(form_id)
         except NotFoundError as exc:
             raise ValidationError(exc.message) from exc
 
-        existing = await self.repository.get_by_form_and_vinculo(
-            form_id,
-            vinculo_id,
+        self.forms.check_same_organization(
+            form.organization_id, organization_id=organization_id
         )
+
+        existing = await self.repository.get_by_form_and_vinculo(form_id, link_id)
 
         if existing is not None:
             raise ConflictError(
-                f"Já existe uma resposta para o formulário {form_id} "
-                f"e vínculo {vinculo_id}"
+                f"Já existe uma resposta para o formulário {form_id} e vínculo {link_id}"
             )
 
         form_response = FormResponse(
             form_id=form_id,
-            vinculo_id=vinculo_id,
+            vinculo_id=link_id,
             status=FormResponseStatus.IN_PROGRESS,
         )
 
@@ -53,11 +70,19 @@ class FormResponseService:
     async def submit_form_response(
         self,
         form_response_id: uuid.UUID,
+        *,
+        link_id: uuid.UUID,
     ) -> FormResponse:
+        """Só o dono envia: a resposta de outro vínculo levanta `ForbiddenError`."""
         form_response = await self.repository.get_by_id(form_response_id)
 
         if form_response is None:
             raise NotFoundError(f"FormResponse {form_response_id} não encontrado")
+
+        if form_response.vinculo_id != link_id:
+            raise ForbiddenError(
+                f"FormResponse {form_response_id} pertence a outro vínculo"
+            )
 
         if form_response.status is not FormResponseStatus.IN_PROGRESS:
             raise ConflictError(f"FormResponse {form_response_id} já foi submetido")

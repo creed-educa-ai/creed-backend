@@ -16,26 +16,17 @@ from app.domains.responses.models import Answer, FormResponse, FormResponseStatu
 
 
 class FormResponseCreate(BaseModel):
-    """Payload de criação."""
+    """Payload de criação. O vínculo não vem aqui: é o do login (CREED-47)."""
 
     model_config = ConfigDict(
         json_schema_extra={
-            "examples": [
-                {
-                    "form_id": "7d94e9bb-25ca-4df9-9c08-d90251dd8d68",
-                    "vinculo_id": "2956a8ec-b76d-4398-99af-f4bba109ccba",
-                }
-            ]
+            "examples": [{"form_id": "7d94e9bb-25ca-4df9-9c08-d90251dd8d68"}]
         }
     )
 
     form_id: uuid.UUID = Field(
         description="Identificador do formulário que será respondido.",
         examples=["7d94e9bb-25ca-4df9-9c08-d90251dd8d68"],
-    )
-    vinculo_id: uuid.UUID = Field(
-        description="Identificador do vínculo responsável pela resposta.",
-        examples=["2956a8ec-b76d-4398-99af-f4bba109ccba"],
     )
 
 

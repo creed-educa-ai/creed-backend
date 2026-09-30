@@ -57,16 +57,23 @@ class AuthenticatedUser:
         Antes dela (`_identity_from_token`) `roles` são as do token, que podem ser
         várias ou nenhuma: por isso levanta em vez de escolher uma.
         """
-        self._checked_organization_id()
+        self._checked_link()
         return self.roles[0]
+
+    @property
+    def link_uuid(self) -> uuid.UUID:
+        """O vínculo do login, como `uuid.UUID`, para os services."""
+        link_id, _ = self._checked_link()
+        return uuid.UUID(link_id)
 
     @property
     def organization_uuid(self) -> uuid.UUID:
         """A organização do vínculo, como `uuid.UUID`, para os services."""
-        return uuid.UUID(self._checked_organization_id())
+        _, organization_id = self._checked_link()
+        return uuid.UUID(organization_id)
 
-    def _checked_organization_id(self) -> str:
-        """A organização, se a identidade já passou pela conferência no banco.
+    def _checked_link(self) -> tuple[str, str]:
+        """Vínculo e organização, se a identidade já passou pela conferência no banco.
 
         Só `_check_against_database` preenche `link_id` e `organization_id`.
         """
@@ -75,7 +82,7 @@ class AuthenticatedUser:
                 "Identidade ainda não conferida no banco: use a guarda "
                 "(`require_role` ou `CurrentUserDep`) antes de ler o vínculo."
             )
-        return self.organization_id
+        return self.link_id, self.organization_id
 
 
 def _extract_token(credentials: HTTPAuthorizationCredentials | None) -> str:
