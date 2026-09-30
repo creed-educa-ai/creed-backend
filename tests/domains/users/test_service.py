@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 import pytest
 
 from app.domains.links.models import Link, LinkType, Roles
-from app.domains.users.models import User, UserRole
+from app.domains.users.models import User
 from app.domains.users.schemas import UserCreate, UserResponse
 from app.domains.users.service import UserService
 from app.shared.enums import RecordStatus
@@ -78,9 +78,7 @@ def um_user(**campos: object) -> User:
     Todo campo vai explícito: `default` e `server_default` só são aplicados no
     INSERT, então um User que nunca passou pela sessão tem `None` neles.
 
-    `link_id` vem preenchido por padrão: é o caso comum a partir da
-    CREED-32. `role` continua no padrão só porque a coluna ainda é `NOT NULL`
-    — ninguém mais lê o valor.
+    `link_id` vem preenchido por padrão: a coluna é `NOT NULL`.
     """
     padrao: dict[str, object] = {
         "id": uuid.uuid4(),
@@ -88,7 +86,6 @@ def um_user(**campos: object) -> User:
         "name": "Naira Libermann",
         "email": "naira@pucrs.br",
         "status": RecordStatus.ACTIVE,
-        "role": UserRole.RESPONDENTE,
         "link_id": uuid.uuid4(),
         "created_at": datetime(2026, 9, 13, tzinfo=UTC),
     }
@@ -123,24 +120,6 @@ class TestCriarUsuario:
         assert created.role == "gestor"
         assert created.organization_id == link.organization_id
         assert repository.itens == [created.user]
-
-    async def test_does_not_pass_role_and_output_uses_link_role(self) -> None:
-        """`role` não vai no construtor do `User`: quem responde é o vínculo."""
-        link = make_link(role=Roles.ADMIN)
-        repository = FakeUserRepository()
-
-        created = await servico(repository, FakeLinkService([link])).create_user_service(
-            UserCreate(
-                name="Naira Libermann",
-                email="naira@pucrs.br",
-                keycloak_id=uuid.uuid4(),
-                link_id=link.id,
-            )
-        )
-
-        # A coluna não recebe o papel do vínculo; só a saída o carrega.
-        assert created.user.role is not UserRole.ADMIN
-        assert created.role == "admin"
 
     async def test_nasce_ativo(self) -> None:
         """P-013 — se isto virar `inactive`, o primeiro login para de funcionar."""
@@ -229,9 +208,9 @@ class TestRemoverUsuario:
 class TestGetActiveUserAccessByEmail:
     """O método que a task 5 usa na guarda e no login."""
 
-    async def test_returns_link_role_even_when_column_diverges(self) -> None:
+    async def test_returns_role_and_organization_from_link(self) -> None:
         link = make_link(role=Roles.ADMIN)
-        user = um_user(role=UserRole.RESPONDENTE, link_id=link.id)
+        user = um_user(link_id=link.id)
         repository = FakeUserRepository([user])
 
         access = await servico(
@@ -259,14 +238,6 @@ class TestGetActiveUserAccessByEmail:
         access = await servico(
             repository, FakeLinkService([make_link(id=user.link_id)])
         ).get_active_user_access_by_email(user.email)
-
-        assert access is None
-
-    async def test_user_without_link_returns_none(self) -> None:
-        user = um_user(link_id=None)
-        repository = FakeUserRepository([user])
-
-        access = await servico(repository).get_active_user_access_by_email(user.email)
 
         assert access is None
 

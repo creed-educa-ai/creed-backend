@@ -22,17 +22,14 @@ from app.core.config import settings
 from app.core.database import AsyncSessionLocal
 from app.domains.links.models import Link, LinkType, Roles
 from app.domains.links.repository import LinkRepository
-from app.domains.users.models import User, UserRole
+from app.domains.users.models import User
 from app.domains.users.repository import UserRepository
 from app.shared.enums import RecordStatus
 
 EMAIL = "dev@creed.example.com"
 NAME = "Dev CREED"
 
-# A partir da CREED-32 o papel de acesso é o do vínculo, não mais o da coluna
-# `user.role`. `USER_ROLE_COLUMN` só existe porque a coluna continua `NOT NULL`
-# até a task 6 — ninguém lê o valor.
-USER_ROLE_COLUMN = UserRole.RESPONDENTE
+# O papel de acesso é o do vínculo (CREED-32): `user` não guarda papel.
 LINK_ROLE = Roles.ADMIN
 
 # Órfãos até a amarração: `Organization` ainda não tem tabela, e `participants`
@@ -98,6 +95,17 @@ async def semear() -> None:
         existente = await users.get_user_by_email(EMAIL)
 
         if existente is not None:
+            # Com `user.link_id` NOT NULL o vínculo sempre existe — mas num banco
+            # ainda em `87beb54d929a`, que é onde a revisão `28e9a13197f4` para, o
+            # usuário pode estar sem ele. O seed não liga mais usuário a vínculo,
+            # então falha em vez de dizer que está tudo certo.
+            if await links.get_by_id(existente.link_id) is None:
+                raise SeedError(
+                    f"{EMAIL} está no banco sem vínculo: o schema ainda é o de antes "
+                    "da CREED-32/task 6. Rode `alembic upgrade head`, siga a "
+                    "mensagem dela e depois rode este seed de novo."
+                )
+
             # Idempotente: rodar de novo depois de um `down -v` só reata o
             # usuário ao `sub` novo, em vez de estourar na constraint única.
             if existente.keycloak_id != keycloak_id:
@@ -105,15 +113,7 @@ async def semear() -> None:
                 existente.keycloak_id = keycloak_id
                 await session.commit()
 
-            if existente.link_id is not None:
-                print(f"{EMAIL} já estava no banco, com o vínculo {existente.link_id}.")
-                return
-
-            # Banco de antes da CREED-32: o usuário existe, falta o vínculo.
-            link = await links.insert(_new_link())
-            existente.link_id = link.id
-            await session.commit()
-            print(f"{EMAIL} ganhou o vínculo {link.id} ({LINK_ROLE.value}).")
+            print(f"{EMAIL} já estava no banco, com o vínculo {existente.link_id}.")
             return
 
         link = await links.insert(_new_link())
@@ -123,7 +123,6 @@ async def semear() -> None:
                 name=NAME,
                 email=EMAIL,
                 status=RecordStatus.ACTIVE,
-                role=USER_ROLE_COLUMN,
                 link_id=link.id,
             )
         )

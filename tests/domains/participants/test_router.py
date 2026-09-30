@@ -20,7 +20,6 @@ from app.domains.participants.models import Participant
 from app.domains.participants.router import router
 from app.domains.participants.schemas import ParticipantCreate
 from app.domains.users.dependencies import get_service as get_user_service
-from app.domains.users.models import UserRole
 from app.domains.users.service import UserAccess
 from app.shared.enums import RecordStatus
 from app.shared.exceptions import ConflictError, NotFoundError, ValidationError
@@ -83,21 +82,19 @@ def client(app: FastAPI) -> TestClient:
     return TestClient(app)
 
 
-def autenticar_como(
-    app: FastAPI, monkeypatch: pytest.MonkeyPatch, role: UserRole
-) -> None:
+def autenticar_como(app: FastAPI, monkeypatch: pytest.MonkeyPatch, role: str) -> None:
     """Faz o token de teste valer como um usuário ativo com o papel indicado."""
     email = "dev@creed.example.com"
 
     async def _fake_validate_token(token: str) -> dict[str, Any]:
-        return {"sub": "sub-dev", "email": email, "realm_access": {"roles": [role.value]}}
+        return {"sub": "sub-dev", "email": email, "realm_access": {"roles": [role]}}
 
     monkeypatch.setattr("app.shared.authorization.validate_token", _fake_validate_token)
     # Desde a CREED-32 a guarda lê o papel do vínculo (`UserAccess`), não do `User`.
     access = UserAccess(
         id=uuid.uuid4(),
         email=email,
-        role=role.value,
+        role=role,
         link_id=uuid.uuid4(),
         organization_id=uuid.uuid4(),
     )
@@ -107,7 +104,7 @@ def autenticar_como(
 class TestComAdmin:
     @pytest.fixture(autouse=True)
     def _admin(self, app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
-        autenticar_como(app, monkeypatch, UserRole.ADMIN)
+        autenticar_como(app, monkeypatch, "admin")
         # Um service só para a classe inteira: o GET precisa enxergar o que o POST gravou.
         service = _FakeParticipantService()
         app.dependency_overrides[get_service] = lambda: service
@@ -208,13 +205,13 @@ class TestSemAcesso:
         assert client.post("/participants", json={"name": "X"}).status_code == 401
         assert client.get(f"/participants/{uuid.uuid4()}").status_code == 401
 
-    @pytest.mark.parametrize("role", [UserRole.GESTOR, UserRole.RESPONDENTE])
+    @pytest.mark.parametrize("role", ["gestor", "respondente"])
     def test_papel_diferente_de_admin_devolve_403_nas_duas_rotas(
         self,
         app: FastAPI,
         client: TestClient,
         monkeypatch: pytest.MonkeyPatch,
-        role: UserRole,
+        role: str,
     ) -> None:
         """P-022 — só admin cadastra e consulta participante."""
         autenticar_como(app, monkeypatch, role)

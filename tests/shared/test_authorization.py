@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 
 from app.domains.links.models import Link, LinkType, Roles
 from app.domains.users.dependencies import get_service as get_user_service
-from app.domains.users.models import User, UserRole
+from app.domains.users.models import User
 from app.domains.users.service import UserAccess, UserService
 from app.external_services.keycloak.token import InvalidTokenError
 from app.shared.authorization import CurrentUserDep, require_role
@@ -278,17 +278,17 @@ class _OneLinkService:
         return self._link if self._link.id == link_id else None
 
 
-def test_column_says_admin_but_link_says_gestor_returns_401(
+def test_real_user_service_claim_admin_but_link_says_gestor_returns_401(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
     app: FastAPI,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """A prova de que `user.role` deixou de ser lida (critério da task 5).
+    """O papel chega à guarda pelo `UserService` de verdade, vindo do vínculo.
 
-    O `UserService` aqui é o de verdade, só com o banco trocado por dublês. A
-    coluna diz `admin`, igual ao claim; o vínculo diz `gestor`. Se alguém
-    voltar a ler a coluna em qualquer ponto do caminho, a rota responde 200.
+    Só o banco é trocado por dublês. O claim diz `admin` e o vínculo diz
+    `gestor`: se o caminho entre o `User` e a guarda deixar de passar pelo
+    vínculo, a rota responde 200.
     """
     link = Link(
         id=uuid.uuid4(),
@@ -303,7 +303,6 @@ def test_column_says_admin_but_link_says_gestor_returns_401(
         name="Dev CREED",
         email="dev@creed.example.com",
         status=RecordStatus.ACTIVE,
-        role=UserRole.ADMIN,
         link_id=link.id,
     )
     service = UserService(
@@ -327,31 +326,15 @@ def test_column_says_admin_but_link_says_gestor_returns_401(
     assert "Divergência" in caplog.text
 
 
+@pytest.mark.parametrize("route", ["/authenticated", "/admin"])
 def test_user_without_an_active_account_returns_401(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch, app: FastAPI
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, app: FastAPI, route: str
 ) -> None:
-    _install_validate_token(
-        monkeypatch,
-        lambda _token: {
-            "sub": "user-123",
-            "email": "dev@creed.example.com",
-            "realm_access": {"roles": ["admin"]},
-        },
-    )
-    _install_access(app, None)
+    """P-008: sem acesso no banco, 401 nas duas guardas, mesmo com token válido.
 
-    response = client.get("/authenticated", headers={"Authorization": "Bearer valid"})
-
-    assert response.status_code == 401
-
-
-def test_user_without_link_returns_401(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch, app: FastAPI
-) -> None:
-    """P-008: usuário sem vínculo é usuário sem acesso, mesmo com token válido.
-
-    `UserService.get_active_user_access_by_email` já devolve `None` para esse
-    caso (task 4) — aqui só se confirma que a guarda trata `None` como 401.
+    O `UserService` devolve `None` para usuário inexistente, inativo, ou com
+    vínculo que o `LinkService` não encontra. Na rota `admin` o claim passa na
+    conferência de papel, e quem recusa é o banco.
     """
     _install_validate_token(
         monkeypatch,
@@ -363,6 +346,6 @@ def test_user_without_link_returns_401(
     )
     _install_access(app, None)
 
-    response = client.get("/admin", headers={"Authorization": "Bearer valid"})
+    response = client.get(route, headers={"Authorization": "Bearer valid"})
 
     assert response.status_code == 401

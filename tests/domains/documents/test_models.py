@@ -25,7 +25,7 @@ class TestDocType:
         assert {tipo.name for tipo in DocType} == esperados
 
     def test_valor_e_o_nome_em_minusculo(self) -> None:
-        """Padrão de users (RecordStatus, UserRole): o .value sai na API."""
+        """Padrão de users (RecordStatus): o .value sai na API."""
         for tipo in DocType:
             assert tipo.value == tipo.name.lower()
 

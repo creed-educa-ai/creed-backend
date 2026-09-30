@@ -34,9 +34,7 @@ class LinkType(enum.Enum):
 class Roles(enum.Enum):
     """Papéis do vínculo, na lista fixada pela P-006.
 
-    Duplica os valores de `UserRole`, em `users/models.py`, porque um domínio não
-    importa model de outro (`test_dominio_nao_importa_dominio`). A duplicação dura
-    até a CREED-32/task 6, que apaga `UserRole` de vez.
+    É a única fonte do papel de acesso na plataforma: `user` não guarda papel.
     """
 
     ADMIN = "admin"

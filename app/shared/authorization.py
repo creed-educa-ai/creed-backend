@@ -79,10 +79,9 @@ async def _identity_from_token(
 async def _check_against_database(
     identity: AuthenticatedUser, users: UserService
 ) -> AuthenticatedUser:
-    # `None` cobre usuário inexistente, inativo, sem vínculo, ou vínculo que o
-    # LinkService não encontra — a guarda trata os quatro como "sem acesso"
-    # (P-008), sem distinguir. O papel comparado é o do vínculo, não mais o de
-    # `user.role`: a coluna deixou de ser lida (CREED-32).
+    # `None` cobre usuário inexistente, inativo, ou vínculo que o LinkService
+    # não encontra — a guarda trata os três como "sem acesso" (P-008), sem
+    # distinguir. O papel comparado é o do vínculo (CREED-32).
     access = (
         await users.get_active_user_access_by_email(identity.email)
         if identity.email
