@@ -17,10 +17,12 @@ import uuid
 
 import httpx
 
+from app import models  # noqa: F401  (registra todas as tabelas; ver app/models.py)
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal
-from app.domains.users.models import RecordStatus, User, UserRole
+from app.domains.users.models import User, UserRole
 from app.domains.users.repository import UserRepository
+from app.shared.enums import RecordStatus
 
 EMAIL = "dev@creed.example.com"
 NAME = "Dev CREED"

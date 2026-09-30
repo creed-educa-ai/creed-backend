@@ -9,11 +9,13 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app import models  # noqa: F401  (registra todas as tabelas; ver app/models.py)
 from app.core.config import settings
 from app.domains.authentication.router import router as authentication_router
 from app.domains.dashboards.router import router as dashboards_router
 from app.domains.forms.router import router as forms_router
 from app.domains.organizacoes.router import router as organizacoes_router
+from app.domains.participants.router import router as participants_router
 from app.domains.prismas.router import router as prismas_router
 from app.domains.prognosticos.router import router as prognosticos_router
 from app.domains.questions.router import router as questions_router
@@ -47,6 +49,18 @@ OPENAPI_TAGS = [
     {
         "name": "form-responses",
         "description": "Abertura e submissão de respostas de formulário.",
+    },
+    {
+        "name": "participants",
+        "description": "Cadastro e consulta das pessoas participantes.",
+    },
+    {
+        "name": "questions",
+        "description": "Cadastro e listagem das perguntas dos formulários.",
+    },
+    {
+        "name": "forms",
+        "description": "Cadastro e consulta dos formulários.",
     },
 ]
 
@@ -110,6 +124,7 @@ for _router in (
     questions_router,
     relatorios_router,
     user_router,
+    participants_router,
     forms_router,
 ):
     app.include_router(_router, prefix=settings.API_V1_PREFIX)

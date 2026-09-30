@@ -32,6 +32,10 @@ def test_all_endpoints_have_method_summary_description_and_operation_id() -> Non
         ("/api/v1/forms/{form_id}", "get"),
         ("/api/v1/form-responses", "post"),
         ("/api/v1/form-responses/{form_response_id}", "patch"),
+        ("/api/v1/participants", "post"),
+        ("/api/v1/participants/{participant_id}", "get"),
+        ("/api/v1/questions", "post"),
+        ("/api/v1/forms/{form_id}/questions", "get"),
     }
 
     documented_operations = {
@@ -48,6 +52,20 @@ def test_all_endpoints_have_method_summary_description_and_operation_id() -> Non
         assert operation["operationId"]
 
 
+def test_every_tag_used_by_a_route_has_a_description() -> None:
+    # Domínio novo sem entrada em `OPENAPI_TAGS` aparece no Swagger sem texto.
+    schema = app.openapi()
+    used_tags = {
+        tag
+        for path_item in schema["paths"].values()
+        for operation in path_item.values()
+        for tag in operation.get("tags", [])
+    }
+    described_tags = {tag["name"] for tag in schema["tags"] if tag["description"]}
+
+    assert used_tags <= described_tags
+
+
 def test_request_fields_path_parameters_and_examples_are_documented() -> None:
     schema = app.openapi()
     components = schema["components"]["schemas"]
@@ -58,8 +76,15 @@ def test_request_fields_path_parameters_and_examples_are_documented() -> None:
     assert components["SessionResponse"]["examples"]
     assert components["UserResponse"]["examples"]
     assert components["FormResponseResponse"]["examples"]
+    assert components["ParticipantCreate"]["examples"]
+    assert components["ParticipantResponse"]["examples"]
 
-    for schema_name in ("LoginRequest", "UserCreate", "FormResponseCreate"):
+    for schema_name in (
+        "LoginRequest",
+        "UserCreate",
+        "FormResponseCreate",
+        "ParticipantCreate",
+    ):
         for field in components[schema_name]["properties"].values():
             assert field["description"]
 
@@ -78,6 +103,12 @@ def test_request_fields_path_parameters_and_examples_are_documented() -> None:
     assert form_response_id["name"] == "form_response_id"
     assert form_response_id["description"]
     assert form_response_id["schema"]["examples"]
+
+    get_participant = _operation(schema, "/api/v1/participants/{participant_id}", "get")
+    participant_id = get_participant["parameters"][0]
+    assert participant_id["name"] == "participant_id"
+    assert participant_id["description"]
+    assert participant_id["schema"]["examples"]
 
 
 def test_success_error_and_bearer_authentication_responses_are_documented() -> None:
@@ -103,6 +134,27 @@ def test_success_error_and_bearer_authentication_responses_are_documented() -> N
             "patch",
         )["responses"]
     ) >= {"200", "404", "409", "422"}
+    assert set(_operation(schema, "/api/v1/participants", "post")["responses"]) >= {
+        "201",
+        "401",
+        "403",
+        "409",
+        "422",
+    }
+    assert set(
+        _operation(schema, "/api/v1/participants/{participant_id}", "get")["responses"]
+    ) >= {"200", "401", "403", "404", "422"}
+
+    # O 422 do cadastro sai em dois formatos: texto (documento inexistente, vindo
+    # do service) e lista (validação do Pydantic). Os dois precisam estar no schema.
+    participant_422 = _operation(schema, "/api/v1/participants", "post")["responses"][
+        "422"
+    ]["content"]["application/json"]
+    assert {ref["$ref"] for ref in participant_422["schema"]["anyOf"]} == {
+        "#/components/schemas/ErrorResponse",
+        "#/components/schemas/ValidationErrorResponse",
+    }
+    assert set(participant_422["examples"]) == {"documento_inexistente", "nome_vazio"}
 
     security_schemes = schema["components"]["securitySchemes"]
     assert security_schemes["BearerAuth"] == {

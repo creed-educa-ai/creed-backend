@@ -45,6 +45,7 @@ REEXPORT_DE_TIPO_PERMITIDO: dict[str, str] = {
 
 COMPOE_COM_SERVICE_DE: dict[str, str] = {
     "authentication": "le o usuario pelo UserService",
+    "participants": "consulta documento pelo DocumentService",
 }
 
 SUBMODULOS_DE_COMPOSICAO = {"service", "dependencies"}
@@ -169,6 +170,32 @@ def test_commit_so_no_get_db() -> None:
     assert not culpados, (
         f"commit fora do get_db em: {culpados}. "
         "A unidade de trabalho é a requisição; repository usa flush()."
+    )
+
+
+@pytest.mark.parametrize("dominio", DOMINIOS, ids=NOMES)
+def test_models_do_dominio_esta_no_registro(dominio: Path) -> None:
+    if not (dominio / "models.py").exists():
+        pytest.skip(f"{dominio.name} não tem models.py")
+
+    registro = _imports(_codigo(APP / "models.py"))
+    assert f"from app.domains.{dominio.name} import models" in "\n".join(registro), (
+        f"{dominio.name}/models.py não está em app/models.py. Sem o registro, o "
+        "autogenerate não enxerga a tabela e FK por nome para ela quebra no flush."
+    )
+
+
+def test_sessao_so_pelo_session_dep() -> None:
+    database = APP / "core" / "database.py"
+    culpados = [
+        str(arquivo.relative_to(APP))
+        for arquivo in sorted(APP.rglob("*.py"))
+        if arquivo != database
+        and any("Depends(get_db" in linha for linha in _codigo(arquivo))
+    ]
+    assert not culpados, (
+        f"Depends(get_db) solto em: {culpados}. "
+        "Use SessionDep: ele fecha a sessão (commit) antes de a resposta sair."
     )
 
 

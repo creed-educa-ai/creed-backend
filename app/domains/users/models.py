@@ -14,13 +14,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
-
-
-class RecordStatus(enum.Enum):
-    """Status de um registro (contrato-api.md: `status`)."""
-
-    ACTIVE = "active"
-    INACTIVE = "inactive"
+from app.shared.enums import RecordStatus
 
 
 class UserRole(enum.Enum):

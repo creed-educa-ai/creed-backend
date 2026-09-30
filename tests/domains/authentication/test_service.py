@@ -10,9 +10,10 @@ import pytest
 
 from app.domains.authentication.schemas import LoginRequest
 from app.domains.authentication.service import AuthenticationService
-from app.domains.users.models import RecordStatus, User, UserRole
+from app.domains.users.models import User, UserRole
 from app.domains.users.service import UserService
 from app.external_services.keycloak import client as keycloak_client
+from app.shared.enums import RecordStatus
 from app.shared.exceptions import AuthenticationError
 
 FAKE_TOKENS = {
