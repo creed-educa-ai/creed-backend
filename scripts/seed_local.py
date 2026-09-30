@@ -95,6 +95,17 @@ async def semear() -> None:
         existente = await users.get_user_by_email(EMAIL)
 
         if existente is not None:
+            # Com `user.link_id` NOT NULL o vínculo sempre existe — mas num banco
+            # ainda em `87beb54d929a`, que é onde a revisão `28e9a13197f4` para, o
+            # usuário pode estar sem ele. O seed não liga mais usuário a vínculo,
+            # então falha em vez de dizer que está tudo certo.
+            if await links.get_by_id(existente.link_id) is None:
+                raise SeedError(
+                    f"{EMAIL} está no banco sem vínculo: o schema ainda é o de antes "
+                    "da CREED-32/task 6. Rode `alembic upgrade head`, siga a "
+                    "mensagem dela e depois rode este seed de novo."
+                )
+
             # Idempotente: rodar de novo depois de um `down -v` só reata o
             # usuário ao `sub` novo, em vez de estourar na constraint única.
             if existente.keycloak_id != keycloak_id:
