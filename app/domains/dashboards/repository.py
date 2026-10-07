@@ -1,20 +1,30 @@
-"""Acesso a dados do domínio dashboards — o entregável focal (ADR-001, secao 4.1).
+"""Acesso a dados do domínio de dashboards.
 
-REGRA DE OURO: agregação no banco, cálculo no service, renderização no front.
-As análises comparativas (indivíduo / organização / região / país sobre os
-5 prismas) devem usar GROUP BY, GROUPING SETS e window functions — NUNCA
-trazer linhas cruas para agregar em memória.
-
-Exemplo do padrão esperado:
-
-    stmt = (
-        select(
-            Avaliacao.pais,
-            Prisma.codigo,
-            func.avg(Avaliacao.score).label("media"),
-            func.count().label("n"),
-        )
-        .join(Prisma)
-        .group_by(Avaliacao.pais, Prisma.codigo)
-    )
+Esta camada NÃO contém regra de negócio: só queries e operações de persistência.
 """
+
+import uuid
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.domains.dashboards.models import Dashboard
+
+
+class DashboardRepository:
+    def __init__(self, db: AsyncSession) -> None:
+        self.db = db
+
+    async def get_by_id(self, dashboard_id: uuid.UUID) -> Dashboard | None:
+        """Busca um dashboard pelo seu identificador."""
+        result = await self.db.execute(
+            select(Dashboard).where(Dashboard.id == dashboard_id)
+        )
+        return result.scalar_one_or_none()
+
+    async def create(self, dashboard: Dashboard) -> Dashboard:
+        """Cria um dashboard no banco."""
+        self.db.add(dashboard)
+        await self.db.flush()
+        await self.db.refresh(dashboard)
+        return dashboard
