@@ -16,6 +16,7 @@ reprova `models.py` de domínio que ficar de fora.
 from app.domains.dashboards import models as dashboards_models  # noqa: F401
 from app.domains.documents import models as documents_models  # noqa: F401
 from app.domains.forms import models as forms_models  # noqa: F401
+from app.domains.insights import models as insights_models  # noqa: F401
 from app.domains.links import models as links_models  # noqa: F401
 from app.domains.organizacoes import models as organizacoes_models  # noqa: F401
 from app.domains.participants import models as participants_models  # noqa: F401
