@@ -15,7 +15,7 @@ from app.core.database import Base
 
 
 class Insight(Base):
-    __tablename__ = "insight"
+    __tablename__ = "insights"
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -24,7 +24,7 @@ class Insight(Base):
         UUID(as_uuid=True),
         ForeignKey(
             "form_responses.id",
-            name="fk_insight_form_response_id_form_responses",
+            name="fk_insights_form_response_id_form_responses",
         ),
         nullable=False,
         index=True,
