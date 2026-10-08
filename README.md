@@ -119,20 +119,48 @@ mypy app
 pytest
 ```
 
-## Migrations (ADR-002, secao 2.4)
+## Migrations (ADR-002, secao 2.4 · ADR-0009)
+
+**PR de tarefa sobe sem migration.** Desde a retrospectiva da sprint 2, cada PR com
+a sua própria revisão do Alembic gerava conflito de heads com os PRs paralelos.
+Agora você gera a migration só para testar local, e um AGES III consolida as
+mudanças de banco da sprint numa revisão só. O CI recusa PR de tarefa com arquivo
+em `alembic/versions/`.
+
+Na sua tarefa:
 
 ```bash
-alembic revision --autogenerate -m "descricao"   # SEMPRE revisar o resultado
-alembic heads                                     # conferir antes de abrir PR
-alembic upgrade head
+alembic heads                                     # anote: é o head da dev
+alembic revision --autogenerate -m "descricao"   # temporária, SEMPRE revisar
+alembic upgrade head                              # testar
+# antes de abrir o PR — primeiro desce, depois apaga:
+alembic downgrade <head-da-dev>
+rm alembic/versions/<arquivo-temporario>.py
+alembic current                                   # tem que bater com alembic heads
 ```
+
+E preencha a seção **"Banco"** do PR: o que mudou no schema e todo ajuste que você
+fez à mão na temporária (rename, backfill, `server_default` em tabela com linhas).
+O autogenerate da consolidação não sabe disso, e rename vira drop+create e **perde
+dados**.
+
+> **Rodando a `dev` entre consolidações?** Ela pode ter model sem tabela. Gere uma
+> temporária para subir a aplicação ou o seed, e desfaça do mesmo jeito.
+
+**Consolidação (AGES III):** branch `chore/<id-clickup>-consolidar-migrations`,
+a única que o CI deixa trazer migration. Ali o CI aplica tudo num Postgres limpo e
+roda `alembic check`. O passo a passo está em
+`creed-ai-context/playbooks/criar-migration.md`, fluxo B.
 
 **Regras que valem sempre:**
 
 1. Autogenerate **nunca** vai para o repositório sem leitura linha a linha —
    renomear coluna vira drop+create e **perde dados**.
-2. Migration passa por code review, com prioridade.
+2. Migration passa por code review, com prioridade (a consolidação é Sensível).
 3. Conflito de heads: usar `alembic merge`, nunca editar `down_revision` à revelia.
 4. No deploy: **passo dedicado do pipeline**, nunca no startup do container.
-5. Rollback: corrigir avançando com nova migration, não com `downgrade`.
-6. Mudança destrutiva: dividir em passos (adicionar → migrar dados → remover).
+5. Rollback: corrigir avançando com nova migration, não com `downgrade` — a
+   temporária da sua máquina é a única exceção.
+6. Mudança destrutiva: dividir em passos (adicionar → migrar dados → remover), cada
+   um numa consolidação.
+7. Release `dev` → `main` só depois de consolidar.
