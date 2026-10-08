@@ -24,6 +24,7 @@ class Dashboard(Base):
         UUID(as_uuid=True),
         ForeignKey("user.id", name="fk_dashboard_user_id_user"),
         nullable=False,
+        index=True,
     )
 
     form_id: Mapped[uuid.UUID] = mapped_column(
@@ -33,6 +34,7 @@ class Dashboard(Base):
             name="fk_dashboard_form_id_form_responses",
         ),
         nullable=False,
+        index=True,
     )
 
     is_private: Mapped[bool] = mapped_column(Boolean, nullable=False)

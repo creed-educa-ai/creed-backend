@@ -15,23 +15,16 @@ class DashboardService:
     def __init__(self, repository: DashboardRepository) -> None:
         self.repository = repository
 
-    async def create_dashboard_service(
-        self,
-        request: DashboardCreate,
-    ) -> Dashboard:
+    async def create(self, request: DashboardCreate) -> Dashboard:
         """Cria um novo dashboard."""
         dashboard = Dashboard(
             user_id=request.user_id,
             form_id=request.form_id,
             is_private=request.is_private,
         )
-
         return await self.repository.create(dashboard)
 
-    async def get_dashboard_by_id_service(
-        self,
-        dashboard_id: uuid.UUID,
-    ) -> Dashboard:
+    async def get(self, dashboard_id: uuid.UUID) -> Dashboard:
         """Busca um dashboard pelo identificador."""
         dashboard = await self.repository.get_by_id(dashboard_id)
 
