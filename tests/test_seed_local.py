@@ -1,4 +1,5 @@
-"""Testes do formulário de demonstração de scripts/seed_local.py (CREED-47).
+"""Testes de scripts/seed_local.py: o usuário de teste e o formulário de
+demonstração (CREED-47).
 
 Sem banco e sem Keycloak: os repositories são dublês em memória. O que se prova é o
 que o seed decide — o que cria, com que conteúdo e que não duplica. Que o INSERT
@@ -13,9 +14,36 @@ from app.domains.forms.models import Form
 from app.domains.questions.models import Question, QuestionSection, QuestionType
 from scripts.seed_local import (
     DEMO_FORM_ID,
+    EMAIL,
+    LINK_ROLE,
     ORGANIZATION_ID,
     _ensure_demo_form,
+    _usuario_de_teste,
 )
+
+PAPEIS = {"admin", "gestor", "respondente"}
+
+
+class TestUsuarioDeTeste:
+    """O que o seed manda à Admin API para criar o usuário de teste no realm."""
+
+    def test_entra_pelo_token_endpoint(self) -> None:
+        """O `curl` do README e o login local dependem deste usuário.
+
+        Sem `requiredActions` vazia e sem `temporary: False`, o Direct Access Grant
+        responde `invalid_grant: "Account is not fully set up"` — que na tela vira
+        "senha inválida" e manda o time procurar um bug que não existe.
+        """
+        usuario = _usuario_de_teste()
+
+        assert usuario["username"] == usuario["email"] == EMAIL
+        assert usuario["enabled"] is True
+        assert usuario["requiredActions"] == []
+        assert usuario["credentials"][0]["temporary"] is False
+
+    def test_papel_do_realm_e_um_da_premissa_p006(self) -> None:
+        """O papel dado no realm é o do vínculo, e precisa existir no realm."""
+        assert LINK_ROLE.value in PAPEIS
 
 
 class FakeFormRepository:

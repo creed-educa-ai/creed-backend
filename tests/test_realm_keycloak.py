@@ -52,27 +52,33 @@ def test_client_e_confidencial_com_direct_access_grant(
     assert client["directAccessGrantsEnabled"] is True
 
 
+def test_segredo_e_ssl_chegam_pelo_ambiente(client: dict[str, Any]) -> None:
+    """O arquivo é público e é o mesmo que a produção importa (ADR-0007).
+
+    Um export feito pela UI devolve o segredo em texto puro e `sslRequired: none` —
+    e aí a credencial do service account (que cria usuário pela Admin API) vai
+    parar no GitHub, e a produção aceita login sem HTTPS. Os valores locais
+    estão no `docker-compose.yml`.
+    """
+    # S105: é o nome da variável, não uma senha — justamente o que o teste garante.
+    assert client["secret"] == "${CREED_BACKEND_CLIENT_SECRET}"  # noqa: S105
+    assert REALM["sslRequired"] == "${CREED_REALM_SSL_REQUIRED}"
+
+
 def test_papeis_do_realm_sao_os_da_premissa_p006() -> None:
     nomes = {papel["name"] for papel in REALM["roles"]["realm"]}
 
     assert nomes == PAPEIS
 
 
-def test_usuario_de_teste_entra_pelo_token_endpoint() -> None:
-    """O `curl` do critério de aceite depende de um usuário vindo do próprio export.
+def test_realm_nao_traz_usuario_de_pessoa() -> None:
+    """A produção importa este mesmo arquivo (ADR-0007), e ele é público.
 
-    Sem `requiredActions` vazia e sem `temporary: false`, o Direct Access Grant
-    responde `invalid_grant: "Account is not fully set up"` — que na tela vira
-    "senha inválida" e manda o time procurar um bug que não existe.
+    Usuário de pessoa aqui é conta com senha conhecida em produção. O de teste
+    do ambiente local nasce pelo `scripts/seed_local.py`; o arquivo só traz o
+    service account do backend.
     """
-    usuario = next(
-        u for u in REALM["users"] if u.get("username") == "dev@creed.example.com"
-    )
-
-    assert usuario["enabled"] is True
-    assert usuario.get("requiredActions") == []
-    assert usuario["credentials"][0]["temporary"] is False
-    assert set(usuario["realmRoles"]) <= PAPEIS
+    assert all("serviceAccountClientId" in u for u in REALM["users"])
 
 
 def test_realm_nao_liga_acao_obrigatoria_por_padrao() -> None:
@@ -157,16 +163,3 @@ def test_client_carimba_a_propria_audiencia_no_access_token(
 
     assert mapper["config"]["included.client.audience"] == client["clientId"]
     assert mapper["config"]["access.token.claim"] == "true"
-
-
-def test_usuario_de_teste_tem_id_fixo() -> None:
-    """O `keycloak_id` da tabela `user` precisa casar com o `sub` do token.
-
-    Sem `id` no export, o Keycloak sorteia um UUID a cada import e o seed local
-    não tem como ser escrito antes de o realm subir.
-    """
-    usuario = next(
-        u for u in REALM["users"] if u.get("username") == "dev@creed.example.com"
-    )
-
-    assert usuario["id"] == "11111111-1111-4111-8111-111111111111"
