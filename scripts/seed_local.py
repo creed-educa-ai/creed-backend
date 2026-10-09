@@ -1,10 +1,14 @@
-"""Seed do ambiente local: põe o usuário de teste do realm na tabela `user`, e um
-formulário de demonstração para ele responder.
+"""Seed do ambiente local: cria o usuário de teste no realm (se faltar) e na tabela
+`user`, e um formulário de demonstração para ele responder.
 
 Por que isto existe: depois de o Keycloak aprovar a senha, o login ainda lê o
 usuário no **nosso** banco (decisão D2). Realm com usuário e banco vazio dá 401
 com a senha certa — que na tela aparece como "e-mail ou senha inválidos" e manda
 o time procurar um bug de senha que não existe.
+
+O usuário de teste **não** vem do `realm-creed.json`: o arquivo é público e é o
+mesmo que a produção importa (ADR-0007), e lá não pode existir um admin com senha
+conhecida. Quem o cria é este seed, que só roda com `ENVIRONMENT=local`.
 
 O `sub` é perguntado ao Keycloak **a cada execução**, nunca fixado aqui: quem
 roda `docker compose down -v` ganha um usuário novo no realm (ver README).
@@ -15,6 +19,7 @@ roda `docker compose down -v` ganha um usuário novo no realm (ver README).
 import asyncio
 import sys
 import uuid
+from typing import Any
 
 import httpx
 
@@ -35,6 +40,8 @@ from app.shared.enums import RecordStatus
 
 EMAIL = "dev@creed.example.com"
 NAME = "Dev CREED"
+# Senha pública de propósito: este usuário só existe no ambiente local.
+PASSWORD = "dev"  # noqa: S105
 
 # O papel de acesso é o do vínculo (CREED-32): `user` não guarda papel.
 LINK_ROLE = Roles.ADMIN
@@ -97,9 +104,16 @@ async def _service_account_token(http: httpx.AsyncClient) -> str:
 
 
 async def _keycloak_id(http: httpx.AsyncClient, token: str) -> uuid.UUID:
-    base = settings.KEYCLOAK_SERVER_URL.rstrip("/")
+    """O `sub` do usuário de teste, criando-o no realm na primeira vez."""
+    keycloak_id = await _buscar_no_realm(http, token)
+    if keycloak_id is None:
+        keycloak_id = await _criar_no_realm(http, token)
+    return keycloak_id
+
+
+async def _buscar_no_realm(http: httpx.AsyncClient, token: str) -> uuid.UUID | None:
     response = await http.get(
-        f"{base}/admin/realms/{settings.KEYCLOAK_REALM}/users",
+        f"{_admin_url()}/users",
         params={"email": EMAIL, "exact": "true"},
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -108,11 +122,60 @@ async def _keycloak_id(http: httpx.AsyncClient, token: str) -> uuid.UUID:
 
     encontrados = response.json()
     if not encontrados:
-        raise SeedError(
-            f"{EMAIL} não existe no realm '{settings.KEYCLOAK_REALM}'. "
-            "O realm subiu a partir de docker/keycloak/realm-creed.json?"
-        )
+        return None
     return uuid.UUID(encontrados[0]["id"])
+
+
+async def _criar_no_realm(http: httpx.AsyncClient, token: str) -> uuid.UUID:
+    headers = {"Authorization": f"Bearer {token}"}
+
+    response = await http.post(
+        f"{_admin_url()}/users", json=_usuario_de_teste(), headers=headers
+    )
+    if not response.is_success:
+        raise SeedError(f"Admin API recusou criar {EMAIL}: {response.text[:200]}")
+    # A Admin API devolve o id do usuário criado só no cabeçalho Location.
+    keycloak_id = uuid.UUID(response.headers["Location"].rsplit("/", 1)[-1])
+
+    # O papel vai numa chamada à parte: o POST de usuário ignora `realmRoles`.
+    # É a cópia do papel do vínculo (decisão D4) — o mesmo valor do LINK_ROLE.
+    papel = await http.get(f"{_admin_url()}/roles/{LINK_ROLE.value}", headers=headers)
+    if not papel.is_success:
+        raise SeedError(f"Admin API recusou ler o papel: {papel.text[:200]}")
+    response = await http.post(
+        f"{_admin_url()}/users/{keycloak_id}/role-mappings/realm",
+        json=[papel.json()],
+        headers=headers,
+    )
+    if not response.is_success:
+        raise SeedError(f"Admin API recusou dar o papel: {response.text[:200]}")
+
+    print(f"{EMAIL} criado no realm, papel {LINK_ROLE.value}.")
+    return keycloak_id
+
+
+def _usuario_de_teste() -> dict[str, Any]:
+    """O usuário de teste no formato que a Admin API recebe.
+
+    Sem `requiredActions` vazia e sem `temporary: False`, o Direct Access Grant
+    responde `invalid_grant: "Account is not fully set up"` — que na tela vira
+    "senha inválida" e manda o time procurar um bug que não existe.
+    """
+    return {
+        "username": EMAIL,
+        "email": EMAIL,
+        "firstName": "Dev",
+        "lastName": "Local",
+        "enabled": True,
+        "emailVerified": True,
+        "requiredActions": [],
+        "credentials": [{"type": "password", "value": PASSWORD, "temporary": False}],
+    }
+
+
+def _admin_url() -> str:
+    base = settings.KEYCLOAK_SERVER_URL.rstrip("/")
+    return f"{base}/admin/realms/{settings.KEYCLOAK_REALM}"
 
 
 async def semear() -> None:
