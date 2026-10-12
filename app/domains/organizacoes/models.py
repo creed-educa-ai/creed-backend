@@ -30,8 +30,9 @@ class Organization(Base):
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     # 🟡 Premissa P-021 — texto livre, sem CEP/logradouro separados.
     address: Mapped[str] = mapped_column(String(255), nullable=False)
-    document_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("documents.id"), nullable=True
+    # Obrigatório: a tabela da tarefa (CREED-381) marca `not null`.
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("documents.id"), nullable=False
     )
     status: Mapped[RecordStatus] = mapped_column(
         Enum(RecordStatus), nullable=False, default=RecordStatus.ACTIVE
