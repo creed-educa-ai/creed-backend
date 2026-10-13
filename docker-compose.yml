@@ -46,7 +46,10 @@ services:
       db: {condition: service_healthy}
 
   n8n:
-    image: n8nio/n8n:latest
+    # Versão fixa, a mesma da produção (creed-infrastructure/ec2/docker-compose.yml).
+    # Os workflows são montados no N8N da EC2 e exportados para o git: importar no
+    # local um workflow de versão mais nova pode falhar. Atualizar = trocar nos dois.
+    image: n8nio/n8n:2.43.4
     environment:
       DB_TYPE: postgresdb
       DB_POSTGRESDB_HOST: db
