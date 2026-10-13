@@ -47,6 +47,7 @@ def _token(**alteracoes: Any) -> str:
 @pytest.fixture(autouse=True)
 def _ambiente(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "KEYCLOAK_SERVER_URL", "http://kc.local:8080")
+    monkeypatch.setattr(settings, "KEYCLOAK_PUBLIC_URL", "")
     monkeypatch.setattr(settings, "KEYCLOAK_REALM", "creed")
     monkeypatch.setattr(settings, "KEYCLOAK_CLIENT_ID", "creed-backend")
     monkeypatch.setattr(settings, "KEYCLOAK_JWKS_CACHE_SECONDS", 3600)
@@ -172,6 +173,48 @@ class TestTokenRecusado:
 
         with pytest.raises(keycloak_token.InvalidTokenError):
             await keycloak_token.validate_token("isto-nao-e-um-token")
+
+
+class TestEnderecoPublico:
+    """Produção (ADR-0007): o back fala com o Keycloak pela rede interna, e o token
+    sai com o endereço público. Sem `KEYCLOAK_PUBLIC_URL`, todo login era recusado."""
+
+    PUBLICO = "https://creed.example/auth"
+
+    async def test_aceita_o_emissor_publico(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(settings, "KEYCLOAK_PUBLIC_URL", self.PUBLICO)
+        _servir(monkeypatch, _jwks_ok)
+
+        claims = await keycloak_token.validate_token(
+            _token(iss=f"{self.PUBLICO}/realms/creed")
+        )
+
+        assert claims["email"] == "dev@creed.example.com"
+
+    async def test_chave_continua_vindo_da_rede_interna(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Só o emissor esperado muda; o JWKS não passa pela internet."""
+        monkeypatch.setattr(settings, "KEYCLOAK_PUBLIC_URL", self.PUBLICO)
+        chamadas = _servir(monkeypatch, _jwks_ok)
+
+        await keycloak_token.validate_token(_token(iss=f"{self.PUBLICO}/realms/creed"))
+
+        assert chamadas == [
+            "http://kc.local:8080/realms/creed/protocol/openid-connect/certs"
+        ]
+
+    async def test_recusa_o_emissor_interno_quando_ha_publico(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Com o endereço público configurado, só ele vale — não os dois."""
+        monkeypatch.setattr(settings, "KEYCLOAK_PUBLIC_URL", self.PUBLICO)
+        _servir(monkeypatch, _jwks_ok)
+
+        with pytest.raises(keycloak_token.InvalidTokenError):
+            await keycloak_token.validate_token(_token(iss=ISSUER))
 
 
 class TestChaveDesconhecida:
