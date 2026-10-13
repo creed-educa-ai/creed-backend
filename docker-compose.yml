@@ -41,7 +41,8 @@ services:
       db: {condition: service_healthy}
 
   n8n:
-    image: n8nio/n8n:latest
+    # Versao validada pela POC; evitar que `latest` quebre o workflow sem aviso.
+    image: n8nio/n8n:2.42.7
     environment:
       DB_TYPE: postgresdb
       DB_POSTGRESDB_HOST: db
@@ -51,7 +52,10 @@ services:
       DB_POSTGRESDB_SCHEMA: n8n
       N8N_SECURE_COOKIE: 'false'
     ports: ['5678:5678']
-    volumes: [n8ndata:/home/node/.n8n]
+    volumes:
+      - n8ndata:/home/node/.n8n
+      # Artefatos versionados para importar/testar sem configurar o fluxo na UI.
+      - ./docker/n8n/workflows:/workflows:ro
     depends_on:
       db: {condition: service_healthy}
 

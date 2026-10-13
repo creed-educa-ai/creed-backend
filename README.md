@@ -59,6 +59,13 @@ uvicorn app.main:app --reload
 
 Docs da API: http://localhost:8000/api/v1/docs
 
+## Esteira de insights no n8n (beta local)
+
+A POC versionada da esteira, ainda isolada do backend e sem provedor de IA, esta
+em [`docker/n8n`](docker/n8n/README.md). Ela pode ser importada no n8n do
+`docker-compose` para validar o fluxo, o contrato e o tempo de processamento antes
+de decidir o gatilho definitivo e subir a infraestrutura compartilhada na AWS.
+
 ## Autenticação local (Keycloak)
 
 O Keycloak sobe pelo mesmo `docker-compose`, com o realm **importado de arquivo**
