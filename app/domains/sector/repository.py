@@ -1,7 +1,6 @@
-"""Acesso a dados do domínio de user.
+"""Acesso a dados do domínio de sectors.
 
-Esta camada NÃO contém regra de negócio: só queries e agregações.
-Agregação pesada é empurrada para o Postgres, nunca feita em memória.
+Esta camada NÃO contém regra de negócio: só queries e persistência.
 """
 
 import uuid
@@ -9,34 +8,21 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domains.users.models import User
+from app.domains.sector.models import Sector
 
 
-class UserRepository:
+class SectorRepository:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
 
-    async def get_by_id(self, user_id: uuid.UUID) -> User | None:
-        result = await self.db.execute(select(User).where(User.id == user_id))
+    async def get_by_id(self, sector_id: uuid.UUID) -> Sector | None:
+        """Busca um setor pelo identificador."""
+        result = await self.db.execute(select(Sector).where(Sector.id == sector_id))
         return result.scalar_one_or_none()
 
-    async def get_user_by_email(self, user_email: str) -> User | None:
-        result = await self.db.execute(select(User).where(User.email == user_email))
-        return result.scalar_one_or_none()
-
-    async def get_by_link_id(self, link_id: uuid.UUID) -> User | None:
-        """Usado para o 409 de `create_user_service`: um vínculo, um login."""
-        result = await self.db.execute(select(User).where(User.link_id == link_id))
-        return result.scalar_one_or_none()
-
-    async def create(self, user: User) -> User:
-        """Cria um usuário no banco."""
-        self.db.add(user)
+    async def create(self, sector: Sector) -> Sector:
+        """Cria um setor no banco."""
+        self.db.add(sector)
         await self.db.flush()
-        await self.db.refresh(user)
-        return user
-
-    async def delete(self, user: User) -> None:
-        """Deleta um usuário do banco."""
-        await self.db.delete(user)
-        await self.db.flush()
+        await self.db.refresh(sector)
+        return sector

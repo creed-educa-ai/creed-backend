@@ -9,22 +9,20 @@ from typing import Annotated
 from fastapi import Depends
 
 from app.core.database import SessionDep
-from app.domains.links.dependencies import ServiceDep as LinkServiceDep
-from app.domains.users.repository import UserRepository
-from app.domains.users.service import UserService
+from app.domains.sector.repository import SectorRepository
+from app.domains.sector.service import SectorService
 
 
 def get_repository(
     db: SessionDep,
-) -> UserRepository:
-    return UserRepository(db)
+) -> SectorRepository:
+    return SectorRepository(db)
 
 
 def get_service(
-    repository: Annotated[UserRepository, Depends(get_repository)],
-    links: LinkServiceDep,
-) -> UserService:
-    return UserService(repository, links)
+    repository: Annotated[SectorRepository, Depends(get_repository)],
+) -> SectorService:
+    return SectorService(repository)
 
 
-ServiceDep = Annotated[UserService, Depends(get_service)]
+ServiceDep = Annotated[SectorService, Depends(get_service)]
