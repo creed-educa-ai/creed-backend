@@ -73,7 +73,20 @@ docker compose up -d db keycloak
 > `docker compose down -v` uma vez: o schema `keycloak` é criado pelo script de
 > init do Postgres, que só roda com o volume vazio.
 
-Conferir que o realm subiu — o usuário de teste vem do próprio export:
+O usuário de teste **não** vem do realm: o arquivo é o mesmo que a produção importa,
+e lá não pode existir admin com senha conhecida. Quem o cria — no Keycloak e no
+**nosso** banco — é o seed, que só roda com `ENVIRONMENT=local` e é idempotente:
+
+```bash
+alembic upgrade head
+python scripts/seed_local.py
+```
+
+Existir no realm não bastaria: depois de o Keycloak aprovar a senha, o login ainda lê
+o usuário no nosso banco (decisão D2), e com o banco vazio a senha certa devolve 401 —
+que na tela vira "e-mail ou senha inválidos". Por isso o seed faz os dois lados.
+
+Conferir que o login funciona (depois do seed):
 
 ```bash
 curl -s -X POST http://localhost:8080/realms/creed/protocol/openid-connect/token -d grant_type=password -d client_id=creed-backend -d client_secret=creed-local-secret -d username=dev@creed.example.com -d password=dev
@@ -82,20 +95,10 @@ curl -s -X POST http://localhost:8080/realms/creed/protocol/openid-connect/token
 | Onde | Valor |
 |---|---|
 | Console do Keycloak | http://localhost:8080 — `admin` / `admin` |
-| Usuário de teste do realm | `dev@creed.example.com` / `dev`, papel `admin` |
+| Usuário de teste (criado pelo seed) | `dev@creed.example.com` / `dev`, papel `admin` |
 
-Existir no realm não basta: depois de o Keycloak aprovar a senha, o login ainda lê o
-usuário no **nosso** banco (decisão D2). Com o banco vazio, a senha certa devolve 401 —
-que na tela vira "e-mail ou senha inválidos" e manda o time caçar um bug de senha que
-não existe. O seed resolve, e é idempotente:
-
-```bash
-alembic upgrade head
-python scripts/seed_local.py
-```
-
-Rode-o de novo depois de todo `docker compose down -v`: ele reata o usuário ao `sub`
-novo em vez de estourar na constraint única.
+Rode o seed de novo depois de todo `docker compose down -v`: ele recria o usuário no
+realm e reata a tabela `user` ao `sub` novo, em vez de estourar na constraint única.
 
 > ⚠️ **O papel de acesso vem do vínculo (CREED-32)**, e todo usuário precisa de um:
 > `user.link_id` é obrigatório. Se o `alembic upgrade head` parar dizendo que há
@@ -105,7 +108,14 @@ novo em vez de estourar na constraint única.
 **O que muda no realm, muda no arquivo.** Alterou pela UI para testar? Ou refaça no
 JSON, ou perca a alteração no próximo `down -v` — e é assim de propósito.
 
-> ⚠️ **O `sub` do usuário de teste muda a cada `down -v`.** O realm fixa e-mail, senha e
+> ⚠️ **O segredo do client e o `sslRequired` não ficam escritos no arquivo.** O repo é
+> público e a produção importa este mesmo realm, então os dois são placeholders
+> (`${CREED_BACKEND_CLIENT_SECRET}` e `${CREED_REALM_SSL_REQUIRED}`) que o Keycloak
+> troca pelo ambiente ao importar — os valores locais estão no `docker-compose.yml`.
+> Exportou o realm pela UI? O export volta com o segredo em texto puro: recoloque os
+> placeholders antes de commitar (o `test_realm_keycloak.py` acusa se esquecer).
+
+> ⚠️ **O `sub` do usuário de teste muda a cada `down -v`.** O seed fixa e-mail, senha e
 > papel, não o id: quem recria o ambiente ganha um `sub` novo. Nenhum seed pode gravar
 > `User.keycloak_id` com o `sub` do `dev@creed.example.com` lido uma vez — o seed tem que
 > perguntar ao Keycloak a cada execução.

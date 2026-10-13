@@ -34,6 +34,11 @@ services:
       KC_DB_SCHEMA: keycloak
       KC_DB_USERNAME: creed
       KC_DB_PASSWORD: creed
+      # Placeholders do realm-creed.json. O arquivo é público e é o mesmo que a
+      # produção importa: segredo e exigência de HTTPS chegam pelo ambiente, nunca
+      # escritos nele. Sem prefixo KC_ porque o Keycloak lê KC_* como config própria.
+      CREED_BACKEND_CLIENT_SECRET: creed-local-secret
+      CREED_REALM_SSL_REQUIRED: none
     ports: ['8080:8080']
     volumes:
       - ./docker/keycloak/realm-creed.json:/opt/keycloak/data/import/realm-creed.json:ro
