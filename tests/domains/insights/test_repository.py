@@ -8,7 +8,10 @@ import uuid
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
-from app.domains.insights.models import InsightPrisma, Prisma
+import pytest
+from sqlalchemy.exc import IntegrityError
+
+from app.domains.insights.models import Insight, InsightPrisma, Prisma
 from app.domains.insights.repository import InsightPrismaRepository
 
 
@@ -19,11 +22,12 @@ class _SessaoFalsa:
         self,
         resultado: object | None = None,
         lista: list[InsightPrisma] | None = None,
+        erro_no_flush: Exception | None = None,
     ) -> None:
         self.resultado = resultado
         self.lista = lista or []
         self.add = MagicMock()
-        self.flush = AsyncMock()
+        self.flush = AsyncMock(side_effect=erro_no_flush)
         self.refresh = AsyncMock()
         self.delete = AsyncMock()
 
@@ -107,3 +111,65 @@ async def test_remover_associacao() -> None:
 
     sessao.delete.assert_awaited_once_with(associacao)
     sessao.flush.assert_awaited_once()
+
+
+def _erro_de_integridade(detalhe: str) -> IntegrityError:
+    """IntegrityError como o psycopg o entrega, com o nome da constraint."""
+    return IntegrityError("INSERT ...", {}, Exception(detalhe))
+
+
+async def test_colisao_na_chave_primaria_devolve_none() -> None:
+    """Corrida: o par foi gravado entre a checagem do service e este flush."""
+    sessao = _SessaoFalsa(
+        erro_no_flush=_erro_de_integridade(
+            'duplicate key value violates unique constraint "insight_prismas_pkey"'
+        )
+    )
+    repository = InsightPrismaRepository(sessao)  # type: ignore[arg-type]
+
+    resultado = await repository.insert(
+        InsightPrisma(insight_id=uuid.uuid4(), prisma=Prisma.SEGURANCA_PSICOLOGICA)
+    )
+
+    assert resultado is None
+    sessao.refresh.assert_not_awaited()
+
+
+async def test_outro_erro_de_integridade_e_propagado() -> None:
+    """Só a violação da chave da associação vira `None`; o resto sobe."""
+    sessao = _SessaoFalsa(
+        erro_no_flush=_erro_de_integridade(
+            "insert or update violates foreign key constraint "
+            '"fk_insight_prismas_insight_id_insights"'
+        )
+    )
+    repository = InsightPrismaRepository(sessao)  # type: ignore[arg-type]
+
+    with pytest.raises(IntegrityError):
+        await repository.insert(
+            InsightPrisma(insight_id=uuid.uuid4(), prisma=Prisma.LIDERANCA_ADAPTATIVA)
+        )
+
+
+async def test_buscar_insight_que_a_associacao_referencia() -> None:
+    """Sustenta a validação de existência que o service exige."""
+    insight = Insight(
+        id=uuid.uuid4(),
+        form_response_id=uuid.uuid4(),
+        content="texto da analise",
+    )
+    sessao = _SessaoFalsa(resultado=insight)
+    repository = InsightPrismaRepository(sessao)  # type: ignore[arg-type]
+
+    resultado = await repository.get_insight(insight.id)
+
+    assert resultado is insight
+
+
+async def test_buscar_insight_inexistente_devolve_none() -> None:
+    sessao = _SessaoFalsa(resultado=None)
+    repository = InsightPrismaRepository(sessao)  # type: ignore[arg-type]
+
+    resultado = await repository.get_insight(uuid.uuid4())
+
+    assert resultado is None

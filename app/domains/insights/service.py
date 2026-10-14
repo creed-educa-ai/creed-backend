@@ -17,7 +17,10 @@ class InsightPrismaService:
     async def associate(self, insight_id: uuid.UUID, prisma: Prisma) -> InsightPrisma:
         """Associa um prisma a um insight.
 
-        Um insight pode ter vários prismas, mas não o mesmo duas vezes.
+        Um insight pode ter vários prismas, mas não o mesmo duas vezes. A
+        checagem prévia cobre o caso comum; quem fecha a corrida de duas
+        chamadas simultâneas é a chave primária composta, e o `None` que o
+        repository devolve nesse caso é traduzido aqui.
         """
         insight = await self.repository.get_insight(insight_id)
         if insight is None:
@@ -25,12 +28,22 @@ class InsightPrismaService:
 
         existente = await self.repository.get(insight_id, prisma)
         if existente is not None:
-            raise ConflictError(
-                f"O insight {insight_id} já está associado ao prisma {prisma.value}"
-            )
+            raise self._conflito_de_associacao(insight_id, prisma)
 
         associacao = InsightPrisma(insight_id=insight_id, prisma=prisma)
-        return await self.repository.insert(associacao)
+        criada = await self.repository.insert(associacao)
+
+        if criada is None:
+            raise self._conflito_de_associacao(insight_id, prisma)
+
+        return criada
+
+    def _conflito_de_associacao(
+        self, insight_id: uuid.UUID, prisma: Prisma
+    ) -> ConflictError:
+        return ConflictError(
+            f"O insight {insight_id} já está associado ao prisma {prisma.value}"
+        )
 
     async def list_prismas(self, insight_id: uuid.UUID) -> list[InsightPrisma]:
         """Lista os prismas de um insight."""

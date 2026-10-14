@@ -134,3 +134,19 @@ async def test_remover_associacao_inexistente_lanca_not_found_error() -> None:
         await service.dissociate(uuid.uuid4(), Prisma.SEGURANCA_PSICOLOGICA)
 
     repository.delete.assert_not_awaited()
+
+
+async def test_colisao_no_flush_vira_conflict_error() -> None:
+    """Quando o par foi gravado entre a checagem e o flush, o repository
+    devolve `None` e é aqui que isso vira erro de domínio."""
+    insight_id = uuid.uuid4()
+    repository = AsyncMock(spec=InsightPrismaRepository)
+    repository.get_insight.return_value = _um_insight(insight_id)
+    repository.get.return_value = None
+    repository.insert.return_value = None
+    service = InsightPrismaService(repository)
+
+    with pytest.raises(ConflictError):
+        await service.associate(insight_id, Prisma.SEGURANCA_PSICOLOGICA)
+
+    repository.insert.assert_awaited_once()

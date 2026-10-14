@@ -6,6 +6,7 @@ Esta camada NÃO contém regra de negócio: só queries e operações de persist
 import uuid
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.insights.models import Insight, InsightPrisma, Prisma
@@ -37,10 +38,20 @@ class InsightPrismaRepository:
         )
         return list(result.scalars().all())
 
-    async def insert(self, associacao: InsightPrisma) -> InsightPrisma:
-        """Grava a associação."""
+    async def insert(self, associacao: InsightPrisma) -> InsightPrisma | None:
+        """Grava a associação.
+
+        Devolve `None` se o par foi gravado entre a checagem do service e
+        este `flush()` — corrida sem lock, fechada pela chave primária
+        composta.
+        """
         self.db.add(associacao)
-        await self.db.flush()
+        try:
+            await self.db.flush()
+        except IntegrityError as exc:
+            if "insight_prismas_pkey" not in str(exc.orig):
+                raise
+            return None
         await self.db.refresh(associacao)
         return associacao
 
