@@ -4,7 +4,6 @@ Cada linha é um bloco de análise textual gerado para um formulário
 respondido. O motor que produz o texto não mora aqui.
 """
 
-import enum
 import uuid
 from datetime import datetime
 
@@ -13,6 +12,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
+from app.shared.enums import Prisma
 
 
 class Insight(Base):
@@ -36,22 +36,6 @@ class Insight(Base):
     )
 
 
-class Prisma(enum.Enum):
-    """As cinco dimensões de análise do produto, conforme a CREED-53.1.
-
-    Diverge do enum `Prisma` de `app/domains/questions/models.py`
-    (CREED-351), cujos valores vêm do `modelo-de-dados.proposta.dbml`. O tipo
-    no Postgres é nomeado `insight_prisma` para que os dois possam coexistir
-    até que a divergência seja resolvida.
-    """
-
-    SEGURANCA_PSICOLOGICA = "seguranca_psicologica"
-    LIDERANCA_ADAPTATIVA = "lideranca_adaptativa"
-    CULTURA_EMPREENDEDORA = "cultura_empreendedora"
-    ADAPTABILIDADE_COGNITIVA = "adaptabilidade_cognitiva"
-    NEUROINOVACAO_PRISMA = "neuroinovacao_prisma"
-
-
 class InsightPrisma(Base):
     __tablename__ = "insight_prismas"
 
@@ -64,6 +48,6 @@ class InsightPrisma(Base):
         primary_key=True,
     )
     prisma: Mapped[Prisma] = mapped_column(
-        Enum(Prisma, name="insight_prisma"),
+        Enum(Prisma),
         primary_key=True,
     )

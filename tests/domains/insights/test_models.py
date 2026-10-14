@@ -9,7 +9,9 @@ from typing import cast
 
 import sqlalchemy as sa
 
-from app.domains.insights.models import Insight, InsightPrisma, Prisma
+from app.domains.insights.models import Insight, InsightPrisma
+from app.domains.questions import models as questions_models
+from app.shared.enums import Prisma
 
 # `Insight.__table__` é tipado como `FromClause` (a base genérica); o cast dá acesso
 # a `.indexes`/`.constraints`, que só existem em `Table`.
@@ -91,9 +93,21 @@ def test_prisma_tem_as_cinco_dimensoes_da_task() -> None:
     ]
 
 
-def test_tipo_do_enum_nao_colide_com_o_de_questions() -> None:
-    """Nome próprio no Postgres: o enum `Prisma` de questions usa outro
-    conjunto de valores e já ocupa o tipo `prisma`."""
+def test_usa_o_mesmo_tipo_postgres_que_questions() -> None:
+    """Uma definição só de `Prisma`, um tipo só no banco: a coluna de
+    `questions` e a de `insight_prismas` apontam para `prisma`."""
     tipo = TABELA_PRISMAS.columns["prisma"].type
     assert isinstance(tipo, sa.Enum)
-    assert tipo.name == "insight_prisma"
+    assert tipo.name == "prisma"
+
+    tabela_questions = cast(sa.Table, questions_models.Question.__table__)
+    tipo_questions = tabela_questions.columns["prisma"].type
+    assert isinstance(tipo_questions, sa.Enum)
+    assert tipo_questions.name == tipo.name
+
+
+def test_usa_a_mesma_classe_de_enum_que_questions() -> None:
+    """Uma definição só: a coluna de `questions` usa a mesma classe."""
+    tipo = cast(sa.Table, questions_models.Question.__table__).columns["prisma"].type
+    assert isinstance(tipo, sa.Enum)
+    assert tipo.enum_class is Prisma

@@ -9,8 +9,8 @@ from typing import cast
 
 import sqlalchemy as sa
 
-from app.domains.questions.models import Prisma, Question, QuestionSection, QuestionType
-from app.shared.enums import Dimension
+from app.domains.questions.models import Question, QuestionSection, QuestionType
+from app.shared.enums import Dimension, Prisma
 
 # `Question.__table__` é tipado como `FromClause` (a base genérica); o cast dá acesso
 # a `.indexes`/`.constraints`, que só existem em `Table`.
@@ -59,8 +59,14 @@ def test_type_tem_objetiva_e_descritiva() -> None:
     assert [item.value for item in QuestionType] == ["objective", "descriptive"]
 
 
-def test_prisma_tem_as_cinco_dimensoes() -> None:
-    assert len(list(Prisma)) == 5
+def test_prisma_tem_as_cinco_dimensoes_do_material_do_produto() -> None:
+    assert [item.value for item in Prisma] == [
+        "seguranca_psicologica",
+        "lideranca_adaptativa",
+        "cultura_empreendedora",
+        "adaptabilidade_cognitiva",
+        "neuroinovacao_prisma",
+    ]
 
 
 def test_dimension_tem_as_sete_dimensoes_da_matriz() -> None:
@@ -96,4 +102,7 @@ def test_restricao_unica_em_form_id_e_order_index() -> None:
         and constraint.name == "uq_questions_form_id_order_index"
     ]
     assert len(restricoes) == 1
-    assert {coluna.name for coluna in restricoes[0].columns} == {"form_id", "order_index"}
+    assert {coluna.name for coluna in restricoes[0].columns} == {
+        "form_id",
+        "order_index",
+    }
