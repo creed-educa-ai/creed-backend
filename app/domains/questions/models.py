@@ -23,6 +23,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
+from app.shared.enums import Dimension
 
 
 class QuestionType(enum.Enum):
@@ -98,6 +99,10 @@ class Question(Base):
     required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
     prisma: Mapped[Prisma | None] = mapped_column(Enum(Prisma), nullable=True)
+
+    dimensao: Mapped[Dimension | None] = mapped_column(
+        Enum(Dimension, name="dimension"), nullable=True
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
