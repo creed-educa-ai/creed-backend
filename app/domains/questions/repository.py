@@ -17,7 +17,12 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domains.questions.models import Question, QuestionSection, QuestionType
+from app.domains.questions.models import (
+    Question,
+    QuestionOption,
+    QuestionSection,
+    QuestionType,
+)
 
 
 class QuestionRepository:
@@ -79,6 +84,38 @@ class QuestionRepository:
             select(Question).where(
                 Question.form_id == form_id,
                 Question.order_index == order_index,
+            )
+        )
+        return result.scalar_one_or_none()
+
+
+class QuestionOptionRepository:
+    def __init__(self, db: AsyncSession) -> None:
+        self.db = db
+
+    async def insert(self, option: QuestionOption) -> QuestionOption | None:
+        """Grava uma alternativa no banco.
+
+        Devolve `None` se a posição foi ocupada entre a checagem do service e este
+        `flush()`: a UniqueConstraint fecha a corrida que a checagem sozinha não fecha.
+        """
+        self.db.add(option)
+        try:
+            await self.db.flush()
+        except IntegrityError as exc:
+            if "uq_question_options_question_id_order_index" not in str(exc.orig):
+                raise
+            return None
+        await self.db.refresh(option)
+        return option
+
+    async def get_by_question_and_order(
+        self, question_id: uuid.UUID, order_index: int
+    ) -> QuestionOption | None:
+        result = await self.db.execute(
+            select(QuestionOption).where(
+                QuestionOption.question_id == question_id,
+                QuestionOption.order_index == order_index,
             )
         )
         return result.scalar_one_or_none()
