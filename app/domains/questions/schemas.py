@@ -13,13 +13,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.domains.questions.models import (
-    Prisma,
-    Question,
-    QuestionSection,
-    QuestionType,
-)
-from app.shared.enums import Dimension
+from app.domains.questions.models import Question, QuestionSection, QuestionType
+from app.shared.enums import Dimension, Prisma
 
 __all__ = [
     "Dimension",
@@ -106,7 +101,7 @@ class QuestionResponse(QuestionBase):
                     "section": "assessment",
                     "required": True,
                     "dimensao": "S2",
-                    "prisma": "plasticidade_humana",
+                    "prisma": "seguranca_psicologica",
                     "created_at": "2026-09-22T14:00:00Z",
                 }
             ]

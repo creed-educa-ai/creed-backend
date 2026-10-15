@@ -32,3 +32,18 @@ class Dimension(enum.Enum):
     S6 = "S6"  # Ensino Culturalmente Responsivo - 46-51 (6)
     S7 = "S7"  # Competências Culturais, Responsivas e Empreendedoras - 52-57 (6)
     S8 = "S8"  # Inovação e Impacto Social - 58-64 (7)
+
+
+class Prisma(enum.Enum):
+    """Os cinco prismas de análise do produto.
+
+    Tipo `prisma` no banco, compartilhado por `questions` e `insights`. Os
+    valores vêm do material do produto sobre a composição dos prismas
+    (SP, LA, CE, AC, NP).
+    """
+
+    SEGURANCA_PSICOLOGICA = "seguranca_psicologica"
+    LIDERANCA_ADAPTATIVA = "lideranca_adaptativa"
+    CULTURA_EMPREENDEDORA = "cultura_empreendedora"
+    ADAPTABILIDADE_COGNITIVA = "adaptabilidade_cognitiva"
+    NEUROINOVACAO_PRISMA = "neuroinovacao_prisma"
