@@ -25,4 +25,5 @@ from app.domains.prognosticos import models as prognosticos_models  # noqa: F401
 from app.domains.questions import models as questions_models  # noqa: F401
 from app.domains.relatorios import models as relatorios_models  # noqa: F401
 from app.domains.responses import models as responses_models  # noqa: F401
+from app.domains.sector import models as sector_models  # noqa: F401
 from app.domains.users import models as users_models  # noqa: F401
