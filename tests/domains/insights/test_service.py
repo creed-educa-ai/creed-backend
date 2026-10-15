@@ -9,9 +9,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.domains.insights.models import Insight, InsightPrisma, Prisma
+from app.domains.insights.models import Insight, InsightPrisma
 from app.domains.insights.repository import InsightPrismaRepository
 from app.domains.insights.service import InsightPrismaService
+from app.shared.enums import Prisma
 from app.shared.exceptions import ConflictError, NotFoundError
 
 

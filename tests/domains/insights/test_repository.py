@@ -11,8 +11,9 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from sqlalchemy.exc import IntegrityError
 
-from app.domains.insights.models import Insight, InsightPrisma, Prisma
+from app.domains.insights.models import Insight, InsightPrisma
 from app.domains.insights.repository import InsightPrismaRepository
+from app.shared.enums import Prisma
 
 
 class _SessaoFalsa:

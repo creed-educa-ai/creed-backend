@@ -5,8 +5,9 @@ Esta camada não conhece HTTP nem detalhes de ORM.
 
 import uuid
 
-from app.domains.insights.models import InsightPrisma, Prisma
+from app.domains.insights.models import InsightPrisma
 from app.domains.insights.repository import InsightPrismaRepository
+from app.shared.enums import Prisma
 from app.shared.exceptions import ConflictError, NotFoundError
 
 

@@ -9,7 +9,8 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domains.insights.models import Insight, InsightPrisma, Prisma
+from app.domains.insights.models import Insight, InsightPrisma
+from app.shared.enums import Prisma
 
 
 class InsightPrismaRepository:
