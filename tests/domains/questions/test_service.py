@@ -17,9 +17,14 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.domains.questions.models import Question, QuestionSection, QuestionType
-from app.domains.questions.schemas import QuestionCreate
-from app.domains.questions.service import QuestionService
+from app.domains.questions.models import (
+    Question,
+    QuestionOption,
+    QuestionSection,
+    QuestionType,
+)
+from app.domains.questions.schemas import QuestionCreate, QuestionOptionCreate
+from app.domains.questions.service import QuestionOptionService, QuestionService
 from app.shared.exceptions import (
     ConflictError,
     ForbiddenError,
@@ -380,3 +385,193 @@ class TestPerguntaDescritiva:
         question = uma_question(type=QuestionType.OBJECTIVE)
 
         assert not servico(FakeQuestionRepository()).is_descriptive(question)
+
+
+class FakeQuestionOptionRepository:
+    """Duble do repository de alternativas: guarda em lista, nao decide nada."""
+
+    def __init__(
+        self,
+        existing: list[QuestionOption] | None = None,
+        refuse_insert: bool = False,
+    ) -> None:
+        self.items: list[QuestionOption] = list(existing or [])
+        self.refuse_insert = refuse_insert
+
+    async def insert(self, option: QuestionOption) -> QuestionOption | None:
+        if self.refuse_insert:
+            return None
+        self.items.append(option)
+        return option
+
+    async def get_by_question_and_order(
+        self, question_id: uuid.UUID, order_index: int
+    ) -> QuestionOption | None:
+        return next(
+            (
+                o
+                for o in self.items
+                if o.question_id == question_id and o.order_index == order_index
+            ),
+            None,
+        )
+
+
+def an_option(**fields: object) -> QuestionOption:
+    """QuestionOption montada a mao, com todo campo explicito.
+
+    `default` e `server_default` so valem no INSERT, entao um objeto que nunca
+    passou pela sessao teria `None` neles.
+    """
+    default: dict[str, object] = {
+        "id": uuid.uuid4(),
+        "question_id": uuid.uuid4(),
+        "label": "Sim",
+        "value": "sim",
+        "order_index": 0,
+        "created_at": datetime(2026, 10, 14, tzinfo=UTC),
+    }
+    return QuestionOption(**{**default, **fields})
+
+
+def option_service(
+    options: FakeQuestionOptionRepository,
+    questions: list[Question] | None = None,
+    forms: FakeFormService | None = None,
+) -> QuestionOptionService:
+    """Service real de alternativas, com o `QuestionService` real por baixo.
+
+    So o banco e o `FormService` sao dubles: a pergunta e achada de verdade pelo
+    `QuestionService.get`, que e o que o service de alternativas usa.
+    """
+    form_service = forms or FakeFormService()
+    question_service = QuestionService(
+        FakeQuestionRepository(questions),  # type: ignore[arg-type]
+        form_service,  # type: ignore[arg-type]
+    )
+    return QuestionOptionService(
+        options,  # type: ignore[arg-type]
+        question_service,
+        form_service,  # type: ignore[arg-type]
+    )
+
+
+class TestCreateQuestionOption:
+    async def test_persists_the_payload_fields_on_the_question(self) -> None:
+        question = uma_question(type=QuestionType.OBJECTIVE)
+        options = FakeQuestionOptionRepository()
+
+        created = await option_service(options, [question]).create(
+            question.id,
+            QuestionOptionCreate(label="Sim", value="sim", order_index=0),
+            role="gestor",
+            organization_id=ORG,
+        )
+
+        assert created.question_id == question.id
+        assert (created.label, created.value, created.order_index) == ("Sim", "sim", 0)
+        assert options.items == [created]
+
+    async def test_unknown_question_raises_not_found_without_saving(self) -> None:
+        options = FakeQuestionOptionRepository()
+        question_id = uuid.uuid4()
+
+        with pytest.raises(NotFoundError, match=re.escape(str(question_id))):
+            await option_service(options).create(
+                question_id,
+                QuestionOptionCreate(label="Sim", value="sim", order_index=0),
+                role="gestor",
+                organization_id=ORG,
+            )
+
+        assert options.items == []
+
+    async def test_question_from_another_organization_raises_forbidden(self) -> None:
+        question = uma_question(type=QuestionType.OBJECTIVE)
+        options = FakeQuestionOptionRepository()
+
+        with pytest.raises(ForbiddenError):
+            await option_service(
+                options, [question], FakeFormService(proibido=True)
+            ).create(
+                question.id,
+                QuestionOptionCreate(label="Sim", value="sim", order_index=0),
+                role="gestor",
+                organization_id=ORG,
+            )
+
+        assert options.items == []
+
+    async def test_descriptive_question_raises_validation_error_without_saving(
+        self,
+    ) -> None:
+        question = uma_question(type=QuestionType.DESCRIPTIVE)
+        options = FakeQuestionOptionRepository()
+
+        with pytest.raises(ValidationError, match="descritiva"):
+            await option_service(options, [question]).create(
+                question.id,
+                QuestionOptionCreate(label="Sim", value="sim", order_index=0),
+                role="gestor",
+                organization_id=ORG,
+            )
+
+        assert options.items == []
+
+    async def test_access_is_checked_before_the_question_type(self) -> None:
+        """Quem nao tem acesso nao descobre o tipo da pergunta pelo erro."""
+        question = uma_question(type=QuestionType.DESCRIPTIVE)
+        options = FakeQuestionOptionRepository()
+
+        with pytest.raises(ForbiddenError):
+            await option_service(
+                options, [question], FakeFormService(proibido=True)
+            ).create(
+                question.id,
+                QuestionOptionCreate(label="Sim", value="sim", order_index=0),
+                role="gestor",
+                organization_id=ORG,
+            )
+
+    async def test_occupied_position_raises_conflict_without_saving(self) -> None:
+        question = uma_question(type=QuestionType.OBJECTIVE)
+        existing = an_option(question_id=question.id, order_index=0)
+        options = FakeQuestionOptionRepository([existing])
+
+        with pytest.raises(ConflictError, match=re.escape(str(question.id))):
+            await option_service(options, [question]).create(
+                question.id,
+                QuestionOptionCreate(label="Nao", value="nao", order_index=0),
+                role="gestor",
+                organization_id=ORG,
+            )
+
+        assert options.items == [existing]
+
+    async def test_lost_race_on_insert_raises_conflict_without_saving(self) -> None:
+        question = uma_question(type=QuestionType.OBJECTIVE)
+        options = FakeQuestionOptionRepository(refuse_insert=True)
+
+        with pytest.raises(ConflictError, match=re.escape(str(question.id))):
+            await option_service(options, [question]).create(
+                question.id,
+                QuestionOptionCreate(label="Sim", value="sim", order_index=0),
+                role="gestor",
+                organization_id=ORG,
+            )
+
+        assert options.items == []
+
+    async def test_same_position_on_another_question_is_allowed(self) -> None:
+        question = uma_question(type=QuestionType.OBJECTIVE)
+        other = an_option(question_id=uuid.uuid4(), order_index=0)
+        options = FakeQuestionOptionRepository([other])
+
+        created = await option_service(options, [question]).create(
+            question.id,
+            QuestionOptionCreate(label="Sim", value="sim", order_index=0),
+            role="gestor",
+            organization_id=ORG,
+        )
+
+        assert options.items == [other, created]
