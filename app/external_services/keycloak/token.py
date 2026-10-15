@@ -39,7 +39,13 @@ def _jwks_endpoint() -> str:
 
 
 def _issuer() -> str:
-    base = settings.KEYCLOAK_SERVER_URL.rstrip("/")
+    """O `iss` esperado: o endereço **público** do realm, não o que o back usa.
+
+    A chave (JWKS) continua sendo lida pela rede interna. Só o emissor muda, porque
+    é o Keycloak que decide o que carimba no token — e ele carimba o endereço que
+    o navegador enxerga.
+    """
+    base = (settings.KEYCLOAK_PUBLIC_URL or settings.KEYCLOAK_SERVER_URL).rstrip("/")
     return f"{base}/realms/{settings.KEYCLOAK_REALM}"
 
 

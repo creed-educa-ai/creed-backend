@@ -35,6 +35,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Histórico inteiro: o passo "migration só na consolidação" compara
+          # o PR com origin/<base>, que um clone raso não tem.
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
@@ -59,6 +63,52 @@ jobs:
             echo "::error::Múltiplas heads do Alembic. Use 'alembic merge' (ADR-002, 2.4.c)."
             exit 1
           fi
+
+      # ADR-0009: PR de tarefa sobe sem migration, e um AGES III consolida as
+      # mudanças de banco da sprint numa branch *-consolidar-migrations. dev e
+      # main como origem são release/back-merge e já trazem a consolidada.
+      - name: Alembic — migration só na consolidação
+        id: consolidacao
+        if: github.event_name == 'pull_request'
+        env:
+          # Via env, não interpolado direto no script: nome de branch é
+          # conteúdo controlado por quem abre o PR.
+          BRANCH: ${{ github.head_ref }}
+          BASE: ${{ github.base_ref }}
+        run: |
+          case "$BRANCH" in
+            *-consolidar-migrations)
+              echo "Branch de consolidação: pode trazer migration."
+              echo "consolidar=sim" >> "$GITHUB_OUTPUT"
+              exit 0 ;;
+            dev|main)
+              echo "Branch permanente ($BRANCH): nada a validar."
+              exit 0 ;;
+          esac
+
+          ALTERADAS=$(git diff --name-only "origin/$BASE...HEAD" -- alembic/versions/)
+          if [ -n "$ALTERADAS" ]; then
+            echo "::error::PR de tarefa não traz migration (ADR-0009)."
+            echo "$ALTERADAS"
+            cat <<'AJUDA'
+
+          A migration que você gerou serve para testar local. Antes de subir:
+            alembic downgrade <head-da-dev>     # primeiro desce
+            rm alembic/versions/<arquivo>.py    # depois apaga
+          E descreva o que mudou no banco na seção "Banco" do PR.
+          Detalhes na seção Migrations do README.
+          AJUDA
+            exit 1
+          fi
+          echo "Nenhuma migration no PR."
+
+      # Só na consolidação: a cadeia inteira sobe num banco limpo e não sobra
+      # diferença entre models.py e o schema.
+      - name: Alembic — aplicar e conferir a consolidação
+        if: steps.consolidacao.outputs.consolidar == 'sim'
+        run: |
+          alembic upgrade head
+          alembic check
 
       - name: Pytest
         run: pytest

@@ -13,14 +13,11 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.domains.questions.models import (
-    Prisma,
-    Question,
-    QuestionSection,
-    QuestionType,
-)
+from app.domains.questions.models import Question, QuestionSection, QuestionType
+from app.shared.enums import Dimension, Prisma
 
 __all__ = [
+    "Dimension",
     "Prisma",
     "QuestionCreate",
     "QuestionResponse",
@@ -68,6 +65,7 @@ class QuestionCreate(QuestionBase):
                     "order_index": 0,
                     "type": "objective",
                     "section": "assessment",
+                    "dimensao": "S2",
                 }
             ]
         }
@@ -76,6 +74,10 @@ class QuestionCreate(QuestionBase):
     required: bool = Field(
         default=True,
         description="Se a pergunta exige resposta para submeter o formulário.",
+    )
+    dimensao: Dimension | None = Field(
+        default=None,
+        description="Dimensão da Matriz CREED associada à pergunta, quando houver.",
     )
     prisma: Prisma | None = Field(
         default=None,
@@ -98,7 +100,8 @@ class QuestionResponse(QuestionBase):
                     "type": "objective",
                     "section": "assessment",
                     "required": True,
-                    "prisma": "plasticidade_humana",
+                    "dimensao": "S2",
+                    "prisma": "seguranca_psicologica",
                     "created_at": "2026-09-22T14:00:00Z",
                 }
             ]
@@ -108,6 +111,9 @@ class QuestionResponse(QuestionBase):
     id: uuid.UUID = Field(description="Identificador da pergunta.")
     required: bool = Field(
         description="Se a pergunta exige resposta para submeter o formulário."
+    )
+    dimensao: Dimension | None = Field(
+        description="Dimensão da Matriz CREED associada à pergunta, quando houver."
     )
     prisma: Prisma | None = Field(
         description="Dimensão de análise associada à pergunta, quando houver."

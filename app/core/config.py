@@ -43,6 +43,12 @@ class Settings(BaseSettings):
     # --- Keycloak (CREED-23, decisoes D1 e D3) ---
     # O realm local sobe pelo docker-compose a partir de docker/keycloak/realm-creed.json.
     KEYCLOAK_SERVER_URL: str = "http://localhost:8080"
+    # Endereço PÚBLICO do Keycloak — o que ele carimba no `iss` dos tokens. Só se
+    # preenche quando difere do KEYCLOAK_SERVER_URL: em produção o back fala com o
+    # Keycloak pela rede interna (http://keycloak:8080/auth), mas o token sai com o
+    # endereço público (https://<IP>/auth) (ADR-0007). Vazio = o mesmo do
+    # KEYCLOAK_SERVER_URL, que é o caso do ambiente local.
+    KEYCLOAK_PUBLIC_URL: str = ""
     KEYCLOAK_REALM: str = "creed"
     KEYCLOAK_CLIENT_ID: str = "creed-backend"
     # Sem default, mesmo motivo do POSTGRES_PASSWORD: melhor falhar no boot do que

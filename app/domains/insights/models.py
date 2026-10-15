@@ -7,11 +7,12 @@ respondido. O motor que produz o texto não mora aqui.
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Text, func
+from sqlalchemy import DateTime, Enum, ForeignKey, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
+from app.shared.enums import Prisma
 
 
 class Insight(Base):
@@ -32,4 +33,21 @@ class Insight(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class InsightPrisma(Base):
+    __tablename__ = "insight_prismas"
+
+    insight_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "insights.id",
+            name="fk_insight_prismas_insight_id_insights",
+        ),
+        primary_key=True,
+    )
+    prisma: Mapped[Prisma] = mapped_column(
+        Enum(Prisma),
+        primary_key=True,
     )

@@ -2,7 +2,7 @@
   "realm": "creed",
   "displayName": "CREED.ai Educa",
   "enabled": true,
-  "sslRequired": "none",
+  "sslRequired": "${CREED_REALM_SSL_REQUIRED}",
   "registrationAllowed": false,
   "resetPasswordAllowed": false,
   "verifyEmail": false,
@@ -36,7 +36,7 @@
       "protocol": "openid-connect",
       "publicClient": false,
       "bearerOnly": false,
-      "secret": "creed-local-secret",
+      "secret": "${CREED_BACKEND_CLIENT_SECRET}",
       "standardFlowEnabled": false,
       "implicitFlowEnabled": false,
       "directAccessGrantsEnabled": true,
@@ -59,24 +59,6 @@
     }
   ],
   "users": [
-    {
-      "id": "11111111-1111-4111-8111-111111111111",
-      "username": "dev@creed.example.com",
-      "email": "dev@creed.example.com",
-      "firstName": "Dev",
-      "lastName": "Local",
-      "enabled": true,
-      "emailVerified": true,
-      "requiredActions": [],
-      "credentials": [
-        {
-          "type": "password",
-          "value": "dev",
-          "temporary": false
-        }
-      ],
-      "realmRoles": ["admin"]
-    },
     {
       "username": "service-account-creed-backend",
       "enabled": true,
