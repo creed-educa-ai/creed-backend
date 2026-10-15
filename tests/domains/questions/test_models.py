@@ -10,6 +10,7 @@ from typing import cast
 import sqlalchemy as sa
 
 from app.domains.questions.models import Prisma, Question, QuestionSection, QuestionType
+from app.shared.enums import Dimension
 
 # `Question.__table__` é tipado como `FromClause` (a base genérica); o cast dá acesso
 # a `.indexes`/`.constraints`, que só existem em `Table`.
@@ -27,14 +28,14 @@ COLUNAS_OBRIGATORIAS = {
 }
 
 
-def test_tabela_tem_as_nove_colunas_da_spec() -> None:
+def test_tabela_tem_as_colunas_da_spec() -> None:
     colunas = {coluna.name for coluna in TABELA.columns}
-    assert colunas == COLUNAS_OBRIGATORIAS | {"prisma"}
+    assert colunas == COLUNAS_OBRIGATORIAS | {"prisma", "dimensao"}
 
 
-def test_so_prisma_aceita_vazio() -> None:
+def test_prisma_e_dimensao_aceitam_vazio() -> None:
     for coluna in TABELA.columns:
-        esperado = coluna.name == "prisma"
+        esperado = coluna.name in {"prisma", "dimensao"}
         assert coluna.nullable == esperado, (
             f"coluna {coluna.name}: nullable={coluna.nullable}, esperado {esperado}"
         )
@@ -60,6 +61,18 @@ def test_type_tem_objetiva_e_descritiva() -> None:
 
 def test_prisma_tem_as_cinco_dimensoes() -> None:
     assert len(list(Prisma)) == 5
+
+
+def test_dimension_tem_as_sete_dimensoes_da_matriz() -> None:
+    assert [item.value for item in Dimension] == [
+        "S2",
+        "S4",
+        "S5A",
+        "S5B",
+        "S6",
+        "S7",
+        "S8",
+    ]
 
 
 def test_a_unica_chave_estrangeira_e_form_id() -> None:

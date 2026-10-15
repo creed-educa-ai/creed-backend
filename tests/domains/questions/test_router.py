@@ -86,6 +86,7 @@ class _FakeQuestionService:
             type=request.type,
             section=request.section,
             required=request.required,
+            dimensao=request.dimensao,
             prisma=request.prisma,
             created_at=datetime(2026, 9, 22, tzinfo=UTC),
         )
@@ -191,10 +192,22 @@ class TestCriarPergunta:
             "type",
             "section",
             "required",
+            "dimensao",
             "prisma",
             "created_at",
         }
         assert body["section"] == "assessment"
+        assert body["dimensao"] is None
+
+    def test_com_dimensao_valida_devolve_a_dimensao(
+        self, app: FastAPI, client: TestClient
+    ) -> None:
+        _use_fake_service(app, _FakeQuestionService())
+
+        response = client.post("/questions", json=_payload(dimensao="S5A"))
+
+        assert response.status_code == 201
+        assert response.json()["dimensao"] == "S5A"
 
     def test_com_conflito_de_posicao_devolve_409(
         self, app: FastAPI, client: TestClient
@@ -286,6 +299,15 @@ class TestCriarPergunta:
 
         assert response.status_code == 422
 
+    def test_com_dimensao_fora_do_enum_devolve_422(
+        self, app: FastAPI, client: TestClient
+    ) -> None:
+        _use_fake_service(app, _FakeQuestionService())
+
+        response = client.post("/questions", json=_payload(dimensao="inexistente"))
+
+        assert response.status_code == 422
+
 
 class TestListarPerguntasDoFormulario:
     def test_devolve_200_com_a_lista_em_ordem_de_posicao(
@@ -300,6 +322,7 @@ class TestListarPerguntasDoFormulario:
             type=QuestionType.DESCRIPTIVE,
             section=QuestionSection.PROFILE,
             required=True,
+            dimensao=None,
             prisma=None,
             created_at=datetime(2026, 9, 22, tzinfo=UTC),
         )
@@ -311,6 +334,7 @@ class TestListarPerguntasDoFormulario:
             type=QuestionType.OBJECTIVE,
             section=QuestionSection.ASSESSMENT,
             required=True,
+            dimensao=None,
             prisma=None,
             created_at=datetime(2026, 9, 22, tzinfo=UTC),
         )
@@ -353,6 +377,7 @@ class TestListarPerguntasDoFormulario:
             type=QuestionType.OBJECTIVE,
             section=QuestionSection.ASSESSMENT,
             required=True,
+            dimensao=None,
             prisma=None,
             created_at=datetime(2026, 9, 22, tzinfo=UTC),
         )
@@ -364,6 +389,7 @@ class TestListarPerguntasDoFormulario:
             type=QuestionType.DESCRIPTIVE,
             section=QuestionSection.PROFILE,
             required=True,
+            dimensao=None,
             prisma=None,
             created_at=datetime(2026, 9, 22, tzinfo=UTC),
         )
@@ -375,6 +401,7 @@ class TestListarPerguntasDoFormulario:
             type=QuestionType.OBJECTIVE,
             section=QuestionSection.ASSESSMENT,
             required=True,
+            dimensao=None,
             prisma=None,
             created_at=datetime(2026, 9, 22, tzinfo=UTC),
         )
