@@ -69,5 +69,7 @@ class TestKeycloak:
         settings = Settings(_env_file=None)
 
         assert settings.KEYCLOAK_SERVER_URL == "http://localhost:8080"
+        # Vazio: no local o endereço público é o mesmo do KEYCLOAK_SERVER_URL.
+        assert settings.KEYCLOAK_PUBLIC_URL == ""
         assert settings.KEYCLOAK_REALM == "creed"
         assert settings.KEYCLOAK_CLIENT_ID == "creed-backend"

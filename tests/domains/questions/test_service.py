@@ -25,6 +25,7 @@ from app.domains.questions.models import (
 )
 from app.domains.questions.schemas import QuestionCreate, QuestionOptionCreate
 from app.domains.questions.service import QuestionOptionService, QuestionService
+from app.shared.enums import Dimension
 from app.shared.exceptions import (
     ConflictError,
     ForbiddenError,
@@ -97,6 +98,7 @@ def uma_question(**campos: object) -> Question:
         "type": QuestionType.OBJECTIVE,
         "section": QuestionSection.ASSESSMENT,
         "required": True,
+        "dimensao": None,
         "prisma": None,
         "created_at": datetime(2026, 9, 22, tzinfo=UTC),
     }
@@ -212,6 +214,24 @@ class TestCriarQuestion:
         assert criada.section is QuestionSection.ASSESSMENT
         assert repository.itens == [criada]
 
+    async def test_persiste_a_dimensao_do_payload(self) -> None:
+        repository = FakeQuestionRepository()
+
+        criada = await servico(repository).create(
+            QuestionCreate(
+                form_id=uuid.uuid4(),
+                text="Item da dimensão S2",
+                order_index=0,
+                type=QuestionType.OBJECTIVE,
+                section=QuestionSection.ASSESSMENT,
+                dimensao=Dimension.S2,
+            ),
+            role="gestor",
+            organization_id=ORG,
+        )
+
+        assert criada.dimensao is Dimension.S2
+
     async def test_nasce_required_e_sem_prisma_quando_omitidos(self) -> None:
         repository = FakeQuestionRepository()
 
@@ -229,6 +249,7 @@ class TestCriarQuestion:
 
         assert criada.required is True
         assert criada.prisma is None
+        assert criada.dimensao is None
 
     async def test_posicao_repetida_no_mesmo_formulario_vira_conflito(self) -> None:
         form_id = uuid.uuid4()

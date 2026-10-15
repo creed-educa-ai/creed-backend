@@ -66,6 +66,7 @@ class QuestionService:
             type=request.type,
             section=request.section,
             required=request.required,
+            dimensao=request.dimensao,
             prisma=request.prisma,
         )
         created = await self.repository.insert(question)

@@ -80,12 +80,17 @@ def test_request_fields_path_parameters_and_examples_are_documented() -> None:
     assert components["FormResponseResponse"]["examples"]
     assert components["ParticipantCreate"]["examples"]
     assert components["ParticipantResponse"]["examples"]
+    assert components["QuestionCreate"]["examples"][0]["dimensao"] == "S2"
+    assert components["QuestionResponse"]["examples"][0]["dimensao"] == "S2"
+    assert components["QuestionCreate"]["properties"]["dimensao"]["description"]
+    assert components["QuestionResponse"]["properties"]["dimensao"]["description"]
 
     for schema_name in (
         "LoginRequest",
         "UserCreate",
         "FormResponseCreate",
         "ParticipantCreate",
+        "QuestionCreate",
     ):
         for field in components[schema_name]["properties"].values():
             assert field["description"]
