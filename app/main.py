@@ -67,6 +67,10 @@ OPENAPI_TAGS = [
         "name": "forms",
         "description": "Cadastro e consulta dos formulários.",
     },
+    {
+        "name": "organizacoes",
+        "description": "Cadastro, consulta e alteração das organizações parceiras.",
+    },
 ]
 
 
