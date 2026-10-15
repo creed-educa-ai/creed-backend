@@ -56,7 +56,9 @@ services:
       DB_POSTGRESDB_SCHEMA: n8n
       N8N_SECURE_COOKIE: 'false'
     ports: ['5678:5678']
-    volumes: [n8ndata:/home/node/.n8n]
+    volumes:
+      - n8ndata:/home/node/.n8n
+      - ./docker/n8n/workflows:/workflows:ro
     depends_on:
       db: {condition: service_healthy}
 

@@ -1,0 +1,217 @@
+{
+  "name": "CREED - Geracao de insight v1 (Assincrono com Callback)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "creed/insights/v1",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -700,
+        0
+      ],
+      "id": "a1b2c3d4-1111-4444-8888-000000000001",
+      "name": "Receber solicitacao",
+      "webhookId": "creed-insights-v1-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\nconst payload = input.body ?? input;\nconst startedAtMs = Date.now();\nconst errors = [];\n\nconst knownPrisms = new Set([\n  'seguranca_psicologica',\n  'lideranca_adaptativa',\n  'cultura_empreendedora',\n  'adaptabilidade_cognitiva',\n  'neuroinovacao_prisma',\n]);\n\nconst knownDimensions = new Set(['S2', 'S4', 'S5A', 'S5B', 'S6', 'S7', 'S8']);\n\nif (payload.contract_version && payload.contract_version !== 'v1') {\n  errors.push('contract_version deve ser v1');\n}\nif (typeof payload.request_id !== 'string' || payload.request_id.trim() === '') {\n  errors.push('request_id e obrigatorio');\n}\nif (typeof payload.form_response_id !== 'string' || payload.form_response_id.trim() === '') {\n  errors.push('form_response_id e obrigatorio');\n}\nif (!Array.isArray(payload.answers) || payload.answers.length === 0) {\n  errors.push('answers deve ser uma lista nao vazia');\n}\n\nconst answers = Array.isArray(payload.answers) ? payload.answers : [];\nfor (const [index, answer] of answers.entries()) {\n  if (typeof answer.question_id !== 'string' || answer.question_id.trim() === '') {\n    errors.push(`answers[${index}].question_id e obrigatorio`);\n  }\n  if (answer.prisma && !knownPrisms.has(answer.prisma)) {\n    errors.push(`answers[${index}].prisma inválido: ${answer.prisma}`);\n  }\n  if (answer.dimensao && !knownDimensions.has(answer.dimensao)) {\n    errors.push(`answers[${index}].dimensao inválida: ${answer.dimensao}`);\n  }\n  const hasScore = typeof answer.score === 'number' && Number.isFinite(answer.score);\n  const hasText = typeof answer.answer === 'string' && answer.answer.trim() !== '';\n  if (!hasScore && !hasText) {\n    errors.push(`answers[${index}] precisa de score numérico ou resposta textual`);\n  }\n  if (hasScore && (answer.score < 1 || answer.score > 5)) {\n    errors.push(`answers[${index}].score deve estar entre 1 e 5`);\n  }\n}\n\nif (errors.length > 0) {\n  return [{\n    json: {\n      valid: false,\n      status: 'invalid_payload',\n      request_id: payload.request_id ?? null,\n      contract_version: 'v1',\n      errors,\n      metrics: {\n        received_at: new Date(startedAtMs).toISOString(),\n        n8n_processing_ms: Date.now() - startedAtMs,\n      },\n    },\n  }];\n}\n\nreturn [{\n  json: {\n    valid: true,\n    request: {\n      contract_version: 'v1',\n      request_id: payload.request_id,\n      form_response_id: payload.form_response_id,\n      empresa: Boolean(payload.empresa),\n      callback_url: payload.callback_url || 'http://backend:8000/api/v1/insights/callback',\n      source: payload.source || 'individual_submission',\n      answers,\n    },\n    metrics: {\n      received_at: new Date(startedAtMs).toISOString(),\n      started_at_ms: startedAtMs,\n    },\n  },\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -460,
+        0
+      ],
+      "id": "a1b2c3d4-1111-4444-8888-000000000002",
+      "name": "Validar e normalizar entrada v1"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c1d2e3f4-0001",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -220,
+        0
+      ],
+      "id": "a1b2c3d4-1111-4444-8888-000000000003",
+      "name": "Payload valido?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 422
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        40,
+        140
+      ],
+      "id": "a1b2c3d4-1111-4444-8888-000000000004",
+      "name": "Responder 422 Invalido"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"status\": \"processing\",\n  \"contract_version\": \"v1\",\n  \"request_id\": \"{{ $json.request.request_id }}\",\n  \"form_response_id\": \"{{ $json.request.form_response_id }}\",\n  \"message\": \"Solicitacao aceita. O insight sera processado de forma assincrona e enviado via callback.\",\n  \"received_at\": \"{{ $json.metrics.received_at }}\"\n}",
+        "options": {
+          "responseCode": 202
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        40,
+        -160
+      ],
+      "id": "a1b2c3d4-1111-4444-8888-000000000005",
+      "name": "Responder 202 Aceito (Assincrono)"
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst request = data.request;\n\nconst labels = {\n  seguranca_psicologica: 'Segurança Psicológica',\n  lideranca_adaptativa: 'Liderança Adaptativa',\n  cultura_empreendedora: 'Cultura Empreendedora',\n  adaptabilidade_cognitiva: 'Adaptabilidade Cognitiva',\n  neuroinovacao_prisma: 'Neuroinovação',\n};\n\n// Mapeamento das Dimensões (Matriz CREED) para os Prismas\n// SP = (S6 + S7)/2, LA = (S7 + S8)/2, CE = (S4 + S6)/2, AC = (S5A + S5B)/2\nconst dimTotals = {};\nconst dimCounts = {};\nfor (const answer of request.answers) {\n  if (answer.dimensao && typeof answer.score === 'number') {\n    dimTotals[answer.dimensao] = (dimTotals[answer.dimensao] || 0) + answer.score;\n    dimCounts[answer.dimensao] = (dimCounts[answer.dimensao] || 0) + 1;\n  }\n}\nconst dimAverages = {};\nfor (const d of Object.keys(dimTotals)) {\n  dimAverages[d] = dimTotals[d] / dimCounts[d];\n}\n\n// Cálculo dos Prismas a partir das dimensões ou respostas diretas\nconst prismAverages = {};\nif (Object.keys(dimAverages).length > 0) {\n  if (dimAverages.S6 && dimAverages.S7) {\n    prismAverages.seguranca_psicologica = (dimAverages.S6 + dimAverages.S7) / 2;\n  }\n  if (dimAverages.S7 && dimAverages.S8) {\n    prismAverages.lideranca_adaptativa = (dimAverages.S7 + dimAverages.S8) / 2;\n  }\n  if (dimAverages.S4 && dimAverages.S6) {\n    prismAverages.cultura_empreendedora = (dimAverages.S4 + dimAverages.S6) / 2;\n  }\n  if (dimAverages.S5A && dimAverages.S5B) {\n    prismAverages.adaptabilidade_cognitiva = (dimAverages.S5A + dimAverages.S5B) / 2;\n  }\n  const allKeys = Object.keys(dimAverages);\n  if (allKeys.length === 7) {\n    prismAverages.neuroinovacao_prisma = Object.values(dimAverages).reduce((a, b) => a + b, 0) / 7;\n  }\n}\n\n// Fallback: se as respostas já vieram com 'prisma' direto\nfor (const answer of request.answers) {\n  if (answer.prisma && typeof answer.score === 'number' && !prismAverages[answer.prisma]) {\n    prismAverages[answer.prisma] = answer.score;\n  }\n}\n\n// Formata os prism_scores\nconst prismScores = Object.entries(labels).map(([key, label]) => ({\n  prisma: key,\n  label,\n  average_score: prismAverages[key] ? Number(prismAverages[key].toFixed(2)) : 3.5,\n}));\n\nconst ranked = [...prismScores].sort((a, b) => b.average_score - a.average_score);\nconst strongest = ranked[0];\nconst opportunity = ranked[ranked.length - 1];\n\n// Estrutura exatamente compatível com o componente ResultadoText do frontend\nconst destaqueTexto = `A equipe se destaca fortemente na dimensão de ${strongest.label} (média ${strongest.average_score}/5), demonstrando alta capacidade de colaboração e resiliência nas atividades.`;\nconst oportunidadeTexto = `A dimensão de ${opportunity.label} (média ${opportunity.average_score}/5) apresenta a maior margem de evolução. O desenvolvimento dessa área impulsionará os resultados globais.`;\nconst analiseTexto = [\n  `A análise global da Matriz CREED indica um perfil com forte alinhamento às práticas de ${strongest.label}. Os padrões observados demonstram consistência metodológica nas respostas avaliadas.`,\n  `Para manter o equilíbrio neuroinovador, recomenda-se focar na mitigação das fricções apontadas em ${opportunity.label}, promovendo ciclos iterativos de feedback e experimentação.`\n];\n\nconst recomendacaoTexto = request.empresa ? [\n  `Fomentar workshops interdisciplinares voltados ao aprimoramento de ${opportunity.label}.`,\n  `Estimular a liderança a abrir espaços formais para experimentação ágil com menor aversão ao erro.`\n] : [];\n\nconst finishedAtMs = Date.now();\n\nreturn [{\n  json: {\n    status: 'completed',\n    contract_version: 'v1',\n    request_id: request.request_id,\n    form_response_id: request.form_response_id,\n    source: request.source,\n    empresa: request.empresa,\n    callback_url: request.callback_url,\n    insight: {\n      destaque: destaqueTexto,\n      oportunidade: oportunidadeTexto,\n      analise: analiseTexto,\n      recomendacao: recomendacaoTexto,\n      prism_scores: prismScores,\n      generator: 'creed-ai-v1',\n    },\n    metrics: {\n      received_at: data.metrics.received_at,\n      finished_at: new Date(finishedAtMs).toISOString(),\n      n8n_processing_ms: finishedAtMs - data.metrics.started_at_ms,\n    },\n  },\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        40,
+        0
+      ],
+      "id": "a1b2c3d4-1111-4444-8888-000000000006",
+      "name": "Processar IA e Formatar Resultado"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.callback_url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-Creed-Webhook-Secret",
+              "value": "creed-internal-secret"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        300,
+        0
+      ],
+      "id": "a1b2c3d4-1111-4444-8888-000000000007",
+      "name": "Enviar Callback para o Backend",
+      "continueOnFail": true
+    }
+  ],
+  "connections": {
+    "Receber solicitacao": {
+      "main": [
+        [
+          {
+            "node": "Validar e normalizar entrada v1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validar e normalizar entrada v1": {
+      "main": [
+        [
+          {
+            "node": "Payload valido?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Payload valido?": {
+      "main": [
+        [
+          {
+            "node": "Responder 202 Aceito (Assincrono)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Processar IA e Formatar Resultado",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Responder 422 Invalido",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Processar IA e Formatar Resultado": {
+      "main": [
+        [
+          {
+            "node": "Enviar Callback para o Backend",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "c0011223-3344-5566-7788-99aabbccdde1",
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "id": "creedInsightV1Async",
+  "tags": []
+}
