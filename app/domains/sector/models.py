@@ -1,8 +1,8 @@
-"""Models SQLAlchemy do domínio users.
+"""Models SQLAlchemy do domínio sector.
 
-Identidade da plataforma. A credencial em si não mora aqui: quem guarda senha é
-o Keycloak (P-012), e o elo entre as duas pontas é o `keycloak_id` — o `sub` do
-JWT, que é como se acha o usuário a partir do token sem depender do e-mail.
+Os setores especificam a relação Vínculo entre participante e organização,
+explicando a qual setor em específico daquela organização, aquele participante
+faz parte naquela organização.
 """
 
 import enum
@@ -33,6 +33,6 @@ class Sector(Base):
     )
 
     type: Mapped[SectorType] = mapped_column(
-        Enum(SectorType),
+        Enum(SectorType, name="sector_type"),
         nullable=False,
     )
