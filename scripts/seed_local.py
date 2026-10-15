@@ -22,14 +22,18 @@ import uuid
 from typing import Any
 
 import httpx
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models  # noqa: F401  (registra todas as tabelas; ver app/models.py)
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal
+from app.domains.documents.models import DocType, Document
 from app.domains.forms.models import Form, FormStatus
 from app.domains.forms.repository import FormRepository
 from app.domains.links.models import Link, LinkType, Roles
 from app.domains.links.repository import LinkRepository
+from app.domains.organizacoes.models import Organization
+from app.domains.organizacoes.repository import OrganizationRepository
 from app.domains.participants.models import Participant
 from app.domains.participants.repository import ParticipantRepository
 from app.domains.questions.models import Question, QuestionSection, QuestionType
@@ -46,12 +50,17 @@ PASSWORD = "dev"  # noqa: S105
 # O papel de acesso é o do vínculo (CREED-32): `user` não guarda papel.
 LINK_ROLE = Roles.ADMIN
 
-# Fixos, e não aleatórios, para o seed continuar idempotente. O participante é
-# criado por este seed, porque `links.participant_id` tem FK desde a CREED-47. A
-# organização segue órfã até `Organization` ter tabela: a CREED-38 precisa criá-la
-# com este mesmo id, senão a FK dela não sobe.
+# Fixos, e não aleatórios, para o seed continuar idempotente. O participante e a
+# organização são criados por este seed, porque `links` tem FK para os dois
+# (CREED-47 e CREED-38). A organização precisa de um documento (`document_id` é
+# obrigatório) e não há endpoint para criá-lo (P-022): o seed cria um sintético.
 PARTICIPANT_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 ORGANIZATION_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+ORGANIZATION_DOCUMENT_ID = uuid.UUID("00000000-0000-0000-0000-000000000004")
+ORGANIZATION_NAME = "[Demonstração] Organização de dev"
+ORGANIZATION_ADDRESS = "[Demonstração] Endereço de teste"
+# Valor sintético de propósito, com tipo `other`: não pode parecer um CNPJ real.
+ORGANIZATION_DOCUMENT_VALUE = "DEMO-ORG-0001"
 
 # Formulário de demonstração (CREED-47), na organização do vínculo de dev: é o que
 # o `dev` abre, responde e envia. Fica em rascunho, que já pode ser respondido
@@ -193,13 +202,16 @@ async def semear() -> None:
         links = LinkRepository(session)
 
         # Antes de tudo, inclusive do `return` abaixo: um banco que já tinha o
-        # usuário de dev também precisa do participante, senão a revisão
-        # `d53324b9b5a2` recusa o vínculo do seed. E do formulário de demonstração.
+        # usuário de dev também precisa do participante e da organização, senão a
+        # FK de `links` recusa o vínculo do seed. E do formulário de demonstração.
         criou_participante = await _ensure_participant(ParticipantRepository(session))
+        criou_organizacao = await _ensure_organization(
+            session, OrganizationRepository(session)
+        )
         criou_formulario = await _ensure_demo_form(
             FormRepository(session), QuestionRepository(session)
         )
-        if criou_participante or criou_formulario:
+        if criou_participante or criou_organizacao or criou_formulario:
             await session.commit()
 
         existente = await users.get_user_by_email(EMAIL)
@@ -253,6 +265,44 @@ async def _ensure_participant(participants: ParticipantRepository) -> bool:
     )
     print(f"participante {PARTICIPANT_ID} criado.")
     return True
+
+
+async def _ensure_organization(
+    session: AsyncSession, organizations: OrganizationRepository
+) -> bool:
+    """Cria a organização de dev e o documento dela, o que faltar. Diz se criou.
+
+    O documento vai direto pela sessão, sem repository: `documents` não tem `create`
+    porque nenhuma rota cria documento (P-022), e o seed é o único que precisa.
+    """
+    criou = False
+
+    if await session.get(Document, ORGANIZATION_DOCUMENT_ID) is None:
+        session.add(
+            Document(
+                id=ORGANIZATION_DOCUMENT_ID,
+                type=DocType.OTHER,
+                value=ORGANIZATION_DOCUMENT_VALUE,
+            )
+        )
+        await session.flush()
+        criou = True
+
+    if await organizations.get_by_id(ORGANIZATION_ID) is None:
+        await organizations.create(
+            Organization(
+                id=ORGANIZATION_ID,
+                name=ORGANIZATION_NAME,
+                address=ORGANIZATION_ADDRESS,
+                document_id=ORGANIZATION_DOCUMENT_ID,
+                status=RecordStatus.ACTIVE,
+            )
+        )
+        criou = True
+
+    situacao = "criada" if criou else "já estava no banco"
+    print(f"organização {ORGANIZATION_ID} {situacao}.")
+    return criou
 
 
 async def _ensure_demo_form(forms: FormRepository, questions: QuestionRepository) -> bool:
