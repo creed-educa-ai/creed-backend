@@ -102,3 +102,36 @@ class Question(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+class QuestionOption(Base):
+    __tablename__ = "question_options"
+
+    __table_args__ = (
+        UniqueConstraint(
+            "question_id",
+            "order_index",
+            name="uq_question_options_question_id_order_index",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+
+    question_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("questions.id", name="fk_question_options_question_id_questions"),
+        nullable=False,
+        index=True,
+    )
+
+    label: Mapped[str] = mapped_column(Text, nullable=False)
+
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+
+    order_index: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
