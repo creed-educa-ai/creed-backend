@@ -23,7 +23,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
-from app.shared.enums import Dimension
+from app.shared.enums import Dimension, Prisma
 
 
 class QuestionType(enum.Enum):
@@ -44,23 +44,6 @@ class QuestionSection(enum.Enum):
     PROFILE = "profile"
     ASSESSMENT = "assessment"
     CLOSING = "closing"
-
-
-class Prisma(enum.Enum):
-    """As cinco dimensões de análise do produto (CREED-351).
-
-    🟡 Premissa P-019 — identificador Python em inglês, tradução literal do
-    termo em português (a cliente não nomeou os valores). Não é o mesmo que o
-    *valor* de cada membro: esse já está em português, fixado no modelo de
-    dados (`context/modelo-de-dados.proposta.dbml`, `Enum Prisma`), e não é
-    premissa — é leitura.
-    """
-
-    HUMAN_PLASTICITY = "plasticidade_humana"
-    ENTREPRENEURSHIP = "empreendedorismo"
-    MULTICULTURALISM = "multiculturalismo"
-    NEUROINNOVATION = "neuroinovacao"
-    DECISION_MAKING = "tomada_decisao"
 
 
 class Question(Base):
@@ -140,3 +123,6 @@ class QuestionOption(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+__all__ = ["Prisma", "Question", "QuestionOption", "QuestionSection", "QuestionType"]
