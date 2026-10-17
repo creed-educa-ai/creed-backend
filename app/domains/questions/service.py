@@ -19,9 +19,17 @@ la: aqui se pede a conferencia, sem repetir a comparacao.
 import uuid
 
 from app.domains.forms.service import FormService
-from app.domains.questions.models import Question, QuestionSection, QuestionType
-from app.domains.questions.repository import QuestionRepository
-from app.domains.questions.schemas import QuestionCreate
+from app.domains.questions.models import (
+    Question,
+    QuestionOption,
+    QuestionSection,
+    QuestionType,
+)
+from app.domains.questions.repository import (
+    QuestionOptionRepository,
+    QuestionRepository,
+)
+from app.domains.questions.schemas import QuestionCreate, QuestionOptionCreate
 from app.shared.exceptions import ConflictError, NotFoundError, ValidationError
 
 
@@ -111,4 +119,69 @@ class QuestionService:
         return ConflictError(
             f"Já existe pergunta na posição {request.order_index} "
             f"do formulário {request.form_id}"
+        )
+
+
+class QuestionOptionService:
+    def __init__(
+        self,
+        repository: QuestionOptionRepository,
+        questions: QuestionService,
+        forms: FormService,
+    ) -> None:
+        self.repository = repository
+        self.questions = questions
+        self.forms = forms
+
+    async def create(
+        self,
+        question_id: uuid.UUID,
+        request: QuestionOptionCreate,
+        *,
+        role: str,
+        organization_id: uuid.UUID,
+    ) -> QuestionOption:
+        """Cadastra uma alternativa numa pergunta objetiva.
+
+        Pergunta inexistente levanta `NotFoundError`, e de formulário de outra
+        organização, `ForbiddenError`. `role` e `organization_id` são de quem pede.
+
+        Premissa: alternativa só faz sentido em pergunta objetiva; a descritiva é
+        recusada.
+        """
+        question = await self.questions.get(question_id)
+
+        await self.forms.get_for_user(
+            question.form_id, role=role, organization_id=organization_id
+        )
+
+        if self.questions.is_descriptive(question):
+            raise ValidationError(
+                f"Pergunta {question_id} é descritiva e não aceita alternativas"
+            )
+
+        already_exists = await self.repository.get_by_question_and_order(
+            question_id, request.order_index
+        )
+
+        if already_exists is not None:
+            raise self._position_conflict(question_id, request)
+
+        option = QuestionOption(
+            question_id=question_id,
+            label=request.label,
+            value=request.value,
+            order_index=request.order_index,
+        )
+        created = await self.repository.insert(option)
+        if created is None:
+            raise self._position_conflict(question_id, request)
+        return created
+
+    def _position_conflict(
+        self, question_id: uuid.UUID, request: QuestionOptionCreate
+    ) -> ConflictError:
+        return ConflictError(
+            f"Já existe alternativa na posição {request.order_index} "
+            f"da pergunta {question_id}"
         )
