@@ -10,14 +10,19 @@ import uuid
 
 import pytest
 
+from app.domains.documents.models import DocType, Document
 from app.domains.forms.models import Form
+from app.domains.organizacoes.models import Organization
 from app.domains.questions.models import Question, QuestionSection, QuestionType
 from scripts.seed_local import (
     DEMO_FORM_ID,
     EMAIL,
     LINK_ROLE,
+    ORGANIZATION_DOCUMENT_ID,
     ORGANIZATION_ID,
     _ensure_demo_form,
+    _ensure_organization,
+    _new_link,
     _usuario_de_teste,
 )
 
@@ -153,3 +158,98 @@ class TestFormularioDeDemonstracao:
         assert await semear(forms, questions)
         assert len(forms.itens) == 1
         assert sorted(q.order_index for q in questions.itens) == [0, 1, 2]
+
+
+class FakeSession:
+    """Só o que o seed usa da sessão para o documento: `get`, `add` e `flush`."""
+
+    def __init__(self) -> None:
+        self.itens: list[Document] = []
+
+    async def get(self, model: type[Document], document_id: uuid.UUID) -> Document | None:
+        return next((d for d in self.itens if d.id == document_id), None)
+
+    def add(self, document: Document) -> None:
+        self.itens.append(document)
+
+    async def flush(self) -> None:
+        pass
+
+
+class FakeOrganizationRepository:
+    def __init__(self) -> None:
+        self.itens: list[Organization] = []
+
+    async def get_by_id(self, organization_id: uuid.UUID) -> Organization | None:
+        return next((o for o in self.itens if o.id == organization_id), None)
+
+    async def create(self, organization: Organization) -> Organization:
+        self.itens.append(organization)
+        return organization
+
+
+@pytest.fixture
+def documents() -> FakeSession:
+    return FakeSession()
+
+
+@pytest.fixture
+def organizations() -> FakeOrganizationRepository:
+    return FakeOrganizationRepository()
+
+
+async def semear_organizacao(
+    documents: FakeSession, organizations: FakeOrganizationRepository
+) -> bool:
+    return await _ensure_organization(documents, organizations)  # type: ignore[arg-type]
+
+
+class TestOrganizacaoDeDev:
+    """A organização que o vínculo e o formulário de dev usam (CREED-38)."""
+
+    async def test_cria_a_organizacao_que_o_vinculo_de_dev_aponta(
+        self, documents: FakeSession, organizations: FakeOrganizationRepository
+    ) -> None:
+        """Sem ela, a FK de `links.organization_id` recusa o vínculo do seed."""
+        assert await semear_organizacao(documents, organizations)
+
+        [organizacao] = organizations.itens
+        assert organizacao.id == ORGANIZATION_ID == _new_link().organization_id
+
+    async def test_aponta_para_o_documento_sintetico(
+        self, documents: FakeSession, organizations: FakeOrganizationRepository
+    ) -> None:
+        """`document_id` é obrigatório e não há endpoint de documento (P-022)."""
+        await semear_organizacao(documents, organizations)
+
+        [documento] = documents.itens
+        assert documento.id == ORGANIZATION_DOCUMENT_ID
+        assert organizations.itens[0].document_id == ORGANIZATION_DOCUMENT_ID
+
+    async def test_dado_se_identifica_como_demonstracao(
+        self, documents: FakeSession, organizations: FakeOrganizationRepository
+    ) -> None:
+        """Nada pode parecer organização ou CNPJ real."""
+        await semear_organizacao(documents, organizations)
+
+        assert documents.itens[0].type is DocType.OTHER
+        assert organizations.itens[0].name.startswith("[Demonstração]")
+
+    async def test_rodar_de_novo_nao_cria_nada(
+        self, documents: FakeSession, organizations: FakeOrganizationRepository
+    ) -> None:
+        await semear_organizacao(documents, organizations)
+
+        assert not await semear_organizacao(documents, organizations)
+        assert len(documents.itens) == 1
+        assert len(organizations.itens) == 1
+
+    async def test_banco_com_documento_e_sem_organizacao_cria_so_a_organizacao(
+        self, documents: FakeSession, organizations: FakeOrganizationRepository
+    ) -> None:
+        await semear_organizacao(documents, organizations)
+        organizations.itens = []
+
+        assert await semear_organizacao(documents, organizations)
+        assert len(documents.itens) == 1
+        assert len(organizations.itens) == 1

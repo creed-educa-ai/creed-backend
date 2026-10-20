@@ -5,8 +5,8 @@ pessoa ali, o tipo do vínculo e o período. A mesma pessoa em duas organizaçõ
 vínculos, e cada vínculo tem o próprio login (`user.link_id`, em `users/models.py`).
 
 `participant_id` tem `ForeignKey` para `participants` desde a integração da sprint 2
-(CREED-47). `organization_id` e `department_id` seguem UUIDs soltos: `Organization` e
-`Department` ainda não têm tabela, e as FKs deles entram com a CREED-38 e a CREED-39.
+(CREED-47), e `organization_id` para `organizations` desde a CREED-38. `department_id`
+segue UUID solto: `Department` ainda não tem tabela, e a FK dele entra com a CREED-39.
 """
 
 import enum
@@ -54,9 +54,11 @@ class Link(Base):
         index=True,
     )
 
-    # FK para Organization — tabela ainda não criada (CREED-38)
     organization_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), nullable=False, index=True
+        UUID(as_uuid=True),
+        ForeignKey("organizations.id", name="fk_links_organization_id_organizations"),
+        nullable=False,
+        index=True,
     )
 
     # FK para Department — tabela ainda não criada (CREED-39)
