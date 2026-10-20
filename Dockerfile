@@ -1,5 +1,7 @@
-# Imagem do backend — deploy em pods no EKS (ADR-001).
+# Imagem do backend — deploy na EC2.
 FROM python:3.12-slim AS base
+
+LABEL org.opencontainers.image.source=https://github.com/creed-educa-ai/creed-backend
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
