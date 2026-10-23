@@ -20,6 +20,7 @@ from app.domains.participants.router import router as participants_router
 from app.domains.prismas.router import router as prismas_router
 from app.domains.prognosticos.router import router as prognosticos_router
 from app.domains.questions.router import router as questions_router
+from app.domains.questions.router_options import router as question_options_router
 from app.domains.relatorios.router import router as relatorios_router
 from app.domains.responses.router import router as respostas_router
 from app.domains.sector.router import router as sector_router
@@ -67,6 +68,10 @@ OPENAPI_TAGS = [
     {
         "name": "forms",
         "description": "Cadastro e consulta dos formulários.",
+    },
+    {
+        "name": "organizacoes",
+        "description": "Cadastro, consulta e alteração das organizações parceiras.",
     },
     {
         "name": "sectors",
@@ -132,6 +137,7 @@ for _router in (
     dashboards_router,
     prognosticos_router,
     questions_router,
+    question_options_router,
     relatorios_router,
     user_router,
     links_router,
