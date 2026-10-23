@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Path, status
 
 from app.domains.sector.dependencies import ServiceDep
 from app.domains.sector.schemas import SectorCreate, SectorResponse
-from app.shared.authorization import require_role
+from app.shared.authorization import CurrentUserDep, require_role
 from app.shared.schemas import ErrorResponse
 
 router = APIRouter(prefix="/sectors", tags=["sectors"])
@@ -53,6 +53,11 @@ async def create_sector(
     response_description="Dados do setor encontrado.",
     operation_id="get_sector",
     responses={
+        status.HTTP_401_UNAUTHORIZED: {
+            "model": ErrorResponse,
+            "description": "Token ausente, inválido ou expirado.",
+            "content": {"application/json": {"example": {"detail": "Não autenticado"}}},
+        },
         status.HTTP_404_NOT_FOUND: {
             "model": ErrorResponse,
             "description": "Setor não encontrado.",
@@ -64,6 +69,7 @@ async def get_sector(
         uuid.UUID,
         Path(description="Identificador do setor."),
     ],
+    user: CurrentUserDep,
     service: ServiceDep,
 ) -> SectorResponse:
     sector = await service.get_by_id(sector_id)
