@@ -23,6 +23,7 @@ from app.domains.questions.router import router as questions_router
 from app.domains.questions.router_options import router as question_options_router
 from app.domains.relatorios.router import router as relatorios_router
 from app.domains.responses.router import router as respostas_router
+from app.domains.sector.router import router as sector_router
 from app.domains.users.router import router as user_router
 from app.shared.schemas import HealthResponse
 
@@ -71,6 +72,10 @@ OPENAPI_TAGS = [
     {
         "name": "organizacoes",
         "description": "Cadastro, consulta e alteração das organizações parceiras.",
+    },
+    {
+        "name": "sectors",
+        "description": "Cadastro e consulta dos setores.",
     },
 ]
 
@@ -138,5 +143,6 @@ for _router in (
     links_router,
     participants_router,
     forms_router,
+    sector_router,
 ):
     app.include_router(_router, prefix=settings.API_V1_PREFIX)
