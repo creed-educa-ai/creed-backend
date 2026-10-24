@@ -129,6 +129,13 @@ def test_success_error_and_bearer_authentication_responses_are_documented() -> N
         "409",
         "422",
     }
+    # Remover usuário exige admin, como o cadastro.
+    assert set(_operation(schema, "/api/v1/users/{user_id}", "delete")["responses"]) >= {
+        "204",
+        "401",
+        "403",
+        "404",
+    }
     # O vínculo de quem responde vem do login desde a CREED-47 (P-031).
     assert set(_operation(schema, "/api/v1/form-responses", "post")["responses"]) >= {
         "201",
