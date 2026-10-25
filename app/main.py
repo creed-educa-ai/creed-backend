@@ -13,6 +13,7 @@ from app import models  # noqa: F401  (registra todas as tabelas; ver app/models
 from app.core.config import settings
 from app.domains.authentication.router import router as authentication_router
 from app.domains.dashboards.router import router as dashboards_router
+from app.domains.department.router import router as department_router
 from app.domains.forms.router import router as forms_router
 from app.domains.links.router import router as links_router
 from app.domains.organizacoes.router import router as organizacoes_router
@@ -23,7 +24,6 @@ from app.domains.questions.router import router as questions_router
 from app.domains.questions.router_options import router as question_options_router
 from app.domains.relatorios.router import router as relatorios_router
 from app.domains.responses.router import router as respostas_router
-from app.domains.sector.router import router as sector_router
 from app.domains.users.router import router as user_router
 from app.shared.schemas import HealthResponse
 
@@ -74,7 +74,7 @@ OPENAPI_TAGS = [
         "description": "Cadastro, consulta e alteração das organizações parceiras.",
     },
     {
-        "name": "sectors",
+        "name": "department",
         "description": "Cadastro e consulta dos setores.",
     },
 ]
@@ -143,6 +143,6 @@ for _router in (
     links_router,
     participants_router,
     forms_router,
-    sector_router,
+    department_router,
 ):
     app.include_router(_router, prefix=settings.API_V1_PREFIX)
