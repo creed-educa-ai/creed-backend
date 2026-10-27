@@ -97,10 +97,28 @@ async def create_user(dados: UserCreate, service: ServiceDep) -> UserResponse:
     "/{user_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Remover usuário",
-    description="Remove definitivamente um usuário da plataforma pelo identificador.",
+    description=(
+        "Remove definitivamente um usuário da plataforma pelo identificador. "
+        "Exige o papel admin, o mesmo do cadastro."
+    ),
     response_description="Usuário removido; a resposta não possui corpo.",
     operation_id="delete_user",
+    dependencies=[Depends(require_role("admin"))],
     responses={
+        status.HTTP_401_UNAUTHORIZED: {
+            "model": ErrorResponse,
+            "description": "Token ausente, inválido ou expirado.",
+            "content": {"application/json": {"example": {"detail": "Não autenticado"}}},
+        },
+        status.HTTP_403_FORBIDDEN: {
+            "model": ErrorResponse,
+            "description": "O usuário autenticado não tem o papel admin.",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Cargo insuficiente para acessar"}
+                }
+            },
+        },
         status.HTTP_404_NOT_FOUND: {
             "model": ErrorResponse,
             "description": "Usuário não encontrado.",
@@ -113,7 +131,7 @@ async def create_user(dados: UserCreate, service: ServiceDep) -> UserResponse:
                     }
                 }
             },
-        }
+        },
     },
 )
 async def delete_user(
