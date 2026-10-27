@@ -93,13 +93,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     yield
 
 
+# Em produção o Swagger não é publicado: ele mostraria a qualquer um todas as rotas
+# e campos da API. O schema continua existindo (`app.openapi()`); só a rota sai.
+SWAGGER_PUBLICO = settings.ENVIRONMENT != "production"
+
 app = FastAPI(
     title=settings.PROJECT_NAME,
     description=API_DESCRIPTION,
     version="0.1.0",
     openapi_tags=OPENAPI_TAGS,
-    openapi_url=f"{settings.API_V1_PREFIX}/openapi.json",
-    docs_url=f"{settings.API_V1_PREFIX}/docs",
+    openapi_url=f"{settings.API_V1_PREFIX}/openapi.json" if SWAGGER_PUBLICO else None,
+    docs_url=f"{settings.API_V1_PREFIX}/docs" if SWAGGER_PUBLICO else None,
     debug=settings.DEBUG,
     lifespan=lifespan,
 )

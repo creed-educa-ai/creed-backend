@@ -1,9 +1,9 @@
 """Testes de app/domains/users/router.py — só contrato HTTP.
 
 A regra do cadastro (e-mail repetido, vínculo inexistente ou já usado) é provada em
-`test_service.py`. Aqui se prova o que o service não enxerga: a guarda `admin`, que cada
-exceção vira o status certo, que o body sem `link_id` é recusado na borda, e a forma da
-resposta.
+`test_service.py`. Aqui se prova o que o service não enxerga: a guarda `admin` nas duas
+rotas, que cada exceção vira o status certo, que o body sem `link_id` é recusado na borda,
+e a forma da resposta.
 """
 
 import uuid
@@ -24,6 +24,7 @@ from app.shared.exceptions import ConflictError, NotFoundError
 
 LINK_ID = "3f9a2b1c-4d5e-4f6a-8b7c-9d0e1f2a3b4c"
 ORGANIZATION_ID = "8f14e45f-ceea-467e-adde-3f81905dbc1c"
+USER_ID = "d40b7a55-b9cc-4b78-ae5d-ab325fd655e2"
 TOKEN = {"Authorization": "Bearer valid"}
 
 VALID_BODY = {
@@ -39,7 +40,8 @@ class _FakeService:
 
     A guarda `require_role` e a rota resolvem o mesmo `get_service`, então o dublê
     também responde `get_active_user_access_by_email`, com o papel do vínculo de quem
-    está chamando (`caller_role`).
+    está chamando (`caller_role`). `deleted` guarda os ids que chegaram à remoção, para
+    conferir que a guarda barra antes.
     """
 
     def __init__(
@@ -47,6 +49,7 @@ class _FakeService:
     ) -> None:
         self.error = error
         self.caller_role = caller_role
+        self.deleted: list[uuid.UUID] = []
 
     async def get_active_user_access_by_email(self, email: str) -> UserAccess | None:
         return UserAccess(
@@ -73,6 +76,9 @@ class _FakeService:
         return CreatedUser(
             user=user, role="gestor", organization_id=uuid.UUID(ORGANIZATION_ID)
         )
+
+    async def delete_user_service(self, user_id: uuid.UUID) -> None:
+        self.deleted.append(user_id)
 
 
 @pytest.fixture
@@ -176,3 +182,40 @@ def test_link_already_used_returns_409(
 
     assert response.status_code == 409
     assert LINK_ID in response.json()["detail"]
+
+
+def test_delete_with_admin_returns_204(
+    app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = _FakeService()
+    _use(app, monkeypatch, service)
+
+    response = client.delete(f"/api/v1/users/{USER_ID}", headers=TOKEN)
+
+    assert response.status_code == 204
+    assert service.deleted == [uuid.UUID(USER_ID)]
+
+
+def test_delete_without_token_returns_401_and_keeps_the_user(
+    app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A remoção é definitiva: sem token, a chamada não pode chegar ao service."""
+    service = _FakeService()
+    _use(app, monkeypatch, service)
+
+    response = client.delete(f"/api/v1/users/{USER_ID}")
+
+    assert response.status_code == 401
+    assert service.deleted == []
+
+
+def test_delete_with_respondente_role_returns_403_and_keeps_the_user(
+    app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = _FakeService(caller_role="respondente")
+    _use(app, monkeypatch, service)
+
+    response = client.delete(f"/api/v1/users/{USER_ID}", headers=TOKEN)
+
+    assert response.status_code == 403
+    assert service.deleted == []
