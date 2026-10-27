@@ -20,24 +20,19 @@ def test_workflow_is_importable_and_inactive_by_default() -> None:
     assert workflow["settings"]["executionOrder"] == "v1"
 
     nodes = {node["name"]: node for node in workflow["nodes"]}
-    assert nodes["Receber solicitacao"]["parameters"]["path"] == (
-        "creed/insights/beta"
-    )
-    assert nodes["Receber solicitacao"]["parameters"]["responseMode"] == (
-        "responseNode"
-    )
+    assert nodes["Receber solicitacao"]["parameters"]["path"] == ("creed/insights/beta")
+    assert nodes["Receber solicitacao"]["parameters"]["responseMode"] == ("responseNode")
     condition = nodes["Payload valido?"]["parameters"]["conditions"]["conditions"][0]
     assert condition["operator"] == {
         "type": "boolean",
         "operation": "true",
         "singleValue": True,
     }
-    assert nodes["Responder sucesso"]["parameters"]["options"][
-        "responseCode"
-    ] == 200
-    assert nodes["Responder payload invalido"]["parameters"]["options"][
-        "responseCode"
-    ] == 422
+    assert nodes["Responder sucesso"]["parameters"]["options"]["responseCode"] == 200
+    assert (
+        nodes["Responder payload invalido"]["parameters"]["options"]["responseCode"]
+        == 422
+    )
 
 
 def test_workflow_has_no_credentials_or_external_provider_dependency() -> None:

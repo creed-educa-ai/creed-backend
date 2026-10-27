@@ -30,9 +30,7 @@ def test_v1_workflow_is_importable_and_inactive_by_default() -> None:
         ]
         == 202
     )
-    assert (
-        nodes["Responder 422 Invalido"]["parameters"]["options"]["responseCode"] == 422
-    )
+    assert nodes["Responder 422 Invalido"]["parameters"]["options"]["responseCode"] == 422
     assert nodes["Enviar Callback para o Backend"]["parameters"]["method"] == "POST"
 
 
