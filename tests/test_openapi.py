@@ -1,9 +1,13 @@
 """Testes do contrato OpenAPI exibido no Swagger UI."""
 
+import importlib
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 
+from app import main
+from app.core.config import settings
 from app.main import app
 
 
@@ -17,6 +21,22 @@ def test_swagger_ui_is_available_at_the_documented_url() -> None:
 
     assert response.status_code == 200
     assert "url: '/api/v1/openapi.json'" in response.text
+
+
+def test_swagger_is_not_published_in_production(monkeypatch: pytest.MonkeyPatch) -> None:
+    # O `app` é montado quando o módulo é importado: para ver a versão de produção,
+    # o módulo roda de novo com o ambiente trocado — e de novo no fim, para os
+    # outros testes não herdarem o app de produção.
+    monkeypatch.setattr(settings, "ENVIRONMENT", "production")
+    try:
+        client = TestClient(importlib.reload(main).app)
+
+        assert client.get("/api/v1/docs").status_code == 404
+        assert client.get("/api/v1/openapi.json").status_code == 404
+        assert client.get("/health").status_code == 200
+    finally:
+        monkeypatch.undo()
+        importlib.reload(main)
 
 
 def test_all_endpoints_have_method_summary_description_and_operation_id() -> None:

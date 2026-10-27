@@ -140,6 +140,17 @@ def test_service_account_tem_o_minimo_verificado() -> None:
     assert set(sa["clientRoles"]["realm-management"]) == {"manage-users", "view-realm"}
 
 
+def test_login_por_senha_tem_protecao_contra_forca_bruta() -> None:
+    """O back não limita tentativas de login: quem conta os erros é o Keycloak.
+
+    Sem isto, dá para testar senhas sem limite pelo `/api/v1/authentication/login`.
+    O bloqueio é temporário de propósito: o permanente deixaria qualquer um trancar
+    a conta de outra pessoa errando a senha dela de propósito.
+    """
+    assert REALM["bruteForceProtected"] is True
+    assert REALM["permanentLockout"] is False
+
+
 def test_sessao_segue_os_tempos_da_premissa_p010() -> None:
     """P-010: access token de 15 min, refresh de 8 h."""
     assert REALM["accessTokenLifespan"] == 15 * 60
