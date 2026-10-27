@@ -5,14 +5,17 @@ on:
     branches: [main]
   workflow_dispatch:
 
-# Espera, não cancela: o comando já enviado à EC2 continua rodando lá mesmo com o
-# workflow cancelado, e dois deploy.sh juntos rodariam duas migrations em paralelo.
-concurrency:
-  group: imagem-producao
-  cancel-in-progress: false
-
 jobs:
+  # O deploy roda `alembic upgrade head` no RDS: só segue se o CI deste mesmo commit
+  # passar. Chamado aqui, e não esperado por `workflow_run`: esse usaria o arquivo e
+  # a ref da dev, e a role da AWS, que só confia na main, recusaria o token.
+  ci:
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
   publicar:
+    needs: ci
     runs-on: ubuntu-24.04-arm
     permissions:
       contents: read
@@ -21,6 +24,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # O buildx é o que permite guardar as camadas no cache do Actions.
+      - uses: docker/setup-buildx-action@v3
+
       - name: Entrar no GitHub Container Registry
         uses: docker/login-action@v3
         with:
@@ -28,15 +34,27 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Tag do commit inteiro, sem prefixo (é o que o deploy.sh recebe), e tag da
+      # branch com `/` trocada por `-`: tag Docker não aceita `/`.
+      - name: Montar tags e etiquetas
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=sha,format=long,prefix=
+            type=ref,event=branch
+
       - name: Gerar e publicar a imagem arm64
         uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/arm64
           push: true
-          tags: |
-            ghcr.io/${{ github.repository }}:${{ github.sha }}
-            ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
   # Só a main publica em produção. Rodado à mão em outra branch, o workflow para na
   # imagem — e a role da AWS também recusaria (ela só confia na main).
@@ -44,12 +62,19 @@ jobs:
     needs: publicar
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    # A fila vale só para o deploy: um teste à mão na dev não entra nela, e o build
+    # roda livre. Se dois pushes na main chegam seguidos, o que espera na fila é
+    # trocado pelo mais novo, que já leva tudo. A garantia de um deploy.sh por vez
+    # mora no próprio script (flock), que cobre também o deploy rodado à mão.
+    concurrency:
+      group: deploy-producao
+      cancel-in-progress: false
     permissions:
       contents: read
       id-token: write  # o crachá OIDC que a AWS troca pela role creed-github-deploy
     env:
       AWS_REGION: us-east-2
-      EC2_INSTANCE_ID: i-0ef1575e5cd4b756e
+      EC2_INSTANCE_ID: ${{ vars.EC2_INSTANCE_ID }}
 
     steps:
       - name: Assumir a role de deploy na AWS
@@ -60,24 +85,47 @@ jobs:
 
       - name: Rodar o deploy.sh na EC2 (Session Manager)
         run: |
+          # Limites do lado da AWS coerentes com a espera daqui: até 2 min para a
+          # EC2 receber o comando e até 9 min para ele rodar. Sem eles, o comando
+          # seguiria vivo por até 1 h depois de este job desistir.
+          PARAMETROS=$(jq -n --arg cmd \
+            "sudo -iu ec2-user /opt/creed/creed-infrastructure/ec2/deploy.sh $GITHUB_SHA" \
+            '{commands: [$cmd], executionTimeout: ["540"]}')
           ID=$(aws ssm send-command \
             --instance-ids "$EC2_INSTANCE_ID" \
             --document-name AWS-RunShellScript \
             --comment "deploy ${GITHUB_SHA::7}" \
-            --parameters "commands=[\"sudo -iu ec2-user /opt/creed/creed-infrastructure/ec2/deploy.sh $GITHUB_SHA\"]" \
+            --timeout-seconds 120 \
+            --parameters "$PARAMETROS" \
             --query Command.CommandId --output text)
           echo "comando $ID enviado"
 
-          # Até 10 min: o primeiro deploy baixa a imagem inteira.
-          for _ in $(seq 60); do
+          # Até 12 min: cobre os 2 + 9 acima, com folga.
+          STATUS=Pending
+          for _ in $(seq 72); do
             sleep 10
-            STATUS=$(aws ssm get-command-invocation --command-id "$ID" \
-              --instance-id "$EC2_INSTANCE_ID" --query Status --output text 2>/dev/null || echo Pending)
+            if ! RESPOSTA=$(aws ssm get-command-invocation --command-id "$ID" \
+                --instance-id "$EC2_INSTANCE_ID" --query Status --output text 2>&1); then
+              # Nos primeiros segundos a AWS ainda não registrou o comando na
+              # instância. Só esse erro é esperado; qualquer outro aparece aqui.
+              case "$RESPOSTA" in
+                *InvocationDoesNotExist*) echo "… aguardando a EC2 registrar o comando"; continue ;;
+                *) echo "$RESPOSTA" >&2; exit 1 ;;
+              esac
+            fi
+            STATUS="$RESPOSTA"
             case "$STATUS" in
               Pending|InProgress|Delayed) echo "… $STATUS" ;;
               *) break ;;
             esac
           done
+
+          case "$STATUS" in
+            Pending|InProgress|Delayed)
+              echo "::error::o deploy passou de 12 min; cancelando o comando na EC2"
+              aws ssm cancel-command --command-id "$ID" --instance-ids "$EC2_INSTANCE_ID"
+              exit 1 ;;
+          esac
 
           aws ssm get-command-invocation --command-id "$ID" --instance-id "$EC2_INSTANCE_ID" \
             --query '[StandardOutputContent, StandardErrorContent]' --output text

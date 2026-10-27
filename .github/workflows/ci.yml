@@ -6,6 +6,8 @@ on:
   push:
     branches: [main, dev]
   pull_request:
+  # O workflow da imagem de produção chama este antes de publicar (imagem.yml).
+  workflow_call:
 
 jobs:
   qualidade:
