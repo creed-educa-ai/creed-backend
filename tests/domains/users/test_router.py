@@ -2,8 +2,10 @@
 
 A regra do cadastro (e-mail repetido, vínculo inexistente ou já usado, o tudo ou nada
 com o Keycloak) é provada em `test_service.py`. Aqui se prova o que o service não
-enxerga: a guarda `admin` nas duas rotas, que cada exceção vira o status certo, que o
-body sem `link_id` é recusado na borda, e a forma da resposta.
+enxerga: a guarda `admin` no cadastro e na remoção, a guarda `admin`/`gestor` no
+reenvio de convite (e o papel e a organização que ela passa ao service), que cada
+exceção vira o status certo, que o body sem `link_id` é recusado na borda, e a forma da
+resposta. O recorte do gestor no reenvio é regra, e está em `test_service.py`.
 """
 
 import uuid
@@ -25,7 +27,9 @@ from app.shared.exceptions import ConflictError, NotFoundError, ServiceUnavailab
 LINK_ID = "3f9a2b1c-4d5e-4f6a-8b7c-9d0e1f2a3b4c"
 ORGANIZATION_ID = "8f14e45f-ceea-467e-adde-3f81905dbc1c"
 USER_ID = "d40b7a55-b9cc-4b78-ae5d-ab325fd655e2"
+CALLER_ORGANIZATION_ID = uuid.UUID("0b6a4c2e-1d3f-4e5a-9b8c-7d6e5f4a3b2c")
 TOKEN = {"Authorization": "Bearer valid"}
+INVITATION_URL = f"/api/v1/users/{USER_ID}/invitation"
 
 VALID_BODY = {
     "name": "Pessoa Exemplo",
@@ -39,8 +43,10 @@ class _FakeService:
 
     A guarda `require_role` e a rota resolvem o mesmo `get_service`, então o dublê
     também responde `get_active_user_access_by_email`, com o papel do vínculo de quem
-    está chamando (`caller_role`). `deleted` guarda os ids que chegaram à remoção, para
-    conferir que a guarda barra antes, e `received` os cadastros que chegaram ao service.
+    está chamando (`caller_role`), na organização `CALLER_ORGANIZATION_ID`. `deleted`
+    guarda os ids que chegaram à remoção, para conferir que a guarda barra antes,
+    `received` os cadastros que chegaram ao service, e `resent` os reenvios de convite,
+    com o papel e a organização de quem pediu.
     """
 
     def __init__(
@@ -50,6 +56,7 @@ class _FakeService:
         self.caller_role = caller_role
         self.deleted: list[uuid.UUID] = []
         self.received: list[UserCreate] = []
+        self.resent: list[tuple[uuid.UUID, str, uuid.UUID]] = []
 
     async def get_active_user_access_by_email(self, email: str) -> UserAccess | None:
         return UserAccess(
@@ -57,8 +64,15 @@ class _FakeService:
             email=email,
             role=self.caller_role,
             link_id=uuid.uuid4(),
-            organization_id=uuid.uuid4(),
+            organization_id=CALLER_ORGANIZATION_ID,
         )
+
+    async def resend_invitation_service(
+        self, user_id: uuid.UUID, *, role: str, own_organization_id: uuid.UUID
+    ) -> None:
+        if self.error is not None:
+            raise self.error
+        self.resent.append((user_id, role, own_organization_id))
 
     async def create_user_service(self, request: UserCreate) -> CreatedUser:
         self.received.append(request)
@@ -267,3 +281,88 @@ def test_delete_with_keycloak_down_returns_503(
 
     assert response.status_code == 503
     assert response.json()["detail"] == "Não foi possível remover o acesso agora."
+
+
+@pytest.mark.parametrize("caller_role", ["admin", "gestor"])
+def test_resend_invitation_returns_204_and_passes_who_asks_to_the_service(
+    app: FastAPI,
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    caller_role: str,
+) -> None:
+    """O recorte do gestor é do service: a rota só passa papel e organização dele."""
+    service = _FakeService(caller_role=caller_role)
+    _use(app, monkeypatch, service)
+
+    response = client.post(INVITATION_URL, headers=TOKEN)
+
+    assert response.status_code == 204
+    assert response.content == b""
+    assert service.resent == [(uuid.UUID(USER_ID), caller_role, CALLER_ORGANIZATION_ID)]
+
+
+def test_resend_invitation_without_token_returns_401(
+    app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = _FakeService()
+    _use(app, monkeypatch, service)
+
+    response = client.post(INVITATION_URL)
+
+    assert response.status_code == 401
+    assert service.resent == []
+
+
+def test_resend_invitation_with_respondente_role_returns_403(
+    app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """🟡 Premissa P-045 — o respondente não convida, e por isso não reenvia."""
+    service = _FakeService(caller_role="respondente")
+    _use(app, monkeypatch, service)
+
+    response = client.post(INVITATION_URL, headers=TOKEN)
+
+    assert response.status_code == 403
+    assert service.resent == []
+
+
+def test_resend_invitation_to_unknown_or_other_organization_user_returns_404(
+    app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _use(
+        app,
+        monkeypatch,
+        _FakeService(NotFoundError(f"Usuário {USER_ID} não encontrado"), "gestor"),
+    )
+
+    response = client.post(INVITATION_URL, headers=TOKEN)
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == f"Usuário {USER_ID} não encontrado"
+
+
+def test_resend_invitation_with_keycloak_or_smtp_down_returns_503(
+    app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _use(
+        app,
+        monkeypatch,
+        _FakeService(ServiceUnavailableError("Não foi possível reenviar o convite.")),
+    )
+
+    response = client.post(INVITATION_URL, headers=TOKEN)
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Não foi possível reenviar o convite."
+
+
+def test_resend_invitation_with_invalid_user_id_returns_422(
+    app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = _FakeService()
+    _use(app, monkeypatch, service)
+
+    response = client.post("/api/v1/users/nao-e-uuid/invitation", headers=TOKEN)
+
+    assert response.status_code == 422
+    assert service.resent == []

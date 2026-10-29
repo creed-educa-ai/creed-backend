@@ -46,8 +46,10 @@ def test_all_endpoints_have_method_summary_description_and_operation_id() -> Non
         ("/api/v1/authentication/login", "post"),
         ("/api/v1/authentication/renew", "post"),
         ("/api/v1/authentication/session", "get"),
+        ("/api/v1/authentication/password-reset", "post"),
         ("/api/v1/users", "post"),
         ("/api/v1/users/{user_id}", "delete"),
+        ("/api/v1/users/{user_id}/invitation", "post"),
         ("/api/v1/organizations/{organization_id}/members", "post"),
         ("/api/v1/forms", "post"),
         ("/api/v1/forms/{form_id}", "get"),
@@ -94,6 +96,7 @@ def test_request_fields_path_parameters_and_examples_are_documented() -> None:
     components = schema["components"]["schemas"]
 
     assert components["LoginRequest"]["examples"]
+    assert components["PasswordResetRequest"]["examples"]
     assert components["UserCreate"]["examples"]
     assert components["MemberInvite"]["examples"]
     assert components["FormResponseCreate"]["examples"]
@@ -109,6 +112,7 @@ def test_request_fields_path_parameters_and_examples_are_documented() -> None:
 
     for schema_name in (
         "LoginRequest",
+        "PasswordResetRequest",
         "UserCreate",
         "MemberInvite",
         "FormResponseCreate",
@@ -123,6 +127,12 @@ def test_request_fields_path_parameters_and_examples_are_documented() -> None:
     assert user_id["name"] == "user_id"
     assert user_id["description"]
     assert user_id["schema"]["examples"]
+
+    resend_invitation = _operation(schema, "/api/v1/users/{user_id}/invitation", "post")
+    invited_user_id = resend_invitation["parameters"][0]
+    assert invited_user_id["name"] == "user_id"
+    assert invited_user_id["description"]
+    assert invited_user_id["schema"]["examples"]
 
     submit_response = _operation(
         schema,
@@ -166,6 +176,17 @@ def test_success_error_and_bearer_authentication_responses_are_documented() -> N
         "404",
         "503",
     }
+    # Reenvio de convite: usuário de outra organização é 404, não 403, para não vazar
+    # cadastro alheio; o e-mail do Keycloak fora do ar é 503 (CREED-23.8).
+    assert set(
+        _operation(schema, "/api/v1/users/{user_id}/invitation", "post")["responses"]
+    ) >= {"204", "401", "403", "404", "422", "503"}
+    # Esqueci minha senha: rota pública, sem 401 nem 404, porque a resposta não pode
+    # dizer se o e-mail tem acesso (CREED-23.8).
+    password_reset = _operation(schema, "/api/v1/authentication/password-reset", "post")
+    assert set(password_reset["responses"]) >= {"204", "422", "503"}
+    assert not {"401", "404"} & set(password_reset["responses"])
+    assert "security" not in password_reset
     # Convite de membro: o recorte do gestor é 403, a organização inexistente é 404,
     # e o Keycloak ou o SMTP fora do ar é 503, como no cadastro (D7, D8).
     assert set(

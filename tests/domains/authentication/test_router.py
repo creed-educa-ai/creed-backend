@@ -31,6 +31,7 @@ class _FakeService:
         self.login_ok = login_ok
         self.refresh_ok = refresh_ok
         self.unavailable = unavailable
+        self.password_resets: list[str] = []
 
     async def login(self, _data: LoginRequest) -> SessionResponse:
         if self.unavailable:
@@ -45,6 +46,11 @@ class _FakeService:
         if not self.refresh_ok:
             raise AuthenticationError("Sessão expirada, faça login novamente")
         return FAKE_SESSION
+
+    async def request_password_reset(self, email: str) -> None:
+        if self.unavailable:
+            raise ServiceUnavailableError("Não foi possível enviar o e-mail agora.")
+        self.password_resets.append(email)
 
 
 @pytest.fixture
@@ -150,6 +156,52 @@ def test_renew_with_keycloak_down_returns_503(app: FastAPI, client: TestClient) 
     )
 
     assert response.status_code == 503
+
+
+def test_password_reset_returns_204_without_body_and_without_token(
+    app: FastAPI, client: TestClient
+) -> None:
+    """Rota pública, como o login.
+
+    O 204 é o mesmo para e-mail com ou sem acesso: quem decide é o service, e ele não
+    devolve nada que distinga os dois.
+    """
+    fake_service = _FakeService()
+    _use_fake_service(app, fake_service)
+
+    response = client.post(
+        "/authentication/password-reset", json={"email": "Pessoa@exemplo.com"}
+    )
+
+    assert response.status_code == 204
+    assert response.content == b""
+    assert fake_service.password_resets == ["Pessoa@exemplo.com"]
+
+
+@pytest.mark.parametrize("body", [{"email": "nao-e-email"}, {}])
+def test_password_reset_with_invalid_email_returns_422(
+    app: FastAPI, client: TestClient, body: dict[str, str]
+) -> None:
+    fake_service = _FakeService()
+    _use_fake_service(app, fake_service)
+
+    response = client.post("/authentication/password-reset", json=body)
+
+    assert response.status_code == 422
+    assert fake_service.password_resets == []
+
+
+def test_password_reset_with_keycloak_or_smtp_down_returns_503(
+    app: FastAPI, client: TestClient
+) -> None:
+    _use_fake_service(app, _FakeService(unavailable=True))
+
+    response = client.post(
+        "/authentication/password-reset", json={"email": "pessoa@exemplo.com"}
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Não foi possível enviar o e-mail agora."
 
 
 def test_session_without_authorization_returns_401(client: TestClient) -> None:

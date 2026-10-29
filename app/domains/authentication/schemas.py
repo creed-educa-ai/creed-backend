@@ -1,6 +1,6 @@
 """Schemas Pydantic do domínio authentication."""
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 
 class LoginRequest(BaseModel):
@@ -31,6 +31,24 @@ class RefreshRequest(BaseModel):
     refresh_token: str = Field(
         description="Token de renovação retornado no login.",
         examples=["refresh-token-exemplo"],
+    )
+
+
+class PasswordResetRequest(BaseModel):
+    """Pedido de "esqueci minha senha".
+
+    `EmailStr`, ao contrário do `LoginRequest`: aqui o e-mail inválido é 422, que o
+    front mostra no campo. O e-mail vai como a pessoa digitou; quem compara em
+    minúsculas é o service.
+    """
+
+    model_config = ConfigDict(
+        json_schema_extra={"examples": [{"email": "usuario@exemplo.com"}]}
+    )
+
+    email: EmailStr = Field(
+        description="E-mail de quem esqueceu a senha.",
+        examples=["usuario@exemplo.com"],
     )
 
 

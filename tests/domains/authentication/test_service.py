@@ -42,9 +42,13 @@ class _FakeUserService(UserService):
 
     def __init__(self, access: UserAccess | None) -> None:
         self._access = access
+        self.password_resets: list[str] = []
 
     async def get_active_user_access_by_email(self, email: str) -> UserAccess | None:
         return self._access
+
+    async def send_password_reset_service(self, email: str) -> None:
+        self.password_resets.append(email)
 
 
 @pytest.fixture
@@ -203,3 +207,12 @@ async def test_refresh_with_keycloak_down_raises_service_unavailable(
 
     with pytest.raises(ServiceUnavailableError):
         await service.refresh("valid-refresh-token")
+
+
+async def test_password_reset_delegates_the_typed_email_to_users() -> None:
+    """Quem decide se há acesso, e compara em minúsculas, é o `UserService`."""
+    users = _FakeUserService(ACTIVE_ACCESS)
+
+    await AuthenticationService(users).request_password_reset("Pessoa@exemplo.com")
+
+    assert users.password_resets == ["Pessoa@exemplo.com"]
