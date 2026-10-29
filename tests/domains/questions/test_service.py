@@ -58,10 +58,7 @@ class FakeQuestionRepository:
     async def get_by_id(self, question_id: uuid.UUID) -> Question | None:
         return next((q for q in self.itens if q.id == question_id), None)
 
-    async def list_required_by_type(
-        self, form_id: uuid.UUID, question_type: QuestionType
-    ) -> list[Question]:
-        self.tipo_pedido = question_type
+    async def list_required(self, form_id: uuid.UUID) -> list[Question]:
         return [q for q in self.itens if q.form_id == form_id]
 
     async def list_by_form(
@@ -383,17 +380,20 @@ class TestBuscarQuestion:
 
 
 class TestObrigatoriasDoEnvio:
-    async def test_pede_ao_banco_so_as_descritivas(self) -> None:
-        """A objetiva não conta até a CREED-37 (D2). O filtro de `required` e de
-        tipo é SQL, no repository: este teste só prova qual tipo é pedido."""
+    async def test_devolve_descritivas_e_objetivas(self) -> None:
+        """Com as alternativas da CREED-37, a objetiva conta (fecha o D2 da
+        CREED-47). O filtro de `required` é SQL, no repository: este teste só
+        prova que o service não descarta nenhum tipo."""
         form_id = uuid.uuid4()
-        question = uma_question(form_id=form_id, type=QuestionType.DESCRIPTIVE)
-        repository = FakeQuestionRepository([question])
+        descritiva = uma_question(form_id=form_id, type=QuestionType.DESCRIPTIVE)
+        objetiva = uma_question(
+            form_id=form_id, type=QuestionType.OBJECTIVE, order_index=1
+        )
+        repository = FakeQuestionRepository([descritiva, objetiva])
 
-        resultado = await servico(repository).list_required_descriptive(form_id)
+        resultado = await servico(repository).list_required(form_id)
 
-        assert resultado == [question]
-        assert repository.tipo_pedido is QuestionType.DESCRIPTIVE
+        assert resultado == [descritiva, objetiva]
 
 
 class TestPerguntaDescritiva:
@@ -424,6 +424,9 @@ class FakeQuestionOptionRepository:
             return None
         self.items.append(option)
         return option
+
+    async def get_by_id(self, option_id: uuid.UUID) -> QuestionOption | None:
+        return next((o for o in self.items if o.id == option_id), None)
 
     async def get_by_question_and_order(
         self, question_id: uuid.UUID, order_index: int
@@ -596,3 +599,19 @@ class TestCreateQuestionOption:
         )
 
         assert options.items == [other, created]
+
+
+class TestBuscarQuestionOption:
+    """O "existe?" que `responses` usa para conferir a alternativa marcada."""
+
+    async def test_existente_devolve_a_alternativa(self) -> None:
+        option = an_option()
+        options = FakeQuestionOptionRepository([option])
+
+        assert await option_service(options).get(option.id) is option
+
+    async def test_inexistente_vira_not_found(self) -> None:
+        option_id = uuid.uuid4()
+
+        with pytest.raises(NotFoundError, match=re.escape(str(option_id))):
+            await option_service(FakeQuestionOptionRepository()).get(option_id)

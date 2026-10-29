@@ -70,8 +70,10 @@ DEMO_FORM_ID = uuid.UUID("00000000-0000-0000-0000-000000000003")
 DEMO_FORM_NAME = "[Demonstração] Formulário de teste"
 
 # Texto sintético de propósito: o conteúdo do instrumento é da cliente. Uma por
-# seção (P-020), todas descritivas (a objetiva espera a CREED-37). Duas
-# obrigatórias e uma opcional, para o envio ser barrado e depois aceito.
+# seção (P-020), todas descritivas: o back já aceita a objetiva, mas o front
+# ainda a pula no envio e não recebe as alternativas, e uma objetiva obrigatória
+# aqui travaria o envio da demonstração. Duas obrigatórias e uma opcional, para o
+# envio ser barrado e depois aceito.
 # A posição é o índice na lista.
 DEMO_QUESTIONS = [
     (

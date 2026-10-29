@@ -122,8 +122,8 @@ async def criar_form_response(
     description=(
         "Finaliza uma resposta em andamento, alterando o status para `submitted` "
         "e registrando a data de submissão. Só o vínculo que abriu a resposta "
-        "pode submetê-la, e só com todas as perguntas descritivas obrigatórias "
-        "respondidas. Objetivas obrigatórias ainda não são exigidas."
+        "pode submetê-la, e só com todas as perguntas obrigatórias respondidas, "
+        "descritivas e objetivas."
     ),
     response_description="Resposta finalizada com a data de submissão.",
     operation_id="submit_form_response",
@@ -159,7 +159,7 @@ async def criar_form_response(
         status.HTTP_422_UNPROCESSABLE_CONTENT: {
             "model": ErrorResponse | ValidationErrorResponse,
             "description": (
-                "Pergunta descritiva obrigatória sem resposta: `detail` é texto e "
+                "Pergunta obrigatória sem resposta: `detail` é texto e "
                 "cita posição e id de cada uma. Identificador inválido no caminho: "
                 "`detail` é uma lista."
             ),
@@ -233,9 +233,10 @@ _NOT_OWNER: dict[int | str, dict[str, Any]] = {
     status_code=status.HTTP_201_CREATED,
     summary="Gravar resposta de uma pergunta",
     description=(
-        "Grava o texto de uma pergunta descritiva numa resposta de formulário em "
-        "andamento. Só o vínculo que abriu a resposta grava, e cada pergunta "
-        "recebe uma resposta só. Perguntas objetivas ainda são recusadas."
+        "Grava a resposta de uma pergunta numa resposta de formulário em "
+        "andamento: o texto, se a pergunta é descritiva, ou uma alternativa da "
+        "própria pergunta, se é objetiva. Só o vínculo que abriu a resposta grava, "
+        "e cada pergunta recebe uma resposta só."
     ),
     response_description="Resposta gravada.",
     operation_id="record_answer",
@@ -257,16 +258,16 @@ _NOT_OWNER: dict[int | str, dict[str, Any]] = {
         status.HTTP_422_UNPROCESSABLE_CONTENT: {
             "model": ErrorResponse | ValidationErrorResponse,
             "description": (
-                "Pergunta inexistente, de outro formulário ou objetiva, texto vazio "
-                "ou alternativa marcada: `detail` é texto. Corpo inválido: `detail` "
-                "é uma lista, um item por campo recusado."
+                "Pergunta inexistente ou de outro formulário; descritiva sem texto "
+                "ou com alternativa; objetiva sem alternativa, com texto, ou com "
+                "alternativa inexistente ou de outra pergunta: `detail` é texto. "
+                "Corpo inválido: `detail` é uma lista, um item por campo recusado."
             ),
             "content": {
                 "application/json": {
                     "example": {
                         "detail": (
-                            "Respostas a perguntas objetivas chegam com as "
-                            "alternativas (CREED-37)"
+                            "A resposta objetiva precisa de uma alternativa marcada"
                         )
                     }
                 }
