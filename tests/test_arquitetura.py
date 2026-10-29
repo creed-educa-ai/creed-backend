@@ -50,7 +50,11 @@ COMPOE_COM_SERVICE_DE: dict[str, str] = {
     "participants": "consulta documento pelo DocumentService",
     "questions": "confere o formulario pelo FormService",
     "responses": "confere formulario e pergunta pelo FormService e QuestionService",
-    "users": "le o papel e a organizacao do vinculo pelo LinkService",
+    "users": (
+        "le o papel e a organizacao do vinculo pelo LinkService; no convite de "
+        "membro, cria participante e vinculo pelo ParticipantService e pelo "
+        "LinkService e confere a organizacao pelo OrganizationService"
+    ),
 }
 
 SUBMODULOS_DE_COMPOSICAO = {"service", "dependencies"}
@@ -94,13 +98,19 @@ def test_service_nao_conhece_http_nem_orm(dominio: Path) -> None:
 
 @pytest.mark.parametrize("dominio", DOMINIOS, ids=NOMES)
 def test_router_nao_conhece_models_nem_orm(dominio: Path) -> None:
-    proibidos = [
-        linha
-        for linha in _imports(_codigo(dominio / "router.py"))
-        if ".models import" in linha or "sqlalchemy" in linha
-    ]
+    """Vale para todo `router*.py`, não só para o `router.py`.
+
+    O segundo router de um domínio (`router_options.py`, `router_members.py`) tem a
+    mesma regra do primeiro.
+    """
+    proibidos = []
+    for arquivo in sorted(dominio.glob("router*.py")):
+        for linha in _imports(_codigo(arquivo)):
+            if ".models import" in linha or "sqlalchemy" in linha:
+                proibidos.append(f"{arquivo.name}: {linha.strip()}")
+
     assert not proibidos, (
-        f"{dominio.name}/router.py conhece a tabela: {proibidos}. "
+        f"{dominio.name} tem router que conhece a tabela: {proibidos}. "
         "O mapeamento model -> schema é `de_model()`, em schemas.py."
     )
 

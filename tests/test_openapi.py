@@ -48,6 +48,7 @@ def test_all_endpoints_have_method_summary_description_and_operation_id() -> Non
         ("/api/v1/authentication/session", "get"),
         ("/api/v1/users", "post"),
         ("/api/v1/users/{user_id}", "delete"),
+        ("/api/v1/organizations/{organization_id}/members", "post"),
         ("/api/v1/forms", "post"),
         ("/api/v1/forms/{form_id}", "get"),
         ("/api/v1/form-responses", "post"),
@@ -94,6 +95,7 @@ def test_request_fields_path_parameters_and_examples_are_documented() -> None:
 
     assert components["LoginRequest"]["examples"]
     assert components["UserCreate"]["examples"]
+    assert components["MemberInvite"]["examples"]
     assert components["FormResponseCreate"]["examples"]
     assert components["SessionResponse"]["examples"]
     assert components["UserResponse"]["examples"]
@@ -108,6 +110,7 @@ def test_request_fields_path_parameters_and_examples_are_documented() -> None:
     for schema_name in (
         "LoginRequest",
         "UserCreate",
+        "MemberInvite",
         "FormResponseCreate",
         "ParticipantCreate",
         "QuestionCreate",
@@ -163,6 +166,13 @@ def test_success_error_and_bearer_authentication_responses_are_documented() -> N
         "404",
         "503",
     }
+    # Convite de membro: o recorte do gestor é 403, a organização inexistente é 404,
+    # e o Keycloak ou o SMTP fora do ar é 503, como no cadastro (D7, D8).
+    assert set(
+        _operation(schema, "/api/v1/organizations/{organization_id}/members", "post")[
+            "responses"
+        ]
+    ) >= {"201", "401", "403", "404", "409", "422", "503"}
     # O vínculo de quem responde vem do login desde a CREED-47 (P-031).
     assert set(_operation(schema, "/api/v1/form-responses", "post")["responses"]) >= {
         "201",

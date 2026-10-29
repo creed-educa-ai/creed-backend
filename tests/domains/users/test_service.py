@@ -14,13 +14,13 @@ from datetime import UTC, datetime
 
 import pytest
 
-from app.domains.links.models import Link, LinkType, Roles
+from app.domains.links.models import Link
 from app.domains.users.models import User
 from app.domains.users.schemas import UserCreate, UserResponse
 from app.domains.users.service import UserService
 from app.external_services.keycloak import admin as keycloak_admin
 from app.external_services.keycloak.client import KeycloakUnavailableError
-from app.shared.enums import RecordStatus
+from app.shared.enums import LinkType, RecordStatus, Roles
 from app.shared.exceptions import ConflictError, NotFoundError, ServiceUnavailableError
 
 

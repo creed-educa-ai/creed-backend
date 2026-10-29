@@ -19,13 +19,20 @@ import uuid
 from dataclasses import dataclass
 
 from app.domains.links.service import LinkService
+from app.domains.organizacoes.service import OrganizationService
+from app.domains.participants.service import ParticipantService
 from app.domains.users.models import User
 from app.domains.users.repository import UserRepository
-from app.domains.users.schemas import UserCreate
+from app.domains.users.schemas import MemberInvite, UserCreate
 from app.external_services.keycloak import admin as keycloak_admin
 from app.external_services.keycloak.client import KeycloakUnavailableError
-from app.shared.enums import RecordStatus
-from app.shared.exceptions import ConflictError, NotFoundError, ServiceUnavailableError
+from app.shared.enums import RecordStatus, Roles
+from app.shared.exceptions import (
+    ConflictError,
+    ForbiddenError,
+    NotFoundError,
+    ServiceUnavailableError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -198,3 +205,66 @@ class UserService:
             await keycloak_admin.delete_user(keycloak_id)
         except KeycloakUnavailableError as exc:
             raise ServiceUnavailableError(_DELETE_UNAVAILABLE) from exc
+
+
+class MemberService:
+    """O convite de membro: participante, vínculo e acesso numa chamada (D8).
+
+    Segunda classe deste arquivo, como o `QuestionOptionService`, e não métodos no
+    `UserService`: a guarda de toda rota protegida monta o `UserService`, e ele
+    passaria a montar participante e organização a cada requisição.
+
+    Compõe os donos pelo service de cada um. O `users` não monta `ParticipantCreate`
+    nem `LinkCreate`: quem monta são `create_member_participant` e
+    `create_member_link`, nos domínios donos (`tests/test_arquitetura.py`).
+    """
+
+    def __init__(
+        self,
+        users: UserService,
+        participants: ParticipantService,
+        links: LinkService,
+        organizations: OrganizationService,
+    ) -> None:
+        self.users = users
+        self.participants = participants
+        self.links = links
+        self.organizations = organizations
+
+    async def invite_member_service(
+        self,
+        organization_id: uuid.UUID,
+        request: MemberInvite,
+        *,
+        role: str,
+        own_organization_id: uuid.UUID,
+    ) -> CreatedUser:
+        """Cria participante, vínculo e acesso, e manda o convite. Tudo ou nada.
+
+        `role` e `own_organization_id` são de quem pede. Participante e vínculo são
+        gravados (flush) antes do acesso, porque o acesso precisa do id do vínculo.
+        Se o acesso falha (e-mail repetido, Keycloak ou SMTP fora do ar), o erro sobe
+        até o `get_db`, que desfaz os dois junto com o resto da requisição. A
+        compensação no Keycloak já é do `create_user_service` (D7).
+        """
+        # Organização alheia é 403 antes de 404, para não revelar quais existem
+        # (P-033). Quem compara é o dono da organização.
+        # 🟡 Premissa P-057 — organização inativa também recebe convite.
+        await self.organizations.get(
+            organization_id, role=role, own_organization_id=own_organization_id
+        )
+
+        # 🟡 Premissa P-045 — o gestor convida só como gestor ou respondente.
+        if role != Roles.ADMIN.value and request.role is Roles.ADMIN:
+            raise ForbiddenError("Só o admin convida com o papel admin")
+
+        participant = await self.participants.create_member_participant(request.name)
+        link = await self.links.create_member_link(
+            organization_id, participant.id, request.role, request.type
+        )
+
+        # O e-mail vai como veio: quem compara e grava em minúsculas é o
+        # `create_user_service`.
+        return await self.users.create_user_service(
+            UserCreate(name=request.name, email=request.email, link_id=link.id)
+        )
