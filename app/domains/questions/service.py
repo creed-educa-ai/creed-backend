@@ -100,16 +100,13 @@ class QuestionService:
 
         return question
 
-    async def list_required_descriptive(self, form_id: uuid.UUID) -> list[Question]:
+    async def list_required(self, form_id: uuid.UUID) -> list[Question]:
         """As perguntas que o envio de uma resposta exige, em ordem de posicao.
 
-        So as descritivas: a objetiva ainda nao pode ser respondida (CREED-47, D2),
-        e contar a obrigatoria objetiva travaria todo envio. Quando a CREED-37
-        trouxer as alternativas, a objetiva obrigatoria passa a contar aqui.
+        Descritivas e objetivas: com as alternativas da CREED-37, a objetiva pode
+        ser respondida, e a obrigatoria passa a contar (fecha o D2 da CREED-47).
         """
-        return await self.repository.list_required_by_type(
-            form_id, QuestionType.DESCRIPTIVE
-        )
+        return await self.repository.list_required(form_id)
 
     def is_descriptive(self, question: Question) -> bool:
         """Responde por `responses`, que nao pode importar `QuestionType`."""
@@ -177,6 +174,16 @@ class QuestionOptionService:
         if created is None:
             raise self._position_conflict(question_id, request)
         return created
+
+    async def get(self, option_id: uuid.UUID) -> QuestionOption:
+        """Só "existe?", sem regra de acesso: é o que `responses` usa para
+        conferir a alternativa marcada numa resposta objetiva."""
+        option = await self.repository.get_by_id(option_id)
+
+        if option is None:
+            raise NotFoundError(f"Alternativa {option_id} não encontrada")
+
+        return option
 
     def _position_conflict(
         self, question_id: uuid.UUID, request: QuestionOptionCreate

@@ -40,7 +40,9 @@ class Department(Base):
 
     organization_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("organizations.id"),
+        ForeignKey(
+            "organizations.id", name="fk_departments_organization_id_organizations"
+        ),
         nullable=False,
     )
 

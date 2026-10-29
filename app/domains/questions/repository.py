@@ -21,7 +21,6 @@ from app.domains.questions.models import (
     Question,
     QuestionOption,
     QuestionSection,
-    QuestionType,
 )
 
 
@@ -62,16 +61,13 @@ class QuestionRepository:
         result = await self.db.execute(query)
         return list(result.scalars().all())
 
-    async def list_required_by_type(
-        self, form_id: uuid.UUID, question_type: QuestionType
-    ) -> list[Question]:
-        """Obrigatorias do tipo pedido, em ordem de posicao; o filtro e no banco."""
+    async def list_required(self, form_id: uuid.UUID) -> list[Question]:
+        """Obrigatorias do formulario, em ordem de posicao; o filtro e no banco."""
         result = await self.db.execute(
             select(Question)
             .where(
                 Question.form_id == form_id,
                 Question.required.is_(True),
-                Question.type == question_type,
             )
             .order_by(Question.order_index)
         )
@@ -108,6 +104,12 @@ class QuestionOptionRepository:
             return None
         await self.db.refresh(option)
         return option
+
+    async def get_by_id(self, option_id: uuid.UUID) -> QuestionOption | None:
+        result = await self.db.execute(
+            select(QuestionOption).where(QuestionOption.id == option_id)
+        )
+        return result.scalar_one_or_none()
 
     async def get_by_question_and_order(
         self, question_id: uuid.UUID, order_index: int

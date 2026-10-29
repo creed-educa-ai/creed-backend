@@ -146,20 +146,16 @@ def uma_pergunta(
 class FakeQuestionService:
     """Dublê do `QuestionService`: "existe?", "é descritiva?" e "quais o envio exige?".
 
-    `list_required_descriptive` filtra em memória. O filtro real é SQL, no
-    repository de `questions`, e não é exercido por estes testes.
+    `list_required` filtra em memória. O filtro real é SQL, no repository de
+    `questions`, e não é exercido por estes testes.
     """
 
     def __init__(self, perguntas: list[SimpleNamespace] | None = None) -> None:
         self.perguntas = {p.id: p for p in perguntas or []}
 
-    async def list_required_descriptive(
-        self, form_id: uuid.UUID
-    ) -> list[SimpleNamespace]:
+    async def list_required(self, form_id: uuid.UUID) -> list[SimpleNamespace]:
         exigidas = [
-            p
-            for p in self.perguntas.values()
-            if p.form_id == form_id and p.descritiva and p.obrigatoria
+            p for p in self.perguntas.values() if p.form_id == form_id and p.obrigatoria
         ]
         return sorted(exigidas, key=lambda p: p.order_index)
 
@@ -170,6 +166,26 @@ class FakeQuestionService:
 
     def is_descriptive(self, question: SimpleNamespace) -> bool:
         return bool(question.descritiva)
+
+
+def uma_alternativa(pergunta: SimpleNamespace) -> SimpleNamespace:
+    return SimpleNamespace(id=uuid.uuid4(), question_id=pergunta.id)
+
+
+class FakeQuestionOptionService:
+    """Dublê do `QuestionOptionService`: só o "existe?" das alternativas dadas.
+
+    Alternativa fora da lista levanta `NotFoundError`, como o service real faz para
+    um id que não está no banco.
+    """
+
+    def __init__(self, alternativas: list[SimpleNamespace] | None = None) -> None:
+        self.alternativas = {a.id: a for a in alternativas or []}
+
+    async def get(self, option_id: uuid.UUID) -> SimpleNamespace:
+        if option_id not in self.alternativas:
+            raise NotFoundError(f"Alternativa {option_id} não encontrada")
+        return self.alternativas[option_id]
 
 
 def servico(
@@ -307,12 +323,26 @@ class TestEnvioExigeObrigatorias:
 
         assert resultado.status is FormResponseStatus.SUBMITTED
 
-    async def test_objetiva_obrigatoria_sem_resposta_nao_impede(self) -> None:
-        """D2: a objetiva ainda não pode ser respondida (CREED-37)."""
+    async def test_objetiva_obrigatoria_sem_resposta_vira_validation_error(
+        self,
+    ) -> None:
+        """Com as alternativas da CREED-37, a objetiva obrigatória conta (fecha o
+        D2 da CREED-47)."""
+        form_response = um_form_response()
+        objetiva = uma_pergunta(form_response.form_id, descritiva=False, posicao=4)
+
+        with pytest.raises(ValidationError, match="posição 4"):
+            await enviar(form_response, [objetiva], [])
+
+        assert form_response.status is FormResponseStatus.IN_PROGRESS
+
+    async def test_objetiva_obrigatoria_respondida_envia(self) -> None:
         form_response = um_form_response()
         objetiva = uma_pergunta(form_response.form_id, descritiva=False)
 
-        resultado = await enviar(form_response, [objetiva], [])
+        resultado = await enviar(
+            form_response, [objetiva], [uma_resposta(form_response, objetiva)]
+        )
 
         assert resultado.status is FormResponseStatus.SUBMITTED
 
@@ -420,7 +450,8 @@ class TestCreateFormResponse:
 class Cenario:
     """Uma resposta de formulário em andamento do vínculo `link_id`, com uma
     pergunta descritiva e uma objetiva do mesmo formulário, e uma descritiva de
-    outro formulário."""
+    outro formulário. A objetiva tem uma alternativa; há também uma alternativa de
+    outra objetiva, de fora deste formulário."""
 
     def __init__(self, **campos_da_resposta: object) -> None:
         self.link_id = uuid.uuid4()
@@ -430,6 +461,10 @@ class Cenario:
         self.descritiva = uma_pergunta(self.form_response.form_id)
         self.objetiva = uma_pergunta(self.form_response.form_id, descritiva=False)
         self.de_outro_formulario = uma_pergunta(uuid.uuid4())
+        self.alternativa = uma_alternativa(self.objetiva)
+        self.alternativa_alheia = uma_alternativa(
+            uma_pergunta(uuid.uuid4(), descritiva=False)
+        )
         self.answers = FakeAnswerRepository()
         questions = FakeQuestionService(
             [self.descritiva, self.objetiva, self.de_outro_formulario]
@@ -438,6 +473,9 @@ class Cenario:
             self.answers,  # type: ignore[arg-type]
             FakeFormResponseRepository([self.form_response]),  # type: ignore[arg-type]
             questions,  # type: ignore[arg-type]
+            FakeQuestionOptionService(  # type: ignore[arg-type]
+                [self.alternativa, self.alternativa_alheia]
+            ),
         )
 
     async def gravar(
@@ -455,7 +493,8 @@ class Cenario:
 
 
 class TestRecordAnswer:
-    """Um teste por conferência, na ordem da spec: 404, 403, 409, 422 x 4, 409."""
+    """Um teste por conferência, na ordem da spec da CREED-47: 404, 403, 409, 422
+    (pergunta), 422 (forma da resposta, descritiva ou objetiva), 409."""
 
     async def test_grava_o_texto_da_descritiva_na_resposta_de_formulario(self) -> None:
         cenario = Cenario()
@@ -515,16 +554,81 @@ class TestRecordAnswer:
 
         assert cenario.answers.itens == []
 
-    async def test_pergunta_objetiva_vira_validation_error(self) -> None:
-        """D2: objetiva só com as alternativas da CREED-37."""
+    async def test_grava_a_alternativa_da_objetiva_sem_texto(self) -> None:
+        """Fecha o D2 da CREED-47: a objetiva chega com a alternativa da CREED-37."""
         cenario = Cenario()
 
-        with pytest.raises(ValidationError, match="CREED-37"):
+        resultado = await cenario.gravar(
+            AnswerCreate(
+                question_id=cenario.objetiva.id, option_id=cenario.alternativa.id
+            )
+        )
+
+        assert resultado.question_id == cenario.objetiva.id
+        assert resultado.option_id == cenario.alternativa.id
+        assert resultado.value is None
+        assert cenario.answers.itens == [resultado]
+
+    async def test_objetiva_sem_alternativa_vira_validation_error(self) -> None:
+        cenario = Cenario()
+
+        with pytest.raises(ValidationError, match="precisa de uma alternativa"):
+            await cenario.gravar(AnswerCreate(question_id=cenario.objetiva.id))
+
+        assert cenario.answers.itens == []
+
+    async def test_objetiva_com_texto_vira_validation_error(self) -> None:
+        """O texto não é descartado em silêncio: quem mandou fica sabendo."""
+        cenario = Cenario()
+
+        with pytest.raises(ValidationError, match="não aceita texto"):
             await cenario.gravar(
-                AnswerCreate(question_id=cenario.objetiva.id, option_id=uuid.uuid4())
+                AnswerCreate(
+                    question_id=cenario.objetiva.id,
+                    option_id=cenario.alternativa.id,
+                    value="texto",
+                )
             )
 
         assert cenario.answers.itens == []
+
+    async def test_alternativa_inexistente_vira_validation_error(self) -> None:
+        """A alternativa veio no corpo: inexistente é 422, não 404 (CREED-47)."""
+        cenario = Cenario()
+        option_id = uuid.uuid4()
+
+        with pytest.raises(ValidationError, match=str(option_id)):
+            await cenario.gravar(
+                AnswerCreate(question_id=cenario.objetiva.id, option_id=option_id)
+            )
+
+        assert cenario.answers.itens == []
+
+    async def test_alternativa_de_outra_pergunta_vira_validation_error(self) -> None:
+        cenario = Cenario()
+
+        with pytest.raises(ValidationError, match="não é da pergunta"):
+            await cenario.gravar(
+                AnswerCreate(
+                    question_id=cenario.objetiva.id,
+                    option_id=cenario.alternativa_alheia.id,
+                )
+            )
+
+        assert cenario.answers.itens == []
+
+    async def test_objetiva_ja_respondida_vira_conflict(self) -> None:
+        """P-032 vale para a objetiva também: uma alternativa, sem troca."""
+        cenario = Cenario()
+        dados = AnswerCreate(
+            question_id=cenario.objetiva.id, option_id=cenario.alternativa.id
+        )
+        primeira = await cenario.gravar(dados)
+
+        with pytest.raises(ConflictError, match="já foi respondida"):
+            await cenario.gravar(dados)
+
+        assert cenario.answers.itens == [primeira]
 
     async def test_alternativa_marcada_na_descritiva_vira_validation_error(
         self,

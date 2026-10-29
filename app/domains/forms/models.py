@@ -1,10 +1,14 @@
-"""Models SQLAlchemy do domínio forms."""
+"""Models SQLAlchemy do domínio forms.
+
+`organization_id` tem `ForeignKey` para `organizations` desde a integração da
+sprint 3: a CREED-47 a deixou para quando a tabela existisse (D1).
+"""
 
 import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Enum, String, func
+from sqlalchemy import DateTime, Enum, ForeignKey, String, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -30,6 +34,7 @@ class Form(Base):
 
     organization_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
+        ForeignKey("organizations.id", name="fk_form_organization_id_organizations"),
         nullable=False,
         index=True,
     )

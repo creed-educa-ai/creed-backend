@@ -208,6 +208,21 @@ class TestLerOrganization:
             )
 
 
+class TestOrganizacaoExiste:
+    """O "existe?" que `links`, `department` e `forms` usam, sem regra de acesso."""
+
+    async def test_existente_devolve_true(self) -> None:
+        organizacao = uma_organization()
+        repository = FakeOrganizationRepository([organizacao])
+
+        assert await servico(repository).organization_exists(organizacao.id) is True
+
+    async def test_inexistente_devolve_false_sem_levantar(self) -> None:
+        repository = FakeOrganizationRepository()
+
+        assert await servico(repository).organization_exists(uuid.uuid4()) is False
+
+
 class TestListarOrganizations:
     async def test_calcula_o_deslocamento_e_devolve_o_total(self) -> None:
         repository = FakeOrganizationRepository([uma_organization() for _ in range(5)])

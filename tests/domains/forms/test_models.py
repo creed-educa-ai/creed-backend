@@ -42,6 +42,13 @@ class TestForms:
             "closed",
         }
 
-    def test_foreign_keys(self) -> None:
-        """A tabela de Vínculo ainda não existe."""
-        assert Form.__table__.foreign_keys == set()
+    def test_organization_id_tem_fk_para_organizations(self) -> None:
+        """A CREED-47 deixou esta FK para quando `organizations` existisse (D1)."""
+        fks = {fk.parent.name: fk.target_fullname for fk in Form.__table__.foreign_keys}
+
+        assert fks == {"organization_id": "organizations.id"}
+
+    def test_fk_de_organizacao_tem_o_nome_que_a_migration_usa(self) -> None:
+        fk = next(iter(Form.__table__.c.organization_id.foreign_keys))
+
+        assert fk.name == "fk_form_organization_id_organizations"

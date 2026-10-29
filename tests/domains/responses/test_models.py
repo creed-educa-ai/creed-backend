@@ -36,13 +36,18 @@ class TestAnswer:
         assert {c.name: c.nullable for c in Answer.__table__.columns} == esperado
 
     def test_chaves_estrangeiras(self) -> None:
-        """`option_id` fica sem FK até a tabela de alternativas (CREED-37)."""
+        """`option_id` ganhou FK na integração da sprint 3, com a tabela de
+        alternativas da CREED-37."""
         assert _fks(cast(Table, Answer.__table__)) == {
             "form_response_id": (
                 "form_responses.id",
                 "fk_answer_form_response_id_form_responses",
             ),
             "question_id": ("questions.id", "fk_answer_question_id_questions"),
+            "option_id": (
+                "question_options.id",
+                "fk_answer_option_id_question_options",
+            ),
         }
 
     def test_tem_indice_em_form_response_id(self) -> None:

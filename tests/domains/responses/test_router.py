@@ -340,7 +340,7 @@ ERROS_DO_SERVICE = [
     (NotFoundError("FormResponse não encontrado"), 404),
     (ForbiddenError("FormResponse pertence a outro vínculo"), 403),
     (ConflictError("A pergunta já foi respondida nesta resposta"), 409),
-    (ValidationError("Respostas a perguntas objetivas chegam com as alternativas"), 422),
+    (ValidationError("A resposta objetiva precisa de uma alternativa marcada"), 422),
 ]
 
 

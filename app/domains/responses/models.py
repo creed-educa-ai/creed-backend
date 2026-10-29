@@ -86,8 +86,11 @@ class Answer(Base):
         nullable=False,
         index=True,
     )
-    # Sem FK: a tabela de alternativas nasce com a CREED-37.
-    option_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    option_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("question_options.id", name="fk_answer_option_id_question_options"),
+        nullable=True,
+    )
     value: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

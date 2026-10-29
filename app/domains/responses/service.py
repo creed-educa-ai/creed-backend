@@ -4,14 +4,15 @@ Esta camada não conhece HTTP nem detalhes de ORM. É onde ficam
 as regras próprias das entidades FormResponse e Answer. Formulário é de
 outro domínio: a pergunta "ele existe?" e a conferência de organização vão ao
 `FormService` (CREED-47). Pergunta também: "existe?" e "é descritiva?" vão ao
-`QuestionService`.
+`QuestionService`. E a alternativa marcada numa objetiva, ao
+`QuestionOptionService`.
 """
 
 import uuid
 from datetime import UTC, datetime
 
 from app.domains.forms.service import FormService
-from app.domains.questions.service import QuestionService
+from app.domains.questions.service import QuestionOptionService, QuestionService
 from app.domains.responses.models import Answer, FormResponse, FormResponseStatus
 from app.domains.responses.repository import AnswerRepository, FormResponseRepository
 from app.domains.responses.schemas import AnswerCreate
@@ -47,6 +48,18 @@ async def _own_form_response(
 def _check_in_progress(form_response: FormResponse) -> None:
     if form_response.status is not FormResponseStatus.IN_PROGRESS:
         raise ConflictError(f"FormResponse {form_response.id} já foi submetido")
+
+
+def _descriptive_text(dados: AnswerCreate) -> str:
+    """A descritiva leva texto, e nenhuma alternativa."""
+    if dados.option_id is not None:
+        raise ValidationError("Pergunta descritiva não aceita alternativa marcada")
+
+    texto = dados.value.strip() if dados.value else ""
+    if not texto:
+        raise ValidationError("A resposta descritiva precisa de texto")
+
+    return texto
 
 
 class FormResponseService:
@@ -109,18 +122,18 @@ class FormResponseService:
         *,
         link_id: uuid.UUID,
     ) -> FormResponse:
-        """Só o dono envia, e só com as descritivas obrigatórias respondidas.
+        """Só o dono envia, e só com as obrigatórias respondidas, descritivas e
+        objetivas.
 
         Ordem: existe (404), é do dono (403), em andamento (409), obrigatórias
-        (422). A obrigatória objetiva não conta até a CREED-37 (D2): ver
-        `QuestionService.list_required_descriptive`.
+        (422).
         """
         form_response = await _own_form_response(
             self.repository, form_response_id, link_id=link_id
         )
         _check_in_progress(form_response)
 
-        required = await self.questions.list_required_descriptive(form_response.form_id)
+        required = await self.questions.list_required(form_response.form_id)
         answers = await self.answers.list_by_form_response(form_response_id)
         answered = {answer.question_id for answer in answers}
         missing = [question for question in required if question.id not in answered]
@@ -143,18 +156,23 @@ class AnswerService:
         answers: AnswerRepository,
         form_responses: FormResponseRepository,
         questions: QuestionService,
+        options: QuestionOptionService,
     ) -> None:
         self.answers = answers
         self.form_responses = form_responses
         self.questions = questions
+        self.options = options
 
     async def record(
         self, form_response_id: uuid.UUID, dados: AnswerCreate, *, link_id: uuid.UUID
     ) -> Answer:
-        """Grava a resposta de uma pergunta descritiva, na ordem de conferência da
-        spec: 404, 403, 409, 422 (pergunta), 422 (objetiva), 422 (texto), 409.
+        """Grava a resposta de uma pergunta, na ordem de conferência da spec da
+        CREED-47: 404, 403, 409, 422 (pergunta), 422 (forma da resposta), 409.
 
-        Objetiva é recusada até as alternativas existirem (CREED-47, D2).
+        A forma depende do tipo da pergunta: a descritiva leva texto e nenhuma
+        alternativa; a objetiva leva uma alternativa daquela pergunta e nenhum
+        texto. A objetiva era recusada até as alternativas existirem (CREED-47,
+        D2); a CREED-37 as criou.
 
         🟡 Premissa P-032 — uma resposta por pergunta em cada resposta de
         formulário; gravar de novo é `ConflictError`, e não há edição. Confirmar na
@@ -178,17 +196,19 @@ class AnswerService:
                 f"Pergunta {dados.question_id} não é do formulário desta resposta"
             )
 
-        if not self.questions.is_descriptive(question):
-            raise ValidationError(
-                "Respostas a perguntas objetivas chegam com as alternativas (CREED-37)"
+        if self.questions.is_descriptive(question):
+            answer = Answer(
+                form_response_id=form_response_id,
+                question_id=dados.question_id,
+                value=_descriptive_text(dados),
             )
-
-        if dados.option_id is not None:
-            raise ValidationError("Pergunta descritiva não aceita alternativa marcada")
-
-        texto = dados.value.strip() if dados.value else ""
-        if not texto:
-            raise ValidationError("A resposta descritiva precisa de texto")
+        else:
+            await self._check_option(dados)
+            answer = Answer(
+                form_response_id=form_response_id,
+                question_id=dados.question_id,
+                option_id=dados.option_id,
+            )
 
         already_answered = await self.answers.get_by_form_response_and_question(
             form_response_id, dados.question_id
@@ -198,13 +218,32 @@ class AnswerService:
                 f"A pergunta {dados.question_id} já foi respondida nesta resposta"
             )
 
-        answer = Answer(
-            form_response_id=form_response_id,
-            question_id=dados.question_id,
-            value=texto,
-        )
-
         return await self.answers.insert(answer)
+
+    async def _check_option(self, dados: AnswerCreate) -> None:
+        """A objetiva leva uma alternativa da própria pergunta, e nenhum texto.
+
+        🟡 Premissa P-032 — uma resposta por pergunta: a objetiva marca uma
+        alternativa só. O `AnswerCreate` já tem um `option_id`, não uma lista.
+        """
+        if dados.option_id is None:
+            raise ValidationError(
+                "A resposta objetiva precisa de uma alternativa marcada"
+            )
+
+        if dados.value is not None:
+            raise ValidationError("Pergunta objetiva não aceita texto")
+
+        # A alternativa veio no corpo: inexistente é 422, não 404 (CREED-47, item 11).
+        try:
+            option = await self.options.get(dados.option_id)
+        except NotFoundError as exc:
+            raise ValidationError(exc.message) from exc
+
+        if option.question_id != dados.question_id:
+            raise ValidationError(
+                f"Alternativa {dados.option_id} não é da pergunta {dados.question_id}"
+            )
 
     async def list_for_form_response(
         self, form_response_id: uuid.UUID, *, link_id: uuid.UUID
