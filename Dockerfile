@@ -1,4 +1,4 @@
-# Imagem do backend — deploy em pods no EKS (ADR-001).
+# Imagem do backend — deploy na EC2.
 FROM python:3.12-slim AS base
 
 ENV PYTHONUNBUFFERED=1 \
@@ -24,5 +24,6 @@ USER appuser
 
 EXPOSE 8000
 
-# NOTA: migrations NÃO rodam aqui (ADR-002, secao 2.4.d) — Job dedicado no Helm.
+# Migrations NÃO rodam aqui (princípio #2): o deploy.sh do creed-infrastructure as
+# roda num container descartável desta imagem antes de recriar o back.
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -165,7 +165,15 @@ Revisar é parte do trabalho, não favor. Ao revisar:
 | CI `qualidade` verde | 🔒 | 🔒 | — | check obrigatório |
 | Nome no padrão | — | — | 🔒 | check obrigatório + hook local |
 
-Enquanto o time não estiver todo no repositório, quem tem **admin** consegue
-mergear sem a aprovação — é o que evita travar tudo, já que o GitHub não
-deixa ninguém aprovar o próprio PR. Assim que houver mais gente, esse bypass
-deve ser removido do ruleset.
+Todo mundo do time tem `write`, então **1 aprovação é o caminho normal**: peça a
+um colega e siga.
+
+Existe uma saída de emergência — o papel **admin** está na *bypass list* do
+ruleset e mergeia sem aprovação. Duas ressalvas sobre ela:
+
+- **Ser admin, sozinho, não basta.** Sem o ator de bypass cadastrado no ruleset,
+  o GitHub recusa o merge até para o dono do repositório: `gh pr merge --admin`
+  devolve `Repository rule violations found`. O bypass funciona porque foi
+  adicionado de propósito, não porque o papel de admin passa por cima do ruleset.
+- **Não é o caminho padrão.** Ele anula a única revisão que o projeto tem. Serve
+  para destravar setup ou incidente — não para pular a fila.

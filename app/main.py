@@ -9,30 +9,101 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app import models  # noqa: F401  (registra todas as tabelas; ver app/models.py)
 from app.core.config import settings
+from app.domains.authentication.router import router as authentication_router
 from app.domains.dashboards.router import router as dashboards_router
+from app.domains.department.router import router as department_router
+from app.domains.forms.router import router as forms_router
+from app.domains.links.router import router as links_router
 from app.domains.organizacoes.router import router as organizacoes_router
+from app.domains.participants.router import router as participants_router
 from app.domains.prismas.router import router as prismas_router
 from app.domains.prognosticos.router import router as prognosticos_router
+from app.domains.questions.router import router as questions_router
+from app.domains.questions.router_options import router as question_options_router
 from app.domains.relatorios.router import router as relatorios_router
-from app.domains.respondentes.router import router as respondentes_router
+from app.domains.responses.router import router as respostas_router
+from app.domains.users.router import router as user_router
+from app.shared.schemas import HealthResponse
+
+API_DESCRIPTION = """
+API do CREED.ai Educa para autenticação, gestão de usuários e aplicação dos
+formulários de Plasticidade Humana e Inteligência Neuroinovadora.
+
+As rotas versionadas usam o prefixo `/api/v1`. Para acessar uma rota protegida,
+obtenha o `access_token` em **authentication > Iniciar sessão** e informe-o no botão
+**Authorize** como token Bearer.
+"""
+
+OPENAPI_TAGS = [
+    {
+        "name": "infra",
+        "description": "Verificação operacional da disponibilidade da API.",
+    },
+    {
+        "name": "authentication",
+        "description": "Início, renovação e consulta da sessão autenticada.",
+    },
+    {
+        "name": "users",
+        "description": "Criação e remoção dos usuários da plataforma.",
+    },
+    {
+        "name": "form-responses",
+        "description": "Abertura e submissão de respostas de formulário.",
+    },
+    {
+        "name": "links",
+        "description": "Criação do vínculo entre um participante e uma organização.",
+    },
+    {
+        "name": "participants",
+        "description": "Cadastro e consulta das pessoas participantes.",
+    },
+    {
+        "name": "questions",
+        "description": "Cadastro e listagem das perguntas dos formulários.",
+    },
+    {
+        "name": "forms",
+        "description": "Cadastro e consulta dos formulários.",
+    },
+    {
+        "name": "organizacoes",
+        "description": "Cadastro, consulta e alteração das organizações parceiras.",
+    },
+    {
+        "name": "department",
+        "description": "Cadastro e consulta dos setores.",
+    },
+]
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Ciclo de vida da aplicação.
 
-    NOTA (ADR-002, secao 2.4.d): migrations NÃO rodam aqui. No EKS, múltiplos
-    pods sobem em paralelo e migrariam o mesmo banco simultaneamente. A
-    migration roda num Job/initContainer dedicado, antes dos pods subirem.
+    NOTA (ADR-002 secao 2.4.d; mecanismo revisto pelo ADR-0007): migrations
+    NÃO rodam aqui. Schema é recurso compartilhado — migrar a partir do
+    processo que serve requisição mistura duas responsabilidades que precisam
+    falhar separado. A migration roda num passo dedicado do pipeline, num
+    container descartável, antes de este container ser recriado.
     """
     yield
 
 
+# Em produção o Swagger não é publicado: ele mostraria a qualquer um todas as rotas
+# e campos da API. O schema continua existindo (`app.openapi()`); só a rota sai.
+SWAGGER_PUBLICO = settings.ENVIRONMENT != "production"
+
 app = FastAPI(
     title=settings.PROJECT_NAME,
-    openapi_url=f"{settings.API_V1_PREFIX}/openapi.json",
-    docs_url=f"{settings.API_V1_PREFIX}/docs",
+    description=API_DESCRIPTION,
+    version="0.1.0",
+    openapi_tags=OPENAPI_TAGS,
+    openapi_url=f"{settings.API_V1_PREFIX}/openapi.json" if SWAGGER_PUBLICO else None,
+    docs_url=f"{settings.API_V1_PREFIX}/docs" if SWAGGER_PUBLICO else None,
     debug=settings.DEBUG,
     lifespan=lifespan,
 )
@@ -46,18 +117,36 @@ app.add_middleware(
 )
 
 
-@app.get("/health", tags=["infra"])
-async def health() -> dict[str, str]:
-    """Liveness/readiness probe para o Kubernetes."""
-    return {"status": "ok", "environment": settings.ENVIRONMENT}
+@app.get(
+    "/health",
+    tags=["infra"],
+    response_model=HealthResponse,
+    summary="Consultar a saúde da API",
+    description=(
+        "Confirma que o processo está disponível e informa o ambiente atual. "
+        "Não exige autenticação."
+    ),
+    response_description="API disponível e ambiente identificado.",
+    operation_id="get_health",
+)
+async def health() -> HealthResponse:
+    return HealthResponse(status="ok", environment=settings.ENVIRONMENT)
 
 
 for _router in (
-    respondentes_router,
+    authentication_router,
+    respostas_router,
     organizacoes_router,
     prismas_router,
     dashboards_router,
     prognosticos_router,
+    questions_router,
+    question_options_router,
     relatorios_router,
+    user_router,
+    links_router,
+    participants_router,
+    forms_router,
+    department_router,
 ):
     app.include_router(_router, prefix=settings.API_V1_PREFIX)

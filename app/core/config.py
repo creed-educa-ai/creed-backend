@@ -1,14 +1,15 @@
 """Configuração da aplicação via variáveis de ambiente (ADR-002, secao 2.3).
 
 A config vem sempre do ambiente — nunca hardcoded — porque o deploy é em
-container no EKS (ADR-001), onde os valores são injetados por ConfigMap/Secret.
+container numa EC2 (ADR-0007), onde os valores chegam pelo ambiente do
+container e os segredos vêm do gerenciador de segredo da AWS.
 """
 
 from functools import lru_cache
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import PostgresDsn, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -39,8 +40,32 @@ class Settings(BaseSettings):
     N8N_CALLBACK_SECRET: str = ""
     N8N_TIMEOUT_SECONDS: int = 10
 
+    # --- Keycloak (CREED-23, decisoes D1 e D3) ---
+    # O realm local sobe pelo docker-compose a partir de docker/keycloak/realm-creed.json.
+    KEYCLOAK_SERVER_URL: str = "http://localhost:8080"
+    # Endereço PÚBLICO do Keycloak — o que ele carimba no `iss` dos tokens. Só se
+    # preenche quando difere do KEYCLOAK_SERVER_URL: em produção o back fala com o
+    # Keycloak pela rede interna (http://keycloak:8080/auth), mas o token sai com o
+    # endereço público (https://<IP>/auth) (ADR-0007). Vazio = o mesmo do
+    # KEYCLOAK_SERVER_URL, que é o caso do ambiente local.
+    KEYCLOAK_PUBLIC_URL: str = ""
+    KEYCLOAK_REALM: str = "creed"
+    KEYCLOAK_CLIENT_ID: str = "creed-backend"
+    # Sem default, mesmo motivo do POSTGRES_PASSWORD: melhor falhar no boot do que
+    # subir com um segredo conhecido e descobrir isso em producao.
+    KEYCLOAK_CLIENT_SECRET: str
+    KEYCLOAK_TIMEOUT_SECONDS: int = 10
+    # TTL do cache da chave publica do realm (JWKS). A chave so muda quando o realm
+    # roda as chaves; reler a cada requisicao poria o Keycloak no caminho critico
+    # de toda rota protegida.
+    KEYCLOAK_JWKS_CACHE_SECONDS: int = 3600
+
     # --- CORS ---
-    CORS_ORIGINS: list[str] = ["http://localhost:5173"]
+    # NoDecode desliga o parse JSON que o pydantic-settings faz em campo de tipo
+    # complexo ANTES de qualquer validator: sem ele o valor vindo do .env vai para
+    # json.loads, e a lista separada por vírgula do .env.example estoura na leitura
+    # da config. Com NoDecode a string crua chega ao _split_origins abaixo.
+    CORS_ORIGINS: Annotated[list[str], NoDecode] = ["http://localhost:5173"]
 
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod

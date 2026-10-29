@@ -6,15 +6,50 @@ services:
       POSTGRES_USER: creed
       POSTGRES_PASSWORD: creed
       POSTGRES_DB: creed
-    ports: ['5432:5432']
-    volumes: [pgdata:/var/lib/postgresql/data]
+    # POSTGRES_PORT é a porta do HOST, não a do container (que continua 5432
+    # pra dentro da rede do compose — Keycloak e N8N abaixo não mudam). Existe
+    # pra quem já tem outro Postgres/projeto ocupando a 5432 na máquina.
+    ports: ['${POSTGRES_PORT:-5432}:5432']
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Cria o schema `keycloak`. Só roda quando o volume nasce vazio — quem já
+      # tem o pgdata precisa de um `docker compose down -v` uma vez.
+      - ./docker/postgres/init-keycloak-schema.sql:/docker-entrypoint-initdb.d/10-keycloak-schema.sql:ro
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U creed']
       interval: 10s
       retries: 5
 
+  # Autenticação (CREED-23, decisões D1 e D3). O realm é ARQUIVO versionado e
+  # importado no boot: nada aqui se configura clicando na UI, senão dev e produção
+  # divergem sem ninguém perceber.
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    command: start-dev --import-realm
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://db:5432/creed
+      KC_DB_SCHEMA: keycloak
+      KC_DB_USERNAME: creed
+      KC_DB_PASSWORD: creed
+      # Placeholders do realm-creed.json. O arquivo é público e é o mesmo que a
+      # produção importa: segredo e exigência de HTTPS chegam pelo ambiente, nunca
+      # escritos nele. Sem prefixo KC_ porque o Keycloak lê KC_* como config própria.
+      CREED_BACKEND_CLIENT_SECRET: creed-local-secret
+      CREED_REALM_SSL_REQUIRED: none
+    ports: ['8080:8080']
+    volumes:
+      - ./docker/keycloak/realm-creed.json:/opt/keycloak/data/import/realm-creed.json:ro
+    depends_on:
+      db: {condition: service_healthy}
+
   n8n:
-    image: n8nio/n8n:latest
+    # Versão fixa, a mesma da produção (creed-infrastructure/ec2/docker-compose.yml).
+    # Os workflows são montados no N8N da EC2 e exportados para o git: importar no
+    # local um workflow de versão mais nova pode falhar. Atualizar = trocar nos dois.
+    image: n8nio/n8n:2.43.4
     environment:
       DB_TYPE: postgresdb
       DB_POSTGRESDB_HOST: db

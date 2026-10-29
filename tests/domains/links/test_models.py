@@ -1,0 +1,110 @@
+"""Testes de forma dos models do domínio links.
+
+Sem banco: lê `Link.__table__` e `User.__table__` direto, então não precisa do
+`docker compose up -d db`. O que se prova é a forma da tabela — nulabilidade, índice e
+FK —, não uma regra de negócio (isso ainda não existe: a task 1 só prepara o banco).
+"""
+
+from sqlalchemy import Table, UniqueConstraint
+
+from app.domains.links.models import Link, LinkType, Roles
+from app.domains.users.models import User
+
+NULLABLE_COLUMNS = {"department_id", "end_at", "updated_at"}
+
+
+class TestLinksTable:
+    def test_has_ten_columns_with_expected_nullability(self) -> None:
+        columns = Link.__table__.columns
+
+        names = {
+            "id",
+            "participant_id",
+            "organization_id",
+            "department_id",
+            "type",
+            "role",
+            "start_at",
+            "end_at",
+            "created_at",
+            "updated_at",
+        }
+        assert {c.name for c in columns} == names
+
+        for column in columns:
+            expected_nullable = column.name in NULLABLE_COLUMNS
+            assert column.nullable is expected_nullable, (
+                f"{column.name}: nullable={column.nullable}, esperado {expected_nullable}"
+            )
+
+    def test_the_three_reference_columns_have_foreign_key(self) -> None:
+        fks = {fk.parent.name: fk.target_fullname for fk in Link.__table__.foreign_keys}
+
+        assert fks == {
+            "participant_id": "participants.id",
+            "organization_id": "organizations.id",
+            "department_id": "departments.id",
+        }
+
+    def test_participant_fk_has_the_name_the_migration_uses(self) -> None:
+        fk = next(iter(Link.__table__.c.participant_id.foreign_keys))
+
+        assert fk.name == "fk_links_participant_id_participants"
+
+    def test_organization_fk_has_the_name_the_migration_uses(self) -> None:
+        fk = next(iter(Link.__table__.c.organization_id.foreign_keys))
+
+        assert fk.name == "fk_links_organization_id_organizations"
+
+    def test_department_fk_has_the_name_the_migration_uses(self) -> None:
+        fk = next(iter(Link.__table__.c.department_id.foreign_keys))
+
+        assert fk.name == "fk_links_department_id_departments"
+
+    def test_has_index_on_the_three_reference_columns(self) -> None:
+        indexed_columns = {c.name for c in Link.__table__.columns if c.index}
+
+        assert indexed_columns == {"participant_id", "organization_id", "department_id"}
+
+    def test_has_no_unique_constraint(self) -> None:
+        """O `.dbml` não define uma (spec, "Abordagem técnica", item 6)."""
+        # `__table__` é tipado como FromClause; `.constraints` só existe em Table.
+        table = Link.__table__
+        assert isinstance(table, Table)
+
+        uniques = [
+            constraint
+            for constraint in table.constraints
+            if isinstance(constraint, UniqueConstraint)
+        ]
+
+        assert uniques == []
+
+    def test_link_type_has_exactly_four_values(self) -> None:
+        assert {link_type.value for link_type in LinkType} == {
+            "emprego",
+            "mentoria",
+            "academico",
+            "pessoal",
+        }
+
+    def test_roles_has_exactly_the_three_roles_from_p006(self) -> None:
+        assert {role.value for role in Roles} == {"admin", "gestor", "respondente"}
+
+
+class TestUserLinkIdColumn:
+    def test_is_not_nullable(self) -> None:
+        """Todo login nasce de um vínculo (P-008, [C2])."""
+        assert User.__table__.c.link_id.nullable is False
+
+    def test_user_has_no_role_column(self) -> None:
+        """O papel mora em `links.role`; `user` não guarda uma segunda cópia."""
+        assert "role" not in User.__table__.c
+
+    def test_is_unique(self) -> None:
+        assert User.__table__.c.link_id.unique is True
+
+    def test_has_fk_to_links(self) -> None:
+        fks = User.__table__.c.link_id.foreign_keys
+        assert len(fks) == 1
+        assert next(iter(fks)).target_fullname == "links.id"

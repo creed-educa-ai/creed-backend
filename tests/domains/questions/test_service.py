@@ -1,0 +1,617 @@
+"""Testes do service do dominio questions.
+
+Sem banco e sem HTTP: o repository e o `FormService` sao substituidos por
+dubles em memoria. O que se prova aqui e a regra de negocio — o formulario
+precisa existir, conflito de posicao repetida e que a secao pedida chega ate
+a camada de banco.
+
+⚠️ Este teste NAO prova ordenacao nem filtro por secao de verdade: o duble
+filtra em memoria, sem rodar consulta nenhuma. Ordenacao e filtro reais sao
+provados pela CREED-353, de ponta a ponta, com banco.
+"""
+
+import re
+import uuid
+from datetime import UTC, datetime
+from types import SimpleNamespace
+
+import pytest
+
+from app.domains.questions.models import (
+    Question,
+    QuestionOption,
+    QuestionSection,
+    QuestionType,
+)
+from app.domains.questions.schemas import QuestionCreate, QuestionOptionCreate
+from app.domains.questions.service import QuestionOptionService, QuestionService
+from app.shared.enums import Dimension
+from app.shared.exceptions import (
+    ConflictError,
+    ForbiddenError,
+    NotFoundError,
+    ValidationError,
+)
+
+ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
+
+
+class FakeQuestionRepository:
+    """Duble do repository: guarda em lista, nao decide nada."""
+
+    def __init__(
+        self,
+        existentes: list[Question] | None = None,
+        recusar_insert: bool = False,
+    ) -> None:
+        self.itens: list[Question] = list(existentes or [])
+        self.secao_pedida: QuestionSection | str | None = "nao chamado"
+        self.tipo_pedido: QuestionType | None = None
+        self.recusar_insert = recusar_insert
+
+    async def insert(self, question: Question) -> Question | None:
+        if self.recusar_insert:
+            return None
+        self.itens.append(question)
+        return question
+
+    async def get_by_id(self, question_id: uuid.UUID) -> Question | None:
+        return next((q for q in self.itens if q.id == question_id), None)
+
+    async def list_required(self, form_id: uuid.UUID) -> list[Question]:
+        return [q for q in self.itens if q.form_id == form_id]
+
+    async def list_by_form(
+        self, form_id: uuid.UUID, section: QuestionSection | None = None
+    ) -> list[Question]:
+        self.secao_pedida = section
+        return [q for q in self.itens if q.form_id == form_id]
+
+    async def get_by_form_and_order(
+        self, form_id: uuid.UUID, order_index: int
+    ) -> Question | None:
+        return next(
+            (
+                q
+                for q in self.itens
+                if q.form_id == form_id and q.order_index == order_index
+            ),
+            None,
+        )
+
+
+def uma_question(**campos: object) -> Question:
+    """Question montada a mao.
+
+    Todo campo vai explicito: `default` e `server_default` so sao aplicados
+    no INSERT, entao uma Question que nunca passou pela sessao tem `None`
+    neles.
+    """
+    padrao: dict[str, object] = {
+        "id": uuid.uuid4(),
+        "form_id": uuid.uuid4(),
+        "text": "Como voce avalia sua adaptabilidade?",
+        "order_index": 0,
+        "type": QuestionType.OBJECTIVE,
+        "section": QuestionSection.ASSESSMENT,
+        "required": True,
+        "dimensao": None,
+        "prisma": None,
+        "created_at": datetime(2026, 9, 22, tzinfo=UTC),
+    }
+    return Question(**{**padrao, **campos})
+
+
+class FakeFormService:
+    """Duble do `FormService`: responde "existe?" e a conferencia de organizacao.
+
+    `existe=False` faz toda consulta levantar `NotFoundError`; `proibido=True` faz
+    a conferencia levantar `ForbiddenError`, como o service real faz para outra
+    organizacao. A regra em si (P-033) e provada em tests/domains/forms.
+    """
+
+    def __init__(self, *, existe: bool = True, proibido: bool = False) -> None:
+        self.existe = existe
+        self.proibido = proibido
+
+    async def get(self, form_id: uuid.UUID) -> SimpleNamespace:
+        if not self.existe:
+            raise NotFoundError(f"Formulário {form_id} não encontrado")
+        return SimpleNamespace(id=form_id, organization_id=ORG)
+
+    async def get_for_user(
+        self, form_id: uuid.UUID, *, role: str, organization_id: uuid.UUID
+    ) -> SimpleNamespace:
+        form = await self.get(form_id)
+        self.check_organization(
+            form.organization_id, role=role, organization_id=organization_id
+        )
+        return form
+
+    def check_organization(
+        self,
+        form_organization_id: uuid.UUID,
+        *,
+        role: str,
+        organization_id: uuid.UUID,
+    ) -> None:
+        if self.proibido:
+            raise ForbiddenError("Sem acesso a formulário de outra organização")
+
+
+def servico(
+    repository: FakeQuestionRepository, forms: FakeFormService | None = None
+) -> QuestionService:
+    return QuestionService(
+        repository,  # type: ignore[arg-type]
+        forms or FakeFormService(),  # type: ignore[arg-type]
+    )
+
+
+class TestCriarQuestion:
+    async def test_formulario_inexistente_vira_validation_error_sem_gravar(
+        self,
+    ) -> None:
+        """O formulario veio no corpo: inexistente e 422, nao 404 (CREED-47)."""
+        repository = FakeQuestionRepository()
+        form_id = uuid.uuid4()
+
+        with pytest.raises(ValidationError, match=re.escape(str(form_id))):
+            await servico(repository, FakeFormService(existe=False)).create(
+                QuestionCreate(
+                    form_id=form_id,
+                    text="Pergunta de formulario que nao existe",
+                    order_index=0,
+                    type=QuestionType.DESCRIPTIVE,
+                    section=QuestionSection.PROFILE,
+                ),
+                role="gestor",
+                organization_id=ORG,
+            )
+
+        assert repository.itens == []
+
+    async def test_corrida_na_gravacao_vira_conflito_sem_gravar(self) -> None:
+        form_id = uuid.uuid4()
+        repository = FakeQuestionRepository(recusar_insert=True)
+
+        with pytest.raises(ConflictError, match=re.escape(str(form_id))):
+            await servico(repository).create(
+                QuestionCreate(
+                    form_id=form_id,
+                    text="Pergunta que perde a corrida",
+                    order_index=0,
+                    type=QuestionType.OBJECTIVE,
+                    section=QuestionSection.ASSESSMENT,
+                ),
+                role="gestor",
+                organization_id=ORG,
+            )
+
+        assert repository.itens == []
+
+    async def test_persiste_os_campos_do_payload(self) -> None:
+        repository = FakeQuestionRepository()
+        form_id = uuid.uuid4()
+
+        criada = await servico(repository).create(
+            QuestionCreate(
+                form_id=form_id,
+                text="Como voce avalia sua adaptabilidade?",
+                order_index=0,
+                type=QuestionType.OBJECTIVE,
+                section=QuestionSection.ASSESSMENT,
+            ),
+            role="gestor",
+            organization_id=ORG,
+        )
+
+        assert criada.form_id == form_id
+        assert criada.text == "Como voce avalia sua adaptabilidade?"
+        assert criada.section is QuestionSection.ASSESSMENT
+        assert repository.itens == [criada]
+
+    async def test_persiste_a_dimensao_do_payload(self) -> None:
+        repository = FakeQuestionRepository()
+
+        criada = await servico(repository).create(
+            QuestionCreate(
+                form_id=uuid.uuid4(),
+                text="Item da dimensão S2",
+                order_index=0,
+                type=QuestionType.OBJECTIVE,
+                section=QuestionSection.ASSESSMENT,
+                dimensao=Dimension.S2,
+            ),
+            role="gestor",
+            organization_id=ORG,
+        )
+
+        assert criada.dimensao is Dimension.S2
+
+    async def test_nasce_required_e_sem_prisma_quando_omitidos(self) -> None:
+        repository = FakeQuestionRepository()
+
+        criada = await servico(repository).create(
+            QuestionCreate(
+                form_id=uuid.uuid4(),
+                text="Pergunta sem required nem prisma",
+                order_index=0,
+                type=QuestionType.DESCRIPTIVE,
+                section=QuestionSection.PROFILE,
+            ),
+            role="gestor",
+            organization_id=ORG,
+        )
+
+        assert criada.required is True
+        assert criada.prisma is None
+        assert criada.dimensao is None
+
+    async def test_posicao_repetida_no_mesmo_formulario_vira_conflito(self) -> None:
+        form_id = uuid.uuid4()
+        repository = FakeQuestionRepository(
+            [uma_question(form_id=form_id, order_index=2)]
+        )
+
+        with pytest.raises(ConflictError, match=re.escape(str(form_id))):
+            await servico(repository).create(
+                QuestionCreate(
+                    form_id=form_id,
+                    text="Outra pergunta, outra secao",
+                    order_index=2,
+                    type=QuestionType.OBJECTIVE,
+                    section=QuestionSection.CLOSING,
+                ),
+                role="gestor",
+                organization_id=ORG,
+            )
+
+        assert len(repository.itens) == 1
+
+    async def test_mesma_posicao_em_outro_formulario_e_aceita(self) -> None:
+        repository = FakeQuestionRepository(
+            [uma_question(form_id=uuid.uuid4(), order_index=2)]
+        )
+
+        criada = await servico(repository).create(
+            QuestionCreate(
+                form_id=uuid.uuid4(),
+                text="Pergunta em outro formulario",
+                order_index=2,
+                type=QuestionType.OBJECTIVE,
+                section=QuestionSection.ASSESSMENT,
+            ),
+            role="gestor",
+            organization_id=ORG,
+        )
+
+        assert len(repository.itens) == 2
+        assert criada.order_index == 2
+
+    async def test_formulario_de_outra_organizacao_vira_forbidden_sem_gravar(
+        self,
+    ) -> None:
+        """A regra (P-033) e do FormService; aqui se prova que ela e pedida."""
+        repository = FakeQuestionRepository()
+
+        with pytest.raises(ForbiddenError):
+            await servico(repository, FakeFormService(proibido=True)).create(
+                QuestionCreate(
+                    form_id=uuid.uuid4(),
+                    text="Pergunta em formulario alheio",
+                    order_index=0,
+                    type=QuestionType.DESCRIPTIVE,
+                    section=QuestionSection.PROFILE,
+                ),
+                role="gestor",
+                organization_id=uuid.uuid4(),
+            )
+
+        assert repository.itens == []
+
+
+class TestListarQuestionsDoFormulario:
+    async def test_repassa_a_secao_pedida_para_o_repository(self) -> None:
+        """Prova so o repasse — quem prova o filtro de verdade e a CREED-353."""
+        form_id = uuid.uuid4()
+        repository = FakeQuestionRepository([uma_question(form_id=form_id)])
+
+        await servico(repository).list_for_form(
+            form_id, QuestionSection.PROFILE, role="gestor", organization_id=ORG
+        )
+
+        assert repository.secao_pedida is QuestionSection.PROFILE
+
+    async def test_sem_secao_repassa_none(self) -> None:
+        form_id = uuid.uuid4()
+        repository = FakeQuestionRepository([uma_question(form_id=form_id)])
+
+        await servico(repository).list_for_form(
+            form_id, role="gestor", organization_id=ORG
+        )
+
+        assert repository.secao_pedida is None
+
+    async def test_formulario_sem_pergunta_devolve_lista_vazia(self) -> None:
+        repository = FakeQuestionRepository()
+
+        resultado = await servico(repository).list_for_form(
+            uuid.uuid4(), role="gestor", organization_id=ORG
+        )
+
+        assert resultado == []
+
+    async def test_formulario_inexistente_vira_not_found(self) -> None:
+        """Antes da CREED-47, devolvia lista vazia, igual a formulario sem pergunta."""
+        repository = FakeQuestionRepository()
+
+        with pytest.raises(NotFoundError):
+            await servico(repository, FakeFormService(existe=False)).list_for_form(
+                uuid.uuid4(), role="gestor", organization_id=ORG
+            )
+
+        assert repository.secao_pedida == "nao chamado"
+
+    async def test_formulario_de_outra_organizacao_vira_forbidden(self) -> None:
+        repository = FakeQuestionRepository()
+
+        with pytest.raises(ForbiddenError):
+            await servico(repository, FakeFormService(proibido=True)).list_for_form(
+                uuid.uuid4(), role="respondente", organization_id=uuid.uuid4()
+            )
+
+        assert repository.secao_pedida == "nao chamado"
+
+
+class TestBuscarQuestion:
+    async def test_devolve_a_pergunta_encontrada(self) -> None:
+        question = uma_question()
+
+        encontrada = await servico(FakeQuestionRepository([question])).get(question.id)
+
+        assert encontrada is question
+
+    async def test_inexistente_vira_not_found(self) -> None:
+        question_id = uuid.uuid4()
+
+        with pytest.raises(NotFoundError, match=re.escape(str(question_id))):
+            await servico(FakeQuestionRepository()).get(question_id)
+
+
+class TestObrigatoriasDoEnvio:
+    async def test_devolve_descritivas_e_objetivas(self) -> None:
+        """Com as alternativas da CREED-37, a objetiva conta (fecha o D2 da
+        CREED-47). O filtro de `required` é SQL, no repository: este teste só
+        prova que o service não descarta nenhum tipo."""
+        form_id = uuid.uuid4()
+        descritiva = uma_question(form_id=form_id, type=QuestionType.DESCRIPTIVE)
+        objetiva = uma_question(
+            form_id=form_id, type=QuestionType.OBJECTIVE, order_index=1
+        )
+        repository = FakeQuestionRepository([descritiva, objetiva])
+
+        resultado = await servico(repository).list_required(form_id)
+
+        assert resultado == [descritiva, objetiva]
+
+
+class TestPerguntaDescritiva:
+    def test_descritiva(self) -> None:
+        question = uma_question(type=QuestionType.DESCRIPTIVE)
+
+        assert servico(FakeQuestionRepository()).is_descriptive(question)
+
+    def test_objetiva_nao_e_descritiva(self) -> None:
+        question = uma_question(type=QuestionType.OBJECTIVE)
+
+        assert not servico(FakeQuestionRepository()).is_descriptive(question)
+
+
+class FakeQuestionOptionRepository:
+    """Duble do repository de alternativas: guarda em lista, nao decide nada."""
+
+    def __init__(
+        self,
+        existing: list[QuestionOption] | None = None,
+        refuse_insert: bool = False,
+    ) -> None:
+        self.items: list[QuestionOption] = list(existing or [])
+        self.refuse_insert = refuse_insert
+
+    async def insert(self, option: QuestionOption) -> QuestionOption | None:
+        if self.refuse_insert:
+            return None
+        self.items.append(option)
+        return option
+
+    async def get_by_id(self, option_id: uuid.UUID) -> QuestionOption | None:
+        return next((o for o in self.items if o.id == option_id), None)
+
+    async def get_by_question_and_order(
+        self, question_id: uuid.UUID, order_index: int
+    ) -> QuestionOption | None:
+        return next(
+            (
+                o
+                for o in self.items
+                if o.question_id == question_id and o.order_index == order_index
+            ),
+            None,
+        )
+
+
+def an_option(**fields: object) -> QuestionOption:
+    """QuestionOption montada a mao, com todo campo explicito.
+
+    `default` e `server_default` so valem no INSERT, entao um objeto que nunca
+    passou pela sessao teria `None` neles.
+    """
+    default: dict[str, object] = {
+        "id": uuid.uuid4(),
+        "question_id": uuid.uuid4(),
+        "label": "Sim",
+        "value": "sim",
+        "order_index": 0,
+        "created_at": datetime(2026, 10, 14, tzinfo=UTC),
+    }
+    return QuestionOption(**{**default, **fields})
+
+
+def option_service(
+    options: FakeQuestionOptionRepository,
+    questions: list[Question] | None = None,
+    forms: FakeFormService | None = None,
+) -> QuestionOptionService:
+    """Service real de alternativas, com o `QuestionService` real por baixo.
+
+    So o banco e o `FormService` sao dubles: a pergunta e achada de verdade pelo
+    `QuestionService.get`, que e o que o service de alternativas usa.
+    """
+    form_service = forms or FakeFormService()
+    question_service = QuestionService(
+        FakeQuestionRepository(questions),  # type: ignore[arg-type]
+        form_service,  # type: ignore[arg-type]
+    )
+    return QuestionOptionService(
+        options,  # type: ignore[arg-type]
+        question_service,
+        form_service,  # type: ignore[arg-type]
+    )
+
+
+class TestCreateQuestionOption:
+    async def test_persists_the_payload_fields_on_the_question(self) -> None:
+        question = uma_question(type=QuestionType.OBJECTIVE)
+        options = FakeQuestionOptionRepository()
+
+        created = await option_service(options, [question]).create(
+            question.id,
+            QuestionOptionCreate(label="Sim", value="sim", order_index=0),
+            role="gestor",
+            organization_id=ORG,
+        )
+
+        assert created.question_id == question.id
+        assert (created.label, created.value, created.order_index) == ("Sim", "sim", 0)
+        assert options.items == [created]
+
+    async def test_unknown_question_raises_not_found_without_saving(self) -> None:
+        options = FakeQuestionOptionRepository()
+        question_id = uuid.uuid4()
+
+        with pytest.raises(NotFoundError, match=re.escape(str(question_id))):
+            await option_service(options).create(
+                question_id,
+                QuestionOptionCreate(label="Sim", value="sim", order_index=0),
+                role="gestor",
+                organization_id=ORG,
+            )
+
+        assert options.items == []
+
+    async def test_question_from_another_organization_raises_forbidden(self) -> None:
+        question = uma_question(type=QuestionType.OBJECTIVE)
+        options = FakeQuestionOptionRepository()
+
+        with pytest.raises(ForbiddenError):
+            await option_service(
+                options, [question], FakeFormService(proibido=True)
+            ).create(
+                question.id,
+                QuestionOptionCreate(label="Sim", value="sim", order_index=0),
+                role="gestor",
+                organization_id=ORG,
+            )
+
+        assert options.items == []
+
+    async def test_descriptive_question_raises_validation_error_without_saving(
+        self,
+    ) -> None:
+        question = uma_question(type=QuestionType.DESCRIPTIVE)
+        options = FakeQuestionOptionRepository()
+
+        with pytest.raises(ValidationError, match="descritiva"):
+            await option_service(options, [question]).create(
+                question.id,
+                QuestionOptionCreate(label="Sim", value="sim", order_index=0),
+                role="gestor",
+                organization_id=ORG,
+            )
+
+        assert options.items == []
+
+    async def test_access_is_checked_before_the_question_type(self) -> None:
+        """Quem nao tem acesso nao descobre o tipo da pergunta pelo erro."""
+        question = uma_question(type=QuestionType.DESCRIPTIVE)
+        options = FakeQuestionOptionRepository()
+
+        with pytest.raises(ForbiddenError):
+            await option_service(
+                options, [question], FakeFormService(proibido=True)
+            ).create(
+                question.id,
+                QuestionOptionCreate(label="Sim", value="sim", order_index=0),
+                role="gestor",
+                organization_id=ORG,
+            )
+
+    async def test_occupied_position_raises_conflict_without_saving(self) -> None:
+        question = uma_question(type=QuestionType.OBJECTIVE)
+        existing = an_option(question_id=question.id, order_index=0)
+        options = FakeQuestionOptionRepository([existing])
+
+        with pytest.raises(ConflictError, match=re.escape(str(question.id))):
+            await option_service(options, [question]).create(
+                question.id,
+                QuestionOptionCreate(label="Nao", value="nao", order_index=0),
+                role="gestor",
+                organization_id=ORG,
+            )
+
+        assert options.items == [existing]
+
+    async def test_lost_race_on_insert_raises_conflict_without_saving(self) -> None:
+        question = uma_question(type=QuestionType.OBJECTIVE)
+        options = FakeQuestionOptionRepository(refuse_insert=True)
+
+        with pytest.raises(ConflictError, match=re.escape(str(question.id))):
+            await option_service(options, [question]).create(
+                question.id,
+                QuestionOptionCreate(label="Sim", value="sim", order_index=0),
+                role="gestor",
+                organization_id=ORG,
+            )
+
+        assert options.items == []
+
+    async def test_same_position_on_another_question_is_allowed(self) -> None:
+        question = uma_question(type=QuestionType.OBJECTIVE)
+        other = an_option(question_id=uuid.uuid4(), order_index=0)
+        options = FakeQuestionOptionRepository([other])
+
+        created = await option_service(options, [question]).create(
+            question.id,
+            QuestionOptionCreate(label="Sim", value="sim", order_index=0),
+            role="gestor",
+            organization_id=ORG,
+        )
+
+        assert options.items == [other, created]
+
+
+class TestBuscarQuestionOption:
+    """O "existe?" que `responses` usa para conferir a alternativa marcada."""
+
+    async def test_existente_devolve_a_alternativa(self) -> None:
+        option = an_option()
+        options = FakeQuestionOptionRepository([option])
+
+        assert await option_service(options).get(option.id) is option
+
+    async def test_inexistente_vira_not_found(self) -> None:
+        option_id = uuid.uuid4()
+
+        with pytest.raises(NotFoundError, match=re.escape(str(option_id))):
+            await option_service(FakeQuestionOptionRepository()).get(option_id)
