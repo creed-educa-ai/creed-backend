@@ -39,6 +39,18 @@ services:
       # escritos nele. Sem prefixo KC_ porque o Keycloak lê KC_* como config própria.
       CREED_BACKEND_CLIENT_SECRET: creed-local-secret
       CREED_REALM_SSL_REQUIRED: none
+      # SMTP do realm (ADR-0006): no local, o Mailpit, sem autenticação nem TLS.
+      # Em produção é o Gmail do projeto, com STARTTLS (creed-infrastructure/ec2).
+      SMTP_HOST: mailpit
+      SMTP_PORT: '1025'
+      SMTP_FROM: nao-responda@creed.local
+      SMTP_AUTH: 'false'
+      SMTP_STARTTLS: 'false'
+      SMTP_SSL: 'false'
+      SMTP_USER: ''
+      SMTP_PASSWORD: ''
+      # Para onde o link "voltar" da página do convite leva (P-051): o front local.
+      CREED_FRONTEND_URL: http://localhost:5173
     ports: ['8080:8080']
     volumes:
       - ./docker/keycloak/realm-creed.json:/opt/keycloak/data/import/realm-creed.json:ro
@@ -62,6 +74,14 @@ services:
     volumes: [n8ndata:/home/node/.n8n]
     depends_on:
       db: {condition: service_healthy}
+
+  # E-mail do ambiente local (ADR-0006): o Keycloak manda o convite para cá, e o
+  # Mailpit não entrega a ninguém, só mostra a mensagem em http://localhost:8025.
+  # Versão fixa, como o n8n: com `latest`, cada máquina do time roda a versão do
+  # dia em que baixou a imagem. Não existe em produção, onde o SMTP é o do Gmail.
+  mailpit:
+    image: axllent/mailpit:v1.31.1
+    ports: ['8025:8025', '1025:1025']
 
 volumes:
   pgdata:

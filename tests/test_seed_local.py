@@ -46,6 +46,16 @@ class TestUsuarioDeTeste:
         assert usuario["requiredActions"] == []
         assert usuario["credentials"][0]["temporary"] is False
 
+    def test_senha_passa_na_politica_do_realm(self) -> None:
+        """O `length(8)` do realm (P-004 de 07/09) vale também para a Admin API.
+
+        Com senha mais curta, ela recusa criar o usuário, e o seed para antes de
+        gravar qualquer coisa no banco: ninguém entra no ambiente local.
+        """
+        senha = _usuario_de_teste()["credentials"][0]["value"]
+
+        assert len(senha) >= 8
+
     def test_papel_do_realm_e_um_da_premissa_p006(self) -> None:
         """O papel dado no realm é o do vínculo, e precisa existir no realm."""
         assert LINK_ROLE.value in PAPEIS
