@@ -45,3 +45,9 @@ def test_foreign_keys() -> None:
 
     assert len(foreign_keys) == 1
     assert next(iter(foreign_keys)).target_fullname == "organizations.id"
+
+
+def test_organization_fk_has_the_name_the_migration_uses() -> None:
+    fk = next(iter(Department.__table__.c.organization_id.foreign_keys))
+
+    assert fk.name == "fk_departments_organization_id_organizations"

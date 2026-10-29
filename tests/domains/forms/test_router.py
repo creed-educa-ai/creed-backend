@@ -3,7 +3,7 @@
 A guarda roda de verdade: só o `validate_token` e o `UserService` são dublês, como
 em `tests/domains/participants/test_router.py`. A regra de organização (P-033) é
 provada em `test_service.py`; aqui se prova a guarda de papel e a tradução do
-`ForbiddenError` em 403.
+`ForbiddenError` em 403 e do `ValidationError` em 422.
 """
 
 import uuid
@@ -20,7 +20,7 @@ from app.domains.forms.router import router
 from app.domains.forms.schemas import FormCreate
 from app.domains.users.dependencies import get_service as get_user_service
 from app.domains.users.service import UserAccess
-from app.shared.exceptions import ForbiddenError, NotFoundError
+from app.shared.exceptions import ForbiddenError, NotFoundError, ValidationError
 
 ORGANIZATION_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
@@ -40,12 +40,21 @@ class _FakeService:
     """Dublê: devolve o que for configurado, sem reimplementar a regra.
 
     `proibido=True` faz as duas operações levantarem `ForbiddenError`, como o
-    service real faz para outra organização.
+    service real faz para outra organização. `organizacao_inexistente=True` faz
+    o cadastro levantar `ValidationError`, como o service real faz quando a
+    organização do corpo não existe.
     """
 
-    def __init__(self, form: Form | None = FAKE_FORM, *, proibido: bool = False) -> None:
+    def __init__(
+        self,
+        form: Form | None = FAKE_FORM,
+        *,
+        proibido: bool = False,
+        organizacao_inexistente: bool = False,
+    ) -> None:
         self.form = form
         self.proibido = proibido
+        self.organizacao_inexistente = organizacao_inexistente
         self.quem_pediu: tuple[str, uuid.UUID] | None = None
 
     async def create(
@@ -54,6 +63,8 @@ class _FakeService:
         self.quem_pediu = (role, organization_id)
         if self.proibido:
             raise ForbiddenError("Sem acesso a formulário de outra organização")
+        if self.organizacao_inexistente:
+            raise ValidationError(f"Organização {dados.organization_id} não encontrada")
         return Form(
             id=FAKE_FORM.id,
             name=dados.name,
@@ -175,6 +186,19 @@ class TestCriar:
         assert response.status_code == 403
         assert response.json()["detail"] == (
             "Sem acesso a formulário de outra organização"
+        )
+
+    def test_organizacao_inexistente_devolve_422_com_detail_texto(
+        self, app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        autenticar_como(app, monkeypatch, "admin")
+        _use_fake_service(app, _FakeService(organizacao_inexistente=True))
+
+        response = client.post("/forms", json=PAYLOAD, headers=TOKEN)
+
+        assert response.status_code == 422
+        assert response.json()["detail"] == (
+            f"Organização {ORGANIZATION_ID} não encontrada"
         )
 
     @pytest.mark.parametrize(

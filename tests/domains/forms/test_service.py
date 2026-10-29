@@ -13,7 +13,7 @@ import pytest
 from app.domains.forms.models import Form, FormStatus
 from app.domains.forms.schemas import FormCreate, FormRead
 from app.domains.forms.service import FormService
-from app.shared.exceptions import ForbiddenError, NotFoundError
+from app.shared.exceptions import ForbiddenError, NotFoundError, ValidationError
 
 
 class FakeFormRepository:
@@ -40,8 +40,24 @@ def um_form(**campos: object) -> Form:
     return Form(**{**padrao, **campos})
 
 
-def servico(repository: FakeFormRepository) -> FormService:
-    return FormService(repository)  # type: ignore[arg-type]
+class FakeOrganizationService:
+    """Dublê do `OrganizationService`: só responde se a organização existe."""
+
+    def __init__(self, *, existe: bool = True) -> None:
+        self.existe = existe
+
+    async def organization_exists(self, organization_id: uuid.UUID) -> bool:
+        return self.existe
+
+
+def servico(
+    repository: FakeFormRepository,
+    organizations: FakeOrganizationService | None = None,
+) -> FormService:
+    return FormService(
+        repository,  # type: ignore[arg-type]
+        organizations or FakeOrganizationService(),  # type: ignore[arg-type]
+    )
 
 
 class TestCriarFormulario:
@@ -98,6 +114,37 @@ class TestCriarFormulario:
         )
 
         assert criado.organization_id == outra_organizacao
+
+    async def test_organizacao_inexistente_vira_validation_error_sem_gravar(
+        self,
+    ) -> None:
+        """A organização veio no corpo: inexistente é 422, não 404 (CREED-47)."""
+        repository = FakeFormRepository()
+        organization_id = uuid.uuid4()
+
+        with pytest.raises(ValidationError, match=str(organization_id)):
+            await servico(repository, FakeOrganizationService(existe=False)).create(
+                FormCreate(name="Plasticidade Humana", organization_id=organization_id),
+                role="admin",
+                organization_id=uuid.uuid4(),
+            )
+
+        assert repository.itens == []
+
+    async def test_gestor_em_organizacao_alheia_inexistente_vira_forbidden(
+        self,
+    ) -> None:
+        """403 antes de 422: a resposta não revela quais organizações existem."""
+        repository = FakeFormRepository()
+
+        with pytest.raises(ForbiddenError):
+            await servico(repository, FakeOrganizationService(existe=False)).create(
+                FormCreate(name="Plasticidade Humana", organization_id=uuid.uuid4()),
+                role="gestor",
+                organization_id=uuid.uuid4(),
+            )
+
+        assert repository.itens == []
 
 
 class TestBuscarFormulario:

@@ -6,7 +6,7 @@ isolada e testável.
 O formulário pertence a uma organização, e é aqui que mora a regra de quem age
 em qual organização. `questions` (`check_organization`, P-033) e `responses`
 (`check_same_organization`, P-031) a usam pela composição, em vez de repetir a
-comparação.
+comparação. Se a organização existe, quem responde é o `OrganizationService`.
 """
 
 import uuid
@@ -14,22 +14,36 @@ import uuid
 from app.domains.forms.models import Form, FormStatus
 from app.domains.forms.repository import FormRepository
 from app.domains.forms.schemas import FormCreate
-from app.shared.exceptions import ForbiddenError, NotFoundError
+from app.domains.organizacoes.service import OrganizationService
+from app.shared.exceptions import ForbiddenError, NotFoundError, ValidationError
 
 ADMIN = "admin"
 
 
 class FormService:
-    def __init__(self, repository: FormRepository) -> None:
+    def __init__(
+        self, repository: FormRepository, organizations: OrganizationService
+    ) -> None:
         self.repository = repository
+        self.organizations = organizations
 
     async def create(
         self, request: FormCreate, *, role: str, organization_id: uuid.UUID
     ) -> Form:
-        """`role` e `organization_id` são de quem pede, não do formulário."""
+        """`role` e `organization_id` são de quem pede, não do formulário.
+
+        A permissão vem antes da existência: um `gestor` que cadastra em
+        organização alheia recebe 403 mesmo se ela não existir, para a resposta não
+        revelar quais organizações existem (a mesma ordem de
+        `OrganizationService.get`). A organização veio no corpo: inexistente é
+        `ValidationError` (422).
+        """
         self.check_organization(
             request.organization_id, role=role, organization_id=organization_id
         )
+
+        if not await self.organizations.organization_exists(request.organization_id):
+            raise ValidationError(f"Organização {request.organization_id} não encontrada")
 
         form = Form(
             name=request.name,

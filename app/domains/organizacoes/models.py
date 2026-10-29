@@ -32,7 +32,9 @@ class Organization(Base):
     address: Mapped[str] = mapped_column(String(255), nullable=False)
     # Obrigatório: a tabela da tarefa (CREED-381) marca `not null`.
     document_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("documents.id"), nullable=False
+        UUID(as_uuid=True),
+        ForeignKey("documents.id", name="fk_organizations_document_id_documents"),
+        nullable=False,
     )
     status: Mapped[RecordStatus] = mapped_column(
         Enum(RecordStatus), nullable=False, default=RecordStatus.ACTIVE

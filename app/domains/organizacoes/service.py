@@ -79,6 +79,11 @@ class OrganizationService:
 
         return organization
 
+    async def organization_exists(self, organization_id: uuid.UUID) -> bool:
+        """Só "existe?", sem regra de acesso: é o que `links`, `department` e
+        `forms` usam para conferir a organização que recebem."""
+        return await self.repository.get_by_id(organization_id) is not None
+
     async def list_page(
         self, pagina: int, tamanho_pagina: int
     ) -> tuple[list[Organization], int]:

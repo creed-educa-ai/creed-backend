@@ -1,9 +1,10 @@
 """Testes do service do domínio links.
 
-Sem banco e sem HTTP: o repository e o `ParticipantService` são substituídos por
-dublês em memória. Não há regra de conflito para provar aqui — o `.dbml` não define
-unicidade no vínculo —, então o que se prova é que o service confere o participante,
-monta a entidade certa e delega ao repository.
+Sem banco e sem HTTP: o repository e os services de participante, organização e
+setor são substituídos por dublês em memória. Não há regra de conflito para provar
+aqui — o `.dbml` não define unicidade no vínculo —, então o que se prova é que o
+service confere organização, participante e setor, monta a entidade certa e delega ao
+repository.
 """
 
 import uuid
@@ -12,6 +13,7 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 
+from app.domains.department.models import Department, DepartmentType
 from app.domains.links.models import Link, LinkType, Roles
 from app.domains.links.schemas import LinkCreate, LinkResponse
 from app.domains.links.service import LinkService
@@ -70,13 +72,48 @@ class FakeParticipantService:
         return object()
 
 
+class FakeOrganizationService:
+    """Dublê do `OrganizationService`: só responde se a organização existe."""
+
+    def __init__(self, *, existe: bool = True) -> None:
+        self.existe = existe
+
+    async def organization_exists(self, organization_id: uuid.UUID) -> bool:
+        return self.existe
+
+
+class FakeDepartmentService:
+    """Dublê do `DepartmentService`: conhece só os setores que recebeu."""
+
+    def __init__(self, departments: list[Department] | None = None) -> None:
+        self.departments = list(departments or [])
+
+    async def get_by_id(self, department_id: uuid.UUID) -> Department:
+        for department in self.departments:
+            if department.id == department_id:
+                return department
+        raise NotFoundError(f"Departamento {department_id} não encontrado")
+
+
+def make_department(organization_id: uuid.UUID) -> Department:
+    return Department(
+        id=uuid.uuid4(),
+        organization_id=organization_id,
+        type=DepartmentType.MARKETING,
+    )
+
+
 def service(
     repository: FakeLinkRepository,
     participants: FakeParticipantService | None = None,
+    organizations: FakeOrganizationService | None = None,
+    departments: FakeDepartmentService | None = None,
 ) -> LinkService:
     return LinkService(
         repository,  # type: ignore[arg-type]
         participants or FakeParticipantService(),  # type: ignore[arg-type]
+        organizations or FakeOrganizationService(),  # type: ignore[arg-type]
+        departments or FakeDepartmentService(),  # type: ignore[arg-type]
     )
 
 
@@ -87,13 +124,15 @@ class TestCreateLink:
         repository = FakeLinkRepository()
         organization_id = uuid.uuid4()
         participant_id = uuid.uuid4()
-        department_id = uuid.uuid4()
+        department = make_department(organization_id)
 
-        created = await service(repository).create_link_service(
+        created = await service(
+            repository, departments=FakeDepartmentService([department])
+        ).create_link_service(
             organization_id,
             LinkCreate(
                 participant_id=participant_id,
-                department_id=department_id,
+                department_id=department.id,
                 type=LinkType.MENTORIA,
                 role=Roles.ADMIN,
             ),
@@ -101,7 +140,7 @@ class TestCreateLink:
 
         assert created.organization_id == organization_id
         assert created.participant_id == participant_id
-        assert created.department_id == department_id
+        assert created.department_id == department.id
         assert created.type is LinkType.MENTORIA
         assert created.role is Roles.ADMIN
         assert repository.items == [created]
@@ -134,6 +173,84 @@ class TestCreateLink:
                 uuid.uuid4(),
                 LinkCreate(
                     participant_id=participant_id,
+                    type=LinkType.EMPREGO,
+                    role=Roles.RESPONDENTE,
+                ),
+            )
+
+        assert repository.items == []
+
+    async def test_unknown_organization_is_not_found_and_saves_nothing(
+        self,
+    ) -> None:
+        """A organização veio no endereço: inexistente é 404, não 422."""
+        repository = FakeLinkRepository()
+        organization_id = uuid.uuid4()
+
+        with pytest.raises(NotFoundError, match=str(organization_id)):
+            await service(
+                repository, organizations=FakeOrganizationService(existe=False)
+            ).create_link_service(
+                organization_id,
+                LinkCreate(
+                    participant_id=uuid.uuid4(),
+                    type=LinkType.EMPREGO,
+                    role=Roles.RESPONDENTE,
+                ),
+            )
+
+        assert repository.items == []
+
+    async def test_unknown_organization_wins_over_unknown_participant(self) -> None:
+        """404 do endereço antes do 422 do corpo."""
+        with pytest.raises(NotFoundError):
+            await service(
+                FakeLinkRepository(),
+                FakeParticipantService(existe=False),
+                FakeOrganizationService(existe=False),
+            ).create_link_service(
+                uuid.uuid4(),
+                LinkCreate(
+                    participant_id=uuid.uuid4(),
+                    type=LinkType.EMPREGO,
+                    role=Roles.RESPONDENTE,
+                ),
+            )
+
+    async def test_unknown_department_is_validation_error_and_saves_nothing(
+        self,
+    ) -> None:
+        """O setor veio no corpo: inexistente é 422, não 404 (CREED-47)."""
+        repository = FakeLinkRepository()
+        department_id = uuid.uuid4()
+
+        with pytest.raises(DomainValidationError, match=str(department_id)):
+            await service(repository).create_link_service(
+                uuid.uuid4(),
+                LinkCreate(
+                    participant_id=uuid.uuid4(),
+                    department_id=department_id,
+                    type=LinkType.EMPREGO,
+                    role=Roles.RESPONDENTE,
+                ),
+            )
+
+        assert repository.items == []
+
+    async def test_department_of_another_organization_is_validation_error(
+        self,
+    ) -> None:
+        repository = FakeLinkRepository()
+        department = make_department(organization_id=uuid.uuid4())
+
+        with pytest.raises(DomainValidationError, match="não é da organização"):
+            await service(
+                repository, departments=FakeDepartmentService([department])
+            ).create_link_service(
+                uuid.uuid4(),
+                LinkCreate(
+                    participant_id=uuid.uuid4(),
+                    department_id=department.id,
                     type=LinkType.EMPREGO,
                     role=Roles.RESPONDENTE,
                 ),

@@ -24,6 +24,10 @@ class TestOrganization:
         assert alvos == {"documents.id"}
         assert not coluna.nullable
 
+    def test_fk_do_documento_tem_o_nome_que_a_migration_usa(self) -> None:
+        fk = next(iter(Organization.__table__.c.document_id.foreign_keys))
+        assert fk.name == "fk_organizations_document_id_documents"
+
     def test_documento_e_unico_com_nome_explicito(self) -> None:
         """O repository reconhece a constraint pelo nome no IntegrityError."""
         tabela = cast(Table, Organization.__table__)

@@ -17,8 +17,8 @@ from fastapi import APIRouter, Depends, HTTPException, Path, status
 from app.domains.forms.dependencies import ServiceDep
 from app.domains.forms.schemas import FormCreate, FormRead
 from app.shared.authorization import AuthenticatedUser, CurrentUserDep, require_role
-from app.shared.exceptions import ForbiddenError, NotFoundError
-from app.shared.schemas import ErrorResponse
+from app.shared.exceptions import ForbiddenError, NotFoundError, ValidationError
+from app.shared.schemas import ErrorResponse, ValidationErrorResponse
 
 router = APIRouter(prefix="/forms", tags=["forms"])
 
@@ -53,8 +53,9 @@ def _forbidden(description: str) -> dict[int | str, dict[str, Any]]:
     status_code=status.HTTP_201_CREATED,
     summary="Criar formulário",
     description=(
-        "Cria um formulário. O estado inicial é sempre rascunho. Exige o papel "
-        "admin ou gestor; o gestor só cadastra na própria organização."
+        "Cria um formulário numa organização já cadastrada. O estado inicial é "
+        "sempre rascunho. Exige o papel admin ou gestor; o gestor só cadastra na "
+        "própria organização."
     ),
     response_description="Formulário criado, em rascunho.",
     operation_id="create_form",
@@ -64,6 +65,25 @@ def _forbidden(description: str) -> dict[int | str, dict[str, Any]]:
             "Papel sem permissão para cadastrar, ou gestor cadastrando em outra "
             "organização."
         ),
+        # Dois formatos no mesmo 422, como em `links`: o do service (`detail`
+        # texto) e o da validação do Pydantic (`detail` lista).
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {
+            "model": ErrorResponse | ValidationErrorResponse,
+            "description": (
+                "Organização inexistente: `detail` é texto. Corpo inválido: "
+                "`detail` é uma lista, um item por campo recusado."
+            ),
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": (
+                            "Organização 8f14e45f-ceea-467e-adde-3f81905dbc1c "
+                            "não encontrada"
+                        )
+                    }
+                }
+            },
+        },
     },
 )
 async def create_form(
@@ -75,6 +95,8 @@ async def create_form(
         )
     except ForbiddenError as exc:
         raise HTTPException(status.HTTP_403_FORBIDDEN, exc.message) from exc
+    except ValidationError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, exc.message) from exc
     return FormRead.de_model(form)
 
 
