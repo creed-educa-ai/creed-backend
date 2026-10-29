@@ -4,8 +4,9 @@ Sem banco, sem HTTP e sem Keycloak: repository, `LinkService` e a Admin API
 (`keycloak_admin`) são substituídos por dublês em memória, que é o que a separação de
 camadas do ADR-0004 compra. O que se prova aqui é a regra de negócio — conflito de
 e-mail, vínculo inexistente ou já usado, usuário inexistente, o status de nascimento
-(P-013) e o tudo ou nada do cadastro (D7). O mapeamento para o Postgres não passa por
-aqui, e o rollback do banco é do `get_db`, não do service.
+(P-013), o tudo ou nada do cadastro (D7), o recorte do reenvio de convite por
+organização e o reset que não diz se o e-mail tem acesso. O mapeamento para o
+Postgres não passa por aqui, e o rollback do banco é do `get_db`, não do service.
 """
 
 import re
@@ -438,6 +439,183 @@ class TestRemoverUsuario:
 
         assert keycloak.deleted == []
         assert keycloak.users == {user.keycloak_id: user.email}
+
+
+class TestReenviarConvite:
+    """Quem pede é `admin` ou `gestor`: o `respondente` a guarda barra antes (router)."""
+
+    async def test_admin_reenvia_para_usuario_de_qualquer_organizacao(
+        self, keycloak: FakeKeycloakAdmin
+    ) -> None:
+        link = make_link()
+        user = um_user(link_id=link.id)
+        repository = FakeUserRepository([user])
+
+        await servico(repository, FakeLinkService([link])).resend_invitation_service(
+            user.id, role="admin", own_organization_id=uuid.uuid4()
+        )
+
+        assert keycloak.emails_sent == [user.keycloak_id]
+
+    async def test_gestor_reenvia_para_usuario_da_propria_organizacao(
+        self, keycloak: FakeKeycloakAdmin
+    ) -> None:
+        link = make_link()
+        user = um_user(link_id=link.id)
+        repository = FakeUserRepository([user])
+
+        await servico(repository, FakeLinkService([link])).resend_invitation_service(
+            user.id, role="gestor", own_organization_id=link.organization_id
+        )
+
+        assert keycloak.emails_sent == [user.keycloak_id]
+
+    async def test_gestor_de_outra_organizacao_recebe_o_mesmo_not_found_do_inexistente(
+        self, keycloak: FakeKeycloakAdmin
+    ) -> None:
+        """Decisão 4 do contrato da CREED-23: "existe, mas não é seu" vaza cadastro."""
+        link = make_link()
+        user = um_user(link_id=link.id)
+        missing_id = uuid.uuid4()
+        service = servico(FakeUserRepository([user]), FakeLinkService([link]))
+
+        with pytest.raises(NotFoundError) as other_organization:
+            await service.resend_invitation_service(
+                user.id, role="gestor", own_organization_id=uuid.uuid4()
+            )
+        with pytest.raises(NotFoundError) as missing:
+            await service.resend_invitation_service(
+                missing_id, role="gestor", own_organization_id=uuid.uuid4()
+            )
+
+        assert other_organization.value.message == f"Usuário {user.id} não encontrado"
+        assert missing.value.message == f"Usuário {missing_id} não encontrado"
+        assert keycloak.emails_sent == []
+
+    async def test_gestor_com_vinculo_que_o_link_service_nao_acha_e_not_found(
+        self, keycloak: FakeKeycloakAdmin
+    ) -> None:
+        user = um_user()
+        repository = FakeUserRepository([user])
+
+        with pytest.raises(NotFoundError):
+            await servico(repository, FakeLinkService()).resend_invitation_service(
+                user.id, role="gestor", own_organization_id=uuid.uuid4()
+            )
+
+        assert keycloak.emails_sent == []
+
+    async def test_usuario_inexistente_e_not_found_sem_mandar_email(
+        self, keycloak: FakeKeycloakAdmin
+    ) -> None:
+        with pytest.raises(NotFoundError):
+            await servico(FakeUserRepository()).resend_invitation_service(
+                uuid.uuid4(), role="admin", own_organization_id=uuid.uuid4()
+            )
+
+        assert keycloak.emails_sent == []
+
+    async def test_acesso_inativo_tambem_recebe(
+        self, keycloak: FakeKeycloakAdmin
+    ) -> None:
+        """🟡 Premissa P-058 — o reenvio não olha o status do acesso."""
+        user = um_user(status=RecordStatus.INACTIVE)
+        repository = FakeUserRepository([user])
+
+        await servico(repository).resend_invitation_service(
+            user.id, role="admin", own_organization_id=uuid.uuid4()
+        )
+
+        assert keycloak.emails_sent == [user.keycloak_id]
+
+    async def test_gestor_tambem_reenvia_para_admin_da_propria_organizacao(
+        self, keycloak: FakeKeycloakAdmin
+    ) -> None:
+        """🟡 Premissa P-058 — o reenvio não olha o papel do acesso de destino."""
+        link = make_link(role=Roles.ADMIN)
+        user = um_user(link_id=link.id)
+        repository = FakeUserRepository([user])
+
+        await servico(repository, FakeLinkService([link])).resend_invitation_service(
+            user.id, role="gestor", own_organization_id=link.organization_id
+        )
+
+        assert keycloak.emails_sent == [user.keycloak_id]
+
+    async def test_keycloak_ou_smtp_fora_fica_indisponivel(
+        self, keycloak: FakeKeycloakAdmin
+    ) -> None:
+        user = um_user()
+        repository = FakeUserRepository([user])
+        keycloak.failing.add("send_update_password_email")
+
+        with pytest.raises(ServiceUnavailableError):
+            await servico(repository).resend_invitation_service(
+                user.id, role="admin", own_organization_id=uuid.uuid4()
+            )
+
+
+class TestRedefinirSenha:
+    """Sem acesso não é erro: quem chama responde igual para qualquer e-mail."""
+
+    async def test_email_com_acesso_ativo_recebe_o_email(
+        self, keycloak: FakeKeycloakAdmin
+    ) -> None:
+        user = um_user(email="naira@pucrs.br")
+        repository = FakeUserRepository([user])
+
+        await servico(repository).send_password_reset_service("naira@pucrs.br")
+
+        assert keycloak.emails_sent == [user.keycloak_id]
+
+    async def test_email_digitado_com_maiusculas_acha_o_acesso_gravado_em_minusculas(
+        self, keycloak: FakeKeycloakAdmin
+    ) -> None:
+        """O banco guarda em minúsculas desde o cadastro; a pessoa digita como quiser."""
+        user = um_user(email="pessoa@x.com")
+        repository = FakeUserRepository([user])
+
+        await servico(repository).send_password_reset_service("Pessoa@x.com")
+
+        assert keycloak.emails_sent == [user.keycloak_id]
+
+    async def test_email_sem_acesso_nao_manda_nada_e_nao_levanta(
+        self, keycloak: FakeKeycloakAdmin
+    ) -> None:
+        repository = FakeUserRepository([um_user(email="naira@pucrs.br")])
+
+        await servico(repository).send_password_reset_service("ninguem@pucrs.br")
+
+        assert keycloak.emails_sent == []
+
+    async def test_acesso_inativo_nao_recebe(self, keycloak: FakeKeycloakAdmin) -> None:
+        user = um_user(email="naira@pucrs.br", status=RecordStatus.INACTIVE)
+        repository = FakeUserRepository([user])
+
+        await servico(repository).send_password_reset_service("naira@pucrs.br")
+
+        assert keycloak.emails_sent == []
+
+    async def test_keycloak_ou_smtp_fora_com_acesso_fica_indisponivel(
+        self, keycloak: FakeKeycloakAdmin
+    ) -> None:
+        repository = FakeUserRepository([um_user(email="naira@pucrs.br")])
+        keycloak.failing.add("send_update_password_email")
+
+        with pytest.raises(ServiceUnavailableError):
+            await servico(repository).send_password_reset_service("naira@pucrs.br")
+
+    async def test_keycloak_fora_sem_acesso_continua_sem_erro(
+        self, keycloak: FakeKeycloakAdmin
+    ) -> None:
+        """Sem acesso, o Keycloak nem é chamado: a falha não revela o e-mail."""
+        keycloak.failing.add("send_update_password_email")
+
+        await servico(FakeUserRepository()).send_password_reset_service(
+            "ninguem@pucrs.br"
+        )
+
+        assert keycloak.emails_sent == []
 
 
 class TestGetActiveUserAccessByEmail:

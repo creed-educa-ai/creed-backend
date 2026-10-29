@@ -38,6 +38,10 @@ logger = logging.getLogger(__name__)
 
 _CREATE_UNAVAILABLE = "Não foi possível criar o acesso agora. Tente de novo."
 _DELETE_UNAVAILABLE = "Não foi possível remover o acesso agora. Tente de novo."
+_INVITATION_UNAVAILABLE = "Não foi possível reenviar o convite agora. Tente de novo."
+_RESET_EMAIL_UNAVAILABLE = (
+    "Não foi possível enviar o e-mail de redefinição agora. Tente de novo."
+)
 
 
 @dataclass
@@ -205,6 +209,62 @@ class UserService:
             await keycloak_admin.delete_user(keycloak_id)
         except KeycloakUnavailableError as exc:
             raise ServiceUnavailableError(_DELETE_UNAVAILABLE) from exc
+
+    async def resend_invitation_service(
+        self, user_id: uuid.UUID, *, role: str, own_organization_id: uuid.UUID
+    ) -> None:
+        """Manda de novo o e-mail do convite.
+
+        `role` e `own_organization_id` são de quem pede. É o mesmo e-mail do convite e
+        da redefinição de senha: para quem já definiu a senha, o link vira uma
+        redefinição, e isso é aceito (spec, D10).
+        """
+        user = await self.repository.get_by_id(user_id)
+        not_found_message = f"Usuário {user_id} não encontrado"
+
+        if user is None:
+            raise NotFoundError(not_found_message)
+
+        # 🟡 Premissa P-045 — o gestor reenvia só para quem é da organização dele.
+        # Usuário de outra organização é 404, como o inexistente, e com a mesma
+        # mensagem: dizer "existe, mas não é seu" vaza cadastro alheio (decisão 4 do
+        # contrato da CREED-23). A organização é a do vínculo do usuário.
+        # 🟡 Premissa P-058 — o reenvio não olha o papel nem o status do acesso.
+        if role != Roles.ADMIN.value:
+            link = await self.links.get_link_by_id_service(user.link_id)
+            if link is None or link.organization_id != own_organization_id:
+                raise NotFoundError(not_found_message)
+
+        try:
+            await keycloak_admin.send_update_password_email(user.keycloak_id)
+        except KeycloakUnavailableError as exc:
+            raise ServiceUnavailableError(_INVITATION_UNAVAILABLE) from exc
+
+    async def send_password_reset_service(self, email: str) -> None:
+        """Manda o e-mail de redefinição de senha, se o e-mail tem acesso ativo.
+
+        Para e-mail sem acesso, ou de acesso inativo, não manda nada e não levanta
+        erro: a resposta da rota (status, corpo e cabeçalhos) é a mesma para qualquer
+        e-mail válido. O tempo de resposta não é: com acesso, o service chama o
+        Keycloak e o SMTP; sem acesso, só consulta o banco. Por isso não é a regra do
+        login, que chama o Keycloak nos dois caminhos. O risco de enumeração pelo
+        tempo foi aceito pelo responsável técnico em 2026-10-29; a mitigação futura é
+        mandar o e-mail fora da requisição.
+        """
+        # O e-mail chega como a pessoa digitou ("Pessoa@..."), e o banco o guarda em
+        # minúsculas desde o cadastro. A comparação do repository é exata.
+        user = await self.repository.get_user_by_email(email.lower())
+
+        if user is None or user.status is not RecordStatus.ACTIVE:
+            return
+
+        try:
+            await keycloak_admin.send_update_password_email(user.keycloak_id)
+        except KeycloakUnavailableError as exc:
+            # Só acontece para e-mail com acesso, e só enquanto o Keycloak ou o SMTP
+            # estão fora: nessa janela o 503 revela o cadastro, e a spec aceita isso
+            # (Riscos). Fora dela, a resposta não revela; o tempo, sim (docstring).
+            raise ServiceUnavailableError(_RESET_EMAIL_UNAVAILABLE) from exc
 
 
 class MemberService:
