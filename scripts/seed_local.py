@@ -30,7 +30,7 @@ from app.core.database import AsyncSessionLocal
 from app.domains.documents.models import DocType, Document
 from app.domains.forms.models import Form, FormStatus
 from app.domains.forms.repository import FormRepository
-from app.domains.links.models import Link, LinkType, Roles
+from app.domains.links.models import Link
 from app.domains.links.repository import LinkRepository
 from app.domains.organizacoes.models import Organization
 from app.domains.organizacoes.repository import OrganizationRepository
@@ -40,7 +40,7 @@ from app.domains.questions.models import Question, QuestionSection, QuestionType
 from app.domains.questions.repository import QuestionRepository
 from app.domains.users.models import User
 from app.domains.users.repository import UserRepository
-from app.shared.enums import RecordStatus
+from app.shared.enums import LinkType, RecordStatus, Roles
 
 EMAIL = "dev@creed.example.com"
 NAME = "Dev CREED"

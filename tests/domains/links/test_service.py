@@ -12,9 +12,10 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 
-from app.domains.links.models import Link, LinkType, Roles
+from app.domains.links.models import Link
 from app.domains.links.schemas import LinkCreate, LinkResponse
 from app.domains.links.service import LinkService
+from app.shared.enums import LinkType, Roles
 from app.shared.exceptions import NotFoundError
 from app.shared.exceptions import ValidationError as DomainValidationError
 
@@ -137,6 +138,40 @@ class TestCreateLink:
                     type=LinkType.EMPREGO,
                     role=Roles.RESPONDENTE,
                 ),
+            )
+
+        assert repository.items == []
+
+
+class TestCreateMemberLink:
+    """O vínculo do convite de membro (CREED-23.8): sem setor, pelo mesmo caminho."""
+
+    async def test_saves_organization_participant_role_and_type_without_department(
+        self,
+    ) -> None:
+        repository = FakeLinkRepository()
+        organization_id = uuid.uuid4()
+        participant_id = uuid.uuid4()
+
+        created = await service(repository).create_member_link(
+            organization_id, participant_id, Roles.RESPONDENTE, LinkType.MENTORIA
+        )
+
+        assert created.organization_id == organization_id
+        assert created.participant_id == participant_id
+        assert created.role is Roles.RESPONDENTE
+        assert created.type is LinkType.MENTORIA
+        assert created.department_id is None
+        assert repository.items == [created]
+
+    async def test_still_checks_the_participant(self) -> None:
+        repository = FakeLinkRepository()
+
+        with pytest.raises(DomainValidationError):
+            await service(
+                repository, FakeParticipantService(existe=False)
+            ).create_member_link(
+                uuid.uuid4(), uuid.uuid4(), Roles.GESTOR, LinkType.EMPREGO
             )
 
         assert repository.items == []

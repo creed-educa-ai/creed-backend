@@ -11,6 +11,7 @@ from app.domains.links.models import Link
 from app.domains.links.repository import LinkRepository
 from app.domains.links.schemas import LinkCreate
 from app.domains.participants.service import ParticipantService
+from app.shared.enums import LinkType, Roles
 from app.shared.exceptions import NotFoundError, ValidationError
 
 
@@ -46,6 +47,24 @@ class LinkService:
             role=request.role,
         )
         return await self.repository.insert(link)
+
+    async def create_member_link(
+        self,
+        organization_id: uuid.UUID,
+        participant_id: uuid.UUID,
+        role: Roles,
+        link_type: LinkType,
+    ) -> Link:
+        """O vínculo do convite de membro (CREED-23.8, D8), sem setor.
+
+        Existe para o `users` não montar `LinkCreate`, que é schema deste domínio
+        (`tests/test_arquitetura.py`). Passa pelo `create_link_service`, então o
+        participante continua conferido.
+        """
+        return await self.create_link_service(
+            organization_id,
+            LinkCreate(participant_id=participant_id, type=link_type, role=role),
+        )
 
     async def get_link_by_id_service(self, link_id: uuid.UUID) -> Link | None:
         """Lê um vínculo pelo id, ou `None` se não existir.

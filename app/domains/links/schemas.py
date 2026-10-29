@@ -12,7 +12,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.domains.links.models import Link, LinkType, Roles
+from app.domains.links.models import Link
+from app.shared.enums import LinkType, Roles
 
 
 class LinkCreate(BaseModel):

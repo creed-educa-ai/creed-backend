@@ -25,6 +25,7 @@ from app.domains.questions.router_options import router as question_options_rout
 from app.domains.relatorios.router import router as relatorios_router
 from app.domains.responses.router import router as respostas_router
 from app.domains.users.router import router as user_router
+from app.domains.users.router_members import router as members_router
 from app.shared.schemas import HealthResponse
 
 API_DESCRIPTION = """
@@ -47,7 +48,11 @@ OPENAPI_TAGS = [
     },
     {
         "name": "users",
-        "description": "Criação e remoção dos usuários da plataforma.",
+        "description": (
+            "Criação e remoção dos usuários da plataforma, e o convite de membros "
+            "de uma organização, que cria o acesso e manda o e-mail de primeiro "
+            "acesso."
+        ),
     },
     {
         "name": "form-responses",
@@ -144,6 +149,7 @@ for _router in (
     question_options_router,
     relatorios_router,
     user_router,
+    members_router,
     links_router,
     participants_router,
     forms_router,

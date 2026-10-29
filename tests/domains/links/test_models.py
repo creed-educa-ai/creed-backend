@@ -5,10 +5,11 @@ Sem banco: lê `Link.__table__` e `User.__table__` direto, então não precisa d
 FK —, não uma regra de negócio (isso ainda não existe: a task 1 só prepara o banco).
 """
 
-from sqlalchemy import Table, UniqueConstraint
+from sqlalchemy import Enum, Table, UniqueConstraint
 
-from app.domains.links.models import Link, LinkType, Roles
+from app.domains.links.models import Link
 from app.domains.users.models import User
+from app.shared.enums import LinkType, Roles
 
 NULLABLE_COLUMNS = {"department_id", "end_at", "updated_at"}
 
@@ -85,6 +86,29 @@ class TestLinksTable:
 
     def test_roles_has_exactly_the_three_roles_from_p006(self) -> None:
         assert {role.value for role in Roles} == {"admin", "gestor", "respondente"}
+
+    def test_type_and_role_keep_their_postgres_type_names(self) -> None:
+        """O nome do tipo no Postgres vem do nome da classe, em minúsculas.
+
+        Renomear `LinkType` ou `Roles` trocaria o tipo no banco sem mexer na coluna.
+        """
+        link_type = Link.__table__.c.type.type
+        role = Link.__table__.c.role.type
+        assert isinstance(link_type, Enum)
+        assert isinstance(role, Enum)
+
+        assert link_type.name == "linktype"
+        assert role.name == "roles"
+
+    def test_type_and_role_use_the_enums_from_shared(self) -> None:
+        """Uma definição só de cada enum, a de app/shared/enums.py (CREED-23.8)."""
+        link_type = Link.__table__.c.type.type
+        role = Link.__table__.c.role.type
+        assert isinstance(link_type, Enum)
+        assert isinstance(role, Enum)
+
+        assert link_type.enum_class is LinkType
+        assert role.enum_class is Roles
 
 
 class TestUserLinkIdColumn:

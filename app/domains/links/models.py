@@ -9,7 +9,6 @@ vínculos, e cada vínculo tem o próprio login (`user.link_id`, em `users/model
 segue UUID solto: `Department` ainda não tem tabela, e a FK dele entra com a CREED-39.
 """
 
-import enum
 import uuid
 from datetime import datetime
 
@@ -18,26 +17,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
-
-
-class LinkType(enum.Enum):
-    """Tipo do vínculo entre a pessoa e a organização."""
-
-    EMPREGO = "emprego"
-    MENTORIA = "mentoria"
-    ACADEMICO = "academico"
-    PESSOAL = "pessoal"
-
-
-class Roles(enum.Enum):
-    """Papéis do vínculo, na lista fixada pela P-006.
-
-    É a única fonte do papel de acesso na plataforma: `user` não guarda papel.
-    """
-
-    ADMIN = "admin"
-    GESTOR = "gestor"
-    RESPONDENTE = "respondente"
+from app.shared.enums import LinkType, Roles
 
 
 class Link(Base):
