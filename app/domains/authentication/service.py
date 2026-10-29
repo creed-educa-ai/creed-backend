@@ -14,7 +14,7 @@ from app.external_services.keycloak.token import (
     JwksUnavailableError,
     validate_token,
 )
-from app.shared.exceptions import AuthenticationError
+from app.shared.exceptions import AuthenticationError, ServiceUnavailableError
 
 _INVALID_CREDENTIALS = "E-mail ou senha inválidos"
 _SESSION_EXPIRED = "Sessão expirada, faça login novamente"
@@ -30,7 +30,9 @@ class AuthenticationService:
         except keycloak_client.InvalidCredentialsError as exc:
             raise AuthenticationError(_INVALID_CREDENTIALS) from exc
         except keycloak_client.KeycloakUnavailableError as exc:
-            raise AuthenticationError("Não foi possível autenticar agora") from exc
+            # Indisponível não é credencial errada. Se virasse 401, a tela diria
+            # "senha inválida", e a pessoa trocaria uma senha que estava certa.
+            raise ServiceUnavailableError("Não foi possível autenticar agora") from exc
 
         return await self._build_session(tokens, error_message=_INVALID_CREDENTIALS)
 
@@ -40,7 +42,9 @@ class AuthenticationService:
         except keycloak_client.InvalidCredentialsError as exc:
             raise AuthenticationError(_SESSION_EXPIRED) from exc
         except keycloak_client.KeycloakUnavailableError as exc:
-            raise AuthenticationError("Não foi possível renovar a sessão agora") from exc
+            raise ServiceUnavailableError(
+                "Não foi possível renovar a sessão agora"
+            ) from exc
 
         return await self._build_session(tokens, error_message=_SESSION_EXPIRED)
 

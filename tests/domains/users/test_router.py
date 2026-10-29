@@ -1,9 +1,9 @@
 """Testes de app/domains/users/router.py — só contrato HTTP.
 
-A regra do cadastro (e-mail repetido, vínculo inexistente ou já usado) é provada em
-`test_service.py`. Aqui se prova o que o service não enxerga: a guarda `admin` nas duas
-rotas, que cada exceção vira o status certo, que o body sem `link_id` é recusado na borda,
-e a forma da resposta.
+A regra do cadastro (e-mail repetido, vínculo inexistente ou já usado, o tudo ou nada
+com o Keycloak) é provada em `test_service.py`. Aqui se prova o que o service não
+enxerga: a guarda `admin` nas duas rotas, que cada exceção vira o status certo, que o
+body sem `link_id` é recusado na borda, e a forma da resposta.
 """
 
 import uuid
@@ -20,7 +20,7 @@ from app.domains.users.router import router
 from app.domains.users.schemas import UserCreate
 from app.domains.users.service import CreatedUser, UserAccess
 from app.shared.enums import RecordStatus
-from app.shared.exceptions import ConflictError, NotFoundError
+from app.shared.exceptions import ConflictError, NotFoundError, ServiceUnavailableError
 
 LINK_ID = "3f9a2b1c-4d5e-4f6a-8b7c-9d0e1f2a3b4c"
 ORGANIZATION_ID = "8f14e45f-ceea-467e-adde-3f81905dbc1c"
@@ -30,7 +30,6 @@ TOKEN = {"Authorization": "Bearer valid"}
 VALID_BODY = {
     "name": "Pessoa Exemplo",
     "email": "pessoa@exemplo.com",
-    "keycloak_id": "e5c0e7fa-3e57-427a-8d7b-a4ab5fb6c339",
     "link_id": LINK_ID,
 }
 
@@ -41,7 +40,7 @@ class _FakeService:
     A guarda `require_role` e a rota resolvem o mesmo `get_service`, então o dublê
     também responde `get_active_user_access_by_email`, com o papel do vínculo de quem
     está chamando (`caller_role`). `deleted` guarda os ids que chegaram à remoção, para
-    conferir que a guarda barra antes.
+    conferir que a guarda barra antes, e `received` os cadastros que chegaram ao service.
     """
 
     def __init__(
@@ -50,6 +49,7 @@ class _FakeService:
         self.error = error
         self.caller_role = caller_role
         self.deleted: list[uuid.UUID] = []
+        self.received: list[UserCreate] = []
 
     async def get_active_user_access_by_email(self, email: str) -> UserAccess | None:
         return UserAccess(
@@ -61,12 +61,13 @@ class _FakeService:
         )
 
     async def create_user_service(self, request: UserCreate) -> CreatedUser:
+        self.received.append(request)
         if self.error is not None:
             raise self.error
 
         user = User(
             id=uuid.uuid4(),
-            keycloak_id=request.keycloak_id,
+            keycloak_id=uuid.uuid4(),
             name=request.name,
             email=request.email,
             status=RecordStatus.ACTIVE,
@@ -78,6 +79,8 @@ class _FakeService:
         )
 
     async def delete_user_service(self, user_id: uuid.UUID) -> None:
+        if self.error is not None:
+            raise self.error
         self.deleted.append(user_id)
 
 
@@ -120,6 +123,21 @@ def test_valid_body_returns_201_with_link_role_and_organization(
     assert body["link_id"] == LINK_ID
     assert body["organization_id"] == ORGANIZATION_ID
     assert "keycloak_id" not in body
+
+
+def test_keycloak_id_in_the_body_is_ignored(
+    app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Quem cria no Keycloak é o back: o campo antigo não chega ao service."""
+    service = _FakeService()
+    _use(app, monkeypatch, service)
+    body = {**VALID_BODY, "keycloak_id": "e5c0e7fa-3e57-427a-8d7b-a4ab5fb6c339"}
+
+    response = client.post("/api/v1/users", json=body, headers=TOKEN)
+
+    assert response.status_code == 201
+    (received,) = service.received
+    assert "keycloak_id" not in received.model_dump()
 
 
 def test_without_token_returns_401(
@@ -184,6 +202,21 @@ def test_link_already_used_returns_409(
     assert LINK_ID in response.json()["detail"]
 
 
+def test_keycloak_or_smtp_down_returns_503(
+    app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _use(
+        app,
+        monkeypatch,
+        _FakeService(ServiceUnavailableError("Não foi possível criar o acesso agora.")),
+    )
+
+    response = client.post("/api/v1/users", json=VALID_BODY, headers=TOKEN)
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Não foi possível criar o acesso agora."
+
+
 def test_delete_with_admin_returns_204(
     app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -219,3 +252,18 @@ def test_delete_with_respondente_role_returns_403_and_keeps_the_user(
 
     assert response.status_code == 403
     assert service.deleted == []
+
+
+def test_delete_with_keycloak_down_returns_503(
+    app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _use(
+        app,
+        monkeypatch,
+        _FakeService(ServiceUnavailableError("Não foi possível remover o acesso agora.")),
+    )
+
+    response = client.delete(f"/api/v1/users/{USER_ID}", headers=TOKEN)
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Não foi possível remover o acesso agora."

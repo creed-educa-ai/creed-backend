@@ -141,13 +141,19 @@ def test_request_fields_path_parameters_and_examples_are_documented() -> None:
 def test_success_error_and_bearer_authentication_responses_are_documented() -> None:
     schema = app.openapi()
 
+    # Keycloak fora do ar é 503, não 401 de senha errada (CREED-23.8).
     assert set(
         _operation(schema, "/api/v1/authentication/login", "post")["responses"]
-    ) >= {"200", "401", "422"}
+    ) >= {"200", "401", "422", "503"}
+    assert set(
+        _operation(schema, "/api/v1/authentication/renew", "post")["responses"]
+    ) >= {"200", "401", "422", "503"}
+    # Cadastro e remoção falam com o Keycloak: indisponível é 503 (D7).
     assert set(_operation(schema, "/api/v1/users", "post")["responses"]) >= {
         "201",
         "409",
         "422",
+        "503",
     }
     # Remover usuário exige admin, como o cadastro.
     assert set(_operation(schema, "/api/v1/users/{user_id}", "delete")["responses"]) >= {
@@ -155,6 +161,7 @@ def test_success_error_and_bearer_authentication_responses_are_documented() -> N
         "401",
         "403",
         "404",
+        "503",
     }
     # O vínculo de quem responde vem do login desde a CREED-47 (P-031).
     assert set(_operation(schema, "/api/v1/form-responses", "post")["responses"]) >= {
