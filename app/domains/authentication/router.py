@@ -10,7 +10,7 @@ from app.domains.authentication.schemas import (
     UserSessionResponse,
 )
 from app.shared.authorization import CurrentUserDep
-from app.shared.exceptions import AuthenticationError
+from app.shared.exceptions import AuthenticationError, ServiceUnavailableError
 from app.shared.schemas import ErrorResponse
 
 router = APIRouter(prefix="/authentication", tags=["authentication"])
@@ -33,7 +33,16 @@ router = APIRouter(prefix="/authentication", tags=["authentication"])
             "content": {
                 "application/json": {"example": {"detail": "E-mail ou senha inválidos"}}
             },
-        }
+        },
+        status.HTTP_503_SERVICE_UNAVAILABLE: {
+            "model": ErrorResponse,
+            "description": "O provedor de identidade não respondeu.",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Não foi possível autenticar agora"}
+                }
+            },
+        },
     },
 )
 async def login(data: LoginRequest, service: ServiceDep) -> SessionResponse:
@@ -41,6 +50,8 @@ async def login(data: LoginRequest, service: ServiceDep) -> SessionResponse:
         return await service.login(data)
     except AuthenticationError as exc:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, exc.message) from exc
+    except ServiceUnavailableError as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, exc.message) from exc
 
 
 @router.post(
@@ -62,7 +73,16 @@ async def login(data: LoginRequest, service: ServiceDep) -> SessionResponse:
                     "example": {"detail": "Sessão expirada, faça login novamente"}
                 }
             },
-        }
+        },
+        status.HTTP_503_SERVICE_UNAVAILABLE: {
+            "model": ErrorResponse,
+            "description": "O provedor de identidade não respondeu.",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Não foi possível renovar a sessão agora"}
+                }
+            },
+        },
     },
 )
 async def renew(data: RefreshRequest, service: ServiceDep) -> SessionResponse:
@@ -70,6 +90,8 @@ async def renew(data: RefreshRequest, service: ServiceDep) -> SessionResponse:
         return await service.refresh(data.refresh_token)
     except AuthenticationError as exc:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, exc.message) from exc
+    except ServiceUnavailableError as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, exc.message) from exc
 
 
 @router.get(

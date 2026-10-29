@@ -33,8 +33,10 @@ class UserBase(BaseModel):
 class UserCreate(UserBase):
     """Payload de criação.
 
-    Sem senha: credencial é do Keycloak (P-012). O que atravessa é o
-    `keycloak_id`, o `sub` do JWT do usuário já provisionado no realm.
+    Sem senha: credencial é do Keycloak (P-012), e a pessoa a define pelo link do
+    convite. Sem `keycloak_id`: quem cria o usuário no realm é o back, que grava o
+    id que o Keycloak devolve (CREED-23.8). Um `keycloak_id` que ainda chegue no
+    corpo é ignorado, como qualquer campo que o schema não declara.
 
     Sem `role`: o papel vem do vínculo, não do payload — `contrato-api.md` é
     explícito ("mandar `role` no POST é sintoma de ter entendido o modelo ao
@@ -48,17 +50,12 @@ class UserCreate(UserBase):
                 {
                     "name": "Pessoa Exemplo",
                     "email": "pessoa@exemplo.com",
-                    "keycloak_id": "e5c0e7fa-3e57-427a-8d7b-a4ab5fb6c339",
                     "link_id": "3f9a2b1c-4d5e-4f6a-8b7c-9d0e1f2a3b4c",
                 }
             ]
         }
     )
 
-    keycloak_id: uuid.UUID = Field(
-        description="Identificador `sub` do usuário provisionado no Keycloak.",
-        examples=["e5c0e7fa-3e57-427a-8d7b-a4ab5fb6c339"],
-    )
     link_id: uuid.UUID = Field(
         description="Vínculo que dá o papel e a organização deste login.",
         examples=["3f9a2b1c-4d5e-4f6a-8b7c-9d0e1f2a3b4c"],

@@ -8,8 +8,13 @@ cálculo dos 5 prismas (ADR-001, secao 4.1).
 CREED-32, "Abordagem técnica", item 8) — nunca com `LinkRepository` nem com
 `Link` direto, que manteria o acoplamento na tabela e não no contrato do
 domínio dono.
+
+Com o Keycloak, a conversa é pela Admin API (`keycloak_admin`), chamada como o
+`AuthenticationService` chama o `client.py`: as exceções de lá viram exceções de
+domínio aqui, e o router traduz para status.
 """
 
+import logging
 import uuid
 from dataclasses import dataclass
 
@@ -17,8 +22,15 @@ from app.domains.links.service import LinkService
 from app.domains.users.models import User
 from app.domains.users.repository import UserRepository
 from app.domains.users.schemas import UserCreate
+from app.external_services.keycloak import admin as keycloak_admin
+from app.external_services.keycloak.client import KeycloakUnavailableError
 from app.shared.enums import RecordStatus
-from app.shared.exceptions import ConflictError, NotFoundError
+from app.shared.exceptions import ConflictError, NotFoundError, ServiceUnavailableError
+
+logger = logging.getLogger(__name__)
+
+_CREATE_UNAVAILABLE = "Não foi possível criar o acesso agora. Tente de novo."
+_DELETE_UNAVAILABLE = "Não foi possível remover o acesso agora. Tente de novo."
 
 
 @dataclass
@@ -79,10 +91,24 @@ class UserService:
         )
 
     async def create_user_service(self, request: UserCreate) -> CreatedUser:
-        already_exists = await self.repository.get_user_by_email(request.email)
+        """Cria o acesso no banco e no Keycloak e manda o convite. Tudo ou nada (D7).
+
+        A ordem importa. O que só depende do banco é conferido antes de tocar no
+        Keycloak, para um 409 ou 404 não deixar rastro no realm. O e-mail sai por
+        último, quando o INSERT já passou pelo flush: convite enviado é acesso que
+        existe. Se algo falha depois de o usuário existir no realm, ele é apagado lá
+        e o erro segue até o `get_db`, que desfaz o banco. Não há commit aqui: quem
+        fecha a transação é a requisição (CREED-364).
+        """
+        # O Keycloak guarda o e-mail em minúsculas, e o login acha o usuário do banco
+        # pelo e-mail do token. Gravado como veio ("Pessoa@..."), o acesso nasceria
+        # sem conseguir entrar nunca.
+        email = request.email.lower()
+
+        already_exists = await self.repository.get_user_by_email(email)
 
         if already_exists is not None:
-            raise ConflictError(f"Já existe usuário com o e-mail {request.email}")
+            raise ConflictError(f"Já existe usuário com o e-mail {email}")
 
         link = await self.links.get_link_by_id_service(request.link_id)
         if link is None:
@@ -92,21 +118,66 @@ class UserService:
         if link_in_use is not None:
             raise ConflictError(f"Vínculo {request.link_id} já está em uso")
 
-        # `status` é decisão de produto (P-013), então mora aqui e não no model
-        # — ADR-0004: "se muda quando o produto muda de ideia, é service". O
-        # default do model é só a rede para quem construir um User por outro
-        # caminho; em conflito, esta linha é a que vale.
-        user = User(
-            keycloak_id=request.keycloak_id,
-            name=request.name,
-            email=request.email,
-            status=RecordStatus.ACTIVE,
-            link_id=request.link_id,
-        )
-        created = await self.repository.create(user)
+        try:
+            keycloak_id = await keycloak_admin.create_user(email)
+        except keycloak_admin.KeycloakConflictError as exc:
+            # O e-mail não está no banco, mas está no realm: um acesso criado à mão,
+            # ou um que sobrou de uma falha. Não é reaproveitado (spec, D7).
+            raise ConflictError(f"Já existe acesso com o e-mail {email}") from exc
+        except KeycloakUnavailableError as exc:
+            # Sem o id, não há o que desfazer. Num timeout de leitura, o realm pode ter
+            # criado o usuário mesmo assim: ele sobra lá, e a nova tentativa dá 409 até
+            # a limpeza manual, como na compensação que falha.
+            raise ServiceUnavailableError(_CREATE_UNAVAILABLE) from exc
+
+        try:
+            # O papel do token é a cópia do papel do vínculo (decisão D4): a guarda
+            # compara os dois a cada requisição.
+            await keycloak_admin.assign_realm_role(keycloak_id, link.role.value)
+
+            # `status` é decisão de produto (P-013), então mora aqui e não no model
+            # — ADR-0004: "se muda quando o produto muda de ideia, é service". O
+            # default do model é só a rede para quem construir um User por outro
+            # caminho; em conflito, esta linha é a que vale.
+            user = User(
+                keycloak_id=keycloak_id,
+                name=request.name,
+                email=email,
+                status=RecordStatus.ACTIVE,
+                link_id=request.link_id,
+            )
+            created = await self.repository.create(user)
+
+            await keycloak_admin.send_update_password_email(keycloak_id)
+        except KeycloakUnavailableError as exc:
+            await self._remove_from_keycloak_after_failure(keycloak_id)
+            raise ServiceUnavailableError(_CREATE_UNAVAILABLE) from exc
+        except Exception:
+            # Amplo de propósito: qualquer falha depois de o usuário existir no realm
+            # tem que desfazê-lo lá, senão o e-mail fica preso em 409. Na prática, é o
+            # INSERT que o banco recusa no flush. Nada é engolido: o `raise` devolve o
+            # erro original, o mesmo de antes de o Keycloak entrar aqui.
+            await self._remove_from_keycloak_after_failure(keycloak_id)
+            raise
+
         return CreatedUser(
             user=created, role=link.role.value, organization_id=link.organization_id
         )
+
+    async def _remove_from_keycloak_after_failure(self, keycloak_id: uuid.UUID) -> None:
+        """Desfaz o usuário do realm. Falhar aqui não troca o erro que trouxe até aqui.
+
+        Se o Keycloak cair entre a criação e esta chamada, o usuário fica no realm
+        sem linha no banco, e o e-mail dele passa a dar 409. O log é o que permite
+        apagá-lo à mão.
+        """
+        try:
+            await keycloak_admin.delete_user(keycloak_id)
+        except KeycloakUnavailableError:
+            logger.error(
+                "Usuário %s ficou no Keycloak sem linha no banco; apague-o no console",
+                keycloak_id,
+            )
 
     async def delete_user_service(self, user_id: uuid.UUID) -> None:
         user = await self.repository.get_by_id(user_id)
@@ -114,4 +185,16 @@ class UserService:
         if user is None:
             raise NotFoundError(f"Usuário {user_id} não encontrado")
 
+        # Banco primeiro, Keycloak depois. O delete do banco só vira definitivo no
+        # commit, ao fim da requisição: se o Keycloak falhar, o erro faz o `get_db`
+        # desfazer o delete, e o usuário continua no banco. Num timeout em que o realm
+        # já apagou, ele sai só de lá; repetir a remoção resolve, porque o 404 do realm
+        # é sucesso. Na ordem contrária, um flush que falhasse deixaria uma linha no
+        # banco apontando para um usuário que o realm já apagou.
+        keycloak_id = user.keycloak_id
         await self.repository.delete(user)
+
+        try:
+            await keycloak_admin.delete_user(keycloak_id)
+        except KeycloakUnavailableError as exc:
+            raise ServiceUnavailableError(_DELETE_UNAVAILABLE) from exc
