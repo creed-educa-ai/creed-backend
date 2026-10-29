@@ -44,8 +44,10 @@ from app.shared.enums import RecordStatus
 
 EMAIL = "dev@creed.example.com"
 NAME = "Dev CREED"
-# Senha pública de propósito: este usuário só existe no ambiente local.
-PASSWORD = "dev"  # noqa: S105
+# Senha pública de propósito: este usuário só existe no ambiente local. Tem 8
+# caracteres ou mais porque a política do realm (`length(8)`, P-004 de 07/09) faz a
+# Admin API recusar a criação do usuário com senha mais curta.
+PASSWORD = "dev-creed"  # noqa: S105
 
 # O papel de acesso é o do vínculo (CREED-32): `user` não guarda papel.
 LINK_ROLE = Roles.ADMIN
