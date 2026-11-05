@@ -66,12 +66,22 @@ O Keycloak sobe pelo mesmo `docker-compose`, com o realm **importado de arquivo*
 clicado é dev e produção divergindo sem ninguém perceber.
 
 ```bash
-docker compose up -d db keycloak
+docker compose up -d db keycloak mailpit
 ```
 
 > Quem já tinha o volume `pgdata` antes desta mudança precisa de um
 > `docker compose down -v` uma vez: o schema `keycloak` é criado pelo script de
 > init do Postgres, que só roda com o volume vazio.
+
+O `mailpit` é o e-mail do ambiente local (ADR-0006). Quem manda e-mail é o Keycloak,
+nunca o back, e no local ele manda para o Mailpit, que não entrega a ninguém: as
+mensagens aparecem em http://localhost:8025. Sem o `mailpit` de pé, todo envio falha.
+
+> ⚠️ **O realm só é importado quando nasce.** Mudou o `realm-creed.json`, inclusive
+> num `git pull`? O Keycloak não relê o arquivo: rode `docker compose down -v`, suba de
+> novo e rode `alembic upgrade head` e o seed. O `down -v` **apaga também o banco
+> local**, porque o realm mora no schema `keycloak` do mesmo Postgres, e os workflows
+> do N8N local.
 
 O usuário de teste **não** vem do realm: o arquivo é o mesmo que a produção importa,
 e lá não pode existir admin com senha conhecida. Quem o cria — no Keycloak e no
@@ -89,13 +99,17 @@ que na tela vira "e-mail ou senha inválidos". Por isso o seed faz os dois lados
 Conferir que o login funciona (depois do seed):
 
 ```bash
-curl -s -X POST http://localhost:8080/realms/creed/protocol/openid-connect/token -d grant_type=password -d client_id=creed-backend -d client_secret=creed-local-secret -d username=dev@creed.example.com -d password=dev
+curl -s -X POST http://localhost:8080/realms/creed/protocol/openid-connect/token -d grant_type=password -d client_id=creed-backend -d client_secret=creed-local-secret -d username=dev@creed.example.com -d password=dev-creed
 ```
 
 | Onde | Valor |
 |---|---|
 | Console do Keycloak | http://localhost:8080 — `admin` / `admin` |
-| Usuário de teste (criado pelo seed) | `dev@creed.example.com` / `dev`, papel `admin` |
+| Usuário de teste (criado pelo seed) | `dev@creed.example.com` / `dev-creed`, papel `admin` |
+| E-mails do Keycloak (Mailpit) | http://localhost:8025 |
+
+A senha tem 8 caracteres ou mais porque o realm recusa senha mais curta
+(`passwordPolicy`), inclusive na criação do usuário pelo seed.
 
 Rode o seed de novo depois de todo `docker compose down -v`: ele recria o usuário no
 realm e reata a tabela `user` ao `sub` novo, em vez de estourar na constraint única.
@@ -112,6 +126,10 @@ JSON, ou perca a alteração no próximo `down -v` — e é assim de propósito.
 > público e a produção importa este mesmo realm, então os dois são placeholders
 > (`${CREED_BACKEND_CLIENT_SECRET}` e `${CREED_REALM_SSL_REQUIRED}`) que o Keycloak
 > troca pelo ambiente ao importar — os valores locais estão no `docker-compose.yml`.
+> O mesmo vale para o SMTP (`${SMTP_HOST}`, `${SMTP_PASSWORD}` e as outras `SMTP_*`) e
+> para o endereço do front no redirect do client (`${CREED_FRONTEND_URL}`). Escreva
+> `${VARIAVEL}`, **sem** o prefixo `env.`: com `${env.X}` o Keycloak não troca o valor,
+> e o erro só aparece na hora do envio (ADR-0006).
 > Exportou o realm pela UI? O export volta com o segredo em texto puro: recoloque os
 > placeholders antes de commitar (o `test_realm_keycloak.py` acusa se esquecer).
 

@@ -59,6 +59,16 @@ class Settings(BaseSettings):
     # roda as chaves; reler a cada requisicao poria o Keycloak no caminho critico
     # de toda rota protegida.
     KEYCLOAK_JWKS_CACHE_SECONDS: int = 3600
+    # Validade do link do e-mail de convite e de redefinição de senha, que o
+    # Keycloak manda. O padrão dele para ação disparada pelo admin é 12 h, que
+    # vencem de um dia para o outro.
+    # 🟡 Premissa P-049 — o link vale 72 h. Confirmar na próxima reunião.
+    KEYCLOAK_INVITE_LIFESPAN_SECONDS: int = 72 * 60 * 60
+    # Endereço do front. Vai no convite como destino do link "voltar" da página do
+    # Keycloak, que leva ao /login. Vazio desliga o link: o convite sai sem ele.
+    # 🟡 Premissa P-051 — a pessoa volta ao login por um link, sem login
+    # automático. Confirmar na próxima reunião.
+    FRONTEND_URL: str = ""
 
     # --- CORS ---
     # NoDecode desliga o parse JSON que o pydantic-settings faz em campo de tipo

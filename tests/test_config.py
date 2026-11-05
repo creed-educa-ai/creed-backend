@@ -73,3 +73,24 @@ class TestKeycloak:
         assert settings.KEYCLOAK_PUBLIC_URL == ""
         assert settings.KEYCLOAK_REALM == "creed"
         assert settings.KEYCLOAK_CLIENT_ID == "creed-backend"
+
+    def test_link_do_convite_vale_72_horas(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """P-049. O padrão do Keycloak, 12 h, vence de um dia para o outro."""
+        monkeypatch.setenv("POSTGRES_PASSWORD", "irrelevante")
+        monkeypatch.setenv("KEYCLOAK_CLIENT_SECRET", "irrelevante")
+        monkeypatch.delenv("KEYCLOAK_INVITE_LIFESPAN_SECONDS", raising=False)
+
+        assert Settings(_env_file=None).KEYCLOAK_INVITE_LIFESPAN_SECONDS == 259200
+
+    def test_link_de_volta_nasce_desligado(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """P-051: `FRONTEND_URL` vazia manda o convite sem o link "voltar".
+
+        Vazia, e não `http://localhost:5173`, porque o Keycloak recusa redirect fora
+        da lista do client: um ambiente que esquecesse a variável mandaria um link
+        para localhost, e pela D7 todo convite falharia.
+        """
+        monkeypatch.setenv("POSTGRES_PASSWORD", "irrelevante")
+        monkeypatch.setenv("KEYCLOAK_CLIENT_SECRET", "irrelevante")
+        monkeypatch.delenv("FRONTEND_URL", raising=False)
+
+        assert Settings(_env_file=None).FRONTEND_URL == ""
