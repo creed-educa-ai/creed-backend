@@ -35,3 +35,11 @@ class ConflictError(DomainError):
 
 class AuthenticationError(DomainError):
     """Login ou renovação de sessão falhou. Traduzido para 401 no router."""
+
+
+class ServiceUnavailableError(DomainError):
+    """Um serviço de que a operação depende não respondeu. Traduzido para 503 no router.
+
+    Ex.: o Keycloak ou o SMTP fora do ar no cadastro de acesso e no login. Não é
+    erro de quem pediu: a mesma chamada pode dar certo daqui a pouco.
+    """

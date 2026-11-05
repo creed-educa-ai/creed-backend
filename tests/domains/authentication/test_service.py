@@ -12,7 +12,7 @@ from app.domains.authentication.schemas import LoginRequest
 from app.domains.authentication.service import AuthenticationService
 from app.domains.users.service import UserAccess, UserService
 from app.external_services.keycloak import client as keycloak_client
-from app.shared.exceptions import AuthenticationError
+from app.shared.exceptions import AuthenticationError, ServiceUnavailableError
 
 FAKE_TOKENS = {
     "access_token": "access-fake",
@@ -138,16 +138,18 @@ async def test_login_with_inactive_database_user_returns_same_message(
     assert exc.value.message == "E-mail ou senha inválidos"
 
 
-async def test_login_with_keycloak_down_raises_authentication_error(
+async def test_login_with_keycloak_down_raises_service_unavailable(
     service: AuthenticationService, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Keycloak fora do ar não é senha errada: a pessoa não deve trocar a senha."""
+
     async def _fake_login(_email: str, _password: str) -> dict[str, Any]:
         raise keycloak_client.KeycloakUnavailableError("timeout")
 
     monkeypatch.setattr(keycloak_client, "login", _fake_login)
 
     login_request = LoginRequest(email="dev@creed.example.com", password="dev")  # noqa: S106
-    with pytest.raises(AuthenticationError):
+    with pytest.raises(ServiceUnavailableError):
         await service.login(login_request)
 
 
@@ -188,4 +190,16 @@ async def test_refresh_with_deactivated_database_user_raises_authentication_erro
     monkeypatch.setattr(keycloak_client, "refresh", _fake_refresh)
 
     with pytest.raises(AuthenticationError):
+        await service.refresh("valid-refresh-token")
+
+
+async def test_refresh_with_keycloak_down_raises_service_unavailable(
+    service: AuthenticationService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def _fake_refresh(_refresh_token: str) -> dict[str, Any]:
+        raise keycloak_client.KeycloakUnavailableError("timeout")
+
+    monkeypatch.setattr(keycloak_client, "refresh", _fake_refresh)
+
+    with pytest.raises(ServiceUnavailableError):
         await service.refresh("valid-refresh-token")

@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Path, status
 from app.domains.users.dependencies import ServiceDep
 from app.domains.users.schemas import UserCreate, UserResponse
 from app.shared.authorization import require_role
-from app.shared.exceptions import ConflictError, NotFoundError
+from app.shared.exceptions import ConflictError, NotFoundError, ServiceUnavailableError
 from app.shared.schemas import ErrorResponse
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -25,10 +25,16 @@ router = APIRouter(prefix="/users", tags=["users"])
     status_code=status.HTTP_201_CREATED,
     summary="Criar usuário",
     description=(
-        "Registra na plataforma um usuário já provisionado no Keycloak, "
-        "vinculado a um vínculo existente. O status inicial é ativo, e o "
-        "papel é o do vínculo informado. Exige o papel admin (P-008): amarrar "
-        "um login a um vínculo decide o acesso de alguém à plataforma."
+        "Cria o acesso de uma pessoa a partir de um vínculo existente: registra o "
+        "usuário na plataforma e no provedor de identidade, sem senha, e envia o "
+        "e-mail de convite para a pessoa definir a senha. Se o convite não puder "
+        "ser enviado, no banco nada é criado. Se o provedor falhar no meio, o "
+        "acesso pode sobrar lá, e a nova tentativa responde 409 até a limpeza "
+        "manual. O e-mail é comparado e gravado em minúsculas, como o provedor de "
+        "identidade guarda: a resposta o devolve assim, e o 409 de e-mail repetido "
+        "não distingue maiúsculas. O status inicial é ativo, e o papel é o do "
+        "vínculo informado. Exige o papel admin (P-008): amarrar um login a um "
+        "vínculo decide o acesso de alguém à plataforma."
     ),
     response_description="Usuário criado na plataforma.",
     operation_id="create_user",
@@ -64,13 +70,29 @@ router = APIRouter(prefix="/users", tags=["users"])
         status.HTTP_409_CONFLICT: {
             "model": ErrorResponse,
             "description": (
-                "Já existe um usuário com o e-mail informado, "
-                "ou o vínculo já está em uso por outro usuário."
+                "Já existe um usuário com o e-mail informado (sem distinguir "
+                "maiúsculas), aqui ou no provedor de identidade, ou o vínculo já "
+                "está em uso por outro usuário."
             ),
             "content": {
                 "application/json": {
                     "example": {
                         "detail": "Já existe usuário com o e-mail pessoa@exemplo.com"
+                    }
+                }
+            },
+        },
+        status.HTTP_503_SERVICE_UNAVAILABLE: {
+            "model": ErrorResponse,
+            "description": (
+                "O provedor de identidade ou o envio de e-mail não respondeu. No "
+                "banco, nada é criado. Se o provedor falhar no meio, o acesso pode "
+                "sobrar lá, e a nova tentativa responde 409 até a limpeza manual."
+            ),
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Não foi possível criar o acesso agora. Tente de novo."
                     }
                 }
             },
@@ -84,6 +106,8 @@ async def create_user(dados: UserCreate, service: ServiceDep) -> UserResponse:
         raise HTTPException(status.HTTP_404_NOT_FOUND, exc.message) from exc
     except ConflictError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, exc.message) from exc
+    except ServiceUnavailableError as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, exc.message) from exc
 
     return UserResponse.de_model(
         created.user,
@@ -98,8 +122,9 @@ async def create_user(dados: UserCreate, service: ServiceDep) -> UserResponse:
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Remover usuário",
     description=(
-        "Remove definitivamente um usuário da plataforma pelo identificador. "
-        "Exige o papel admin, o mesmo do cadastro."
+        "Remove definitivamente um usuário da plataforma e do provedor de "
+        "identidade, pelo identificador. Depois disso, o mesmo e-mail pode ser "
+        "convidado de novo. Exige o papel admin, o mesmo do cadastro."
     ),
     response_description="Usuário removido; a resposta não possui corpo.",
     operation_id="delete_user",
@@ -132,6 +157,22 @@ async def create_user(dados: UserCreate, service: ServiceDep) -> UserResponse:
                 }
             },
         },
+        status.HTTP_503_SERVICE_UNAVAILABLE: {
+            "model": ErrorResponse,
+            "description": (
+                "O provedor de identidade não respondeu. O usuário continua no "
+                "banco, mas pode já ter saído do provedor; repetir a remoção resolve."
+            ),
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": (
+                            "Não foi possível remover o acesso agora. Tente de novo."
+                        )
+                    }
+                }
+            },
+        },
     },
 )
 async def delete_user(
@@ -148,3 +189,5 @@ async def delete_user(
         await service.delete_user_service(user_id)
     except NotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, exc.message) from exc
+    except ServiceUnavailableError as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, exc.message) from exc
