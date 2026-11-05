@@ -45,6 +45,7 @@ REEXPORT_DE_TIPO_PERMITIDO: dict[str, str] = {
 
 COMPOE_COM_SERVICE_DE: dict[str, str] = {
     "authentication": "le o usuario pelo UserService",
+    "demographics": "le o participante do vinculo autenticado pelo LinkService",
     "department": "confere a organizacao pelo OrganizationService",
     "forms": "confere a organizacao pelo OrganizationService",
     "links": (
