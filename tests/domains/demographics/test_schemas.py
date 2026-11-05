@@ -41,6 +41,7 @@ def test_create_takes_only_what_the_client_sends() -> None:
         "brazil_state",
         "portugal_region",
         "other_nationality",
+        "perspective",
     }
 
 
@@ -99,26 +100,16 @@ def test_value_outside_the_enum_is_rejected(payload: dict[str, Any]) -> None:
 
 
 @pytest.mark.parametrize(
-    ("nationality", "kept"),
+    "payload",
     [
-        ("brasileira", "brazil_state"),
-        ("portuguesa", "portugal_region"),
-        ("outra", "other_nationality"),
-        (None, None),
+        {"nationality": "portuguesa", "brazil_state": "SP"},
+        {"nationality": "brasileira", "portugal_region": "norte"},
+        {"nationality": "brasileira", "other_nationality": "argentina"},
     ],
 )
-def test_fields_of_other_nationalities_are_cleared(
-    nationality: str | None, kept: str | None
-) -> None:
-    data = DemographicCreate.model_validate(
-        {"nationality": nationality, **DEPENDENT_FIELDS}
-    )
-
-    for field in DEPENDENT_FIELDS:
-        if field == kept:
-            assert getattr(data, field) is not None
-        else:
-            assert getattr(data, field) is None, f"{field} deveria ter sido zerado"
+def test_field_of_another_nationality_is_rejected(payload: dict[str, Any]) -> None:
+    with pytest.raises(ValidationError):
+        DemographicCreate.model_validate(payload)
 
 
 def test_matching_dependent_field_keeps_its_value() -> None:
@@ -237,6 +228,7 @@ def test_de_model_builds_the_response_from_the_model_and_the_options() -> None:
         brazil_state=BrazilState.RS,
         portugal_region=None,
         other_nationality=None,
+        perspective="Minha família incentivou minha trajetória.",
         created_at=datetime(2026, 10, 18, tzinfo=UTC),
         updated_at=None,
     )
@@ -255,6 +247,7 @@ def test_de_model_builds_the_response_from_the_model_and_the_options() -> None:
     assert response.brazil_state is BrazilState.RS
     assert response.portugal_region is None
     assert response.other_nationality is None
+    assert response.perspective == demographic.perspective
     assert response.ethnicities == [Ethnicity.EUROPEIA, Ethnicity.LATINO_AMERICANA]
     assert response.religions == [Religion.SEM_RELIGIAO]
     assert response.created_at == demographic.created_at

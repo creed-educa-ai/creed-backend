@@ -13,6 +13,7 @@ from app import models  # noqa: F401  (registra todas as tabelas; ver app/models
 from app.core.config import settings
 from app.domains.authentication.router import router as authentication_router
 from app.domains.dashboards.router import router as dashboards_router
+from app.domains.demographics.router import router as demographics_router
 from app.domains.department.router import router as department_router
 from app.domains.forms.router import router as forms_router
 from app.domains.links.router import router as links_router
@@ -77,6 +78,10 @@ OPENAPI_TAGS = [
         "name": "department",
         "description": "Cadastro e consulta dos setores.",
     },
+    {
+        "name": "demographics",
+        "description": "Leitura e gravação do perfil demográfico da própria pessoa.",
+    },
 ]
 
 
@@ -139,6 +144,7 @@ for _router in (
     organizacoes_router,
     prismas_router,
     dashboards_router,
+    demographics_router,
     prognosticos_router,
     questions_router,
     question_options_router,

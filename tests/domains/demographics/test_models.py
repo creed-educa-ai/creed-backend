@@ -64,6 +64,7 @@ def test_demographics_columns() -> None:
         "brazil_state",
         "portugal_region",
         "other_nationality",
+        "perspective",
         "created_at",
         "updated_at",
     }
@@ -79,6 +80,13 @@ def test_other_nationality_is_limited_to_100_characters() -> None:
     column_type = TABLE.columns["other_nationality"].type
     assert isinstance(column_type, sa.String)
     assert column_type.length == 100
+
+
+def test_perspective_is_optional_and_limited_to_2000_characters() -> None:
+    column = TABLE.columns["perspective"]
+    assert column.nullable
+    assert isinstance(column.type, sa.String)
+    assert column.type.length == 2000
 
 
 def test_timestamps_follow_participants() -> None:
