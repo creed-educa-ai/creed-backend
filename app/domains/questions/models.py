@@ -3,6 +3,9 @@
 Uma pergunta pertence a um formulário (`form_id`). A `ForeignKey` para `form` entrou
 na integração da sprint 2 (CREED-47): as duas tabelas nasceram em paralelo, na CREED-33
 e na CREED-35, e só puderam ser ligadas depois de as duas existirem.
+
+Textos exibidos ao usuário (`Question.text`, `QuestionOption.label`) ficam em PT (padrão).
+Traduções (EN/ES) vivem em `QuestionTranslation` e `QuestionOptionTranslation`.
 """
 
 import enum
@@ -20,7 +23,7 @@ from sqlalchemy import (
     func,
 )
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
 from app.shared.enums import Dimension, Prisma
@@ -47,10 +50,10 @@ class QuestionSection(enum.Enum):
 
 
 class QuestionLang(enum.Enum):
-    """Idioma da pergunta."""
+    """Idiomas de tradução. O Português vive em Question.text / QuestionOption.label."""
 
-    EN = "english"
-    ES = "spanish"
+    EN = "en"
+    ES = "es"
 
 
 class Question(Base):
@@ -98,6 +101,50 @@ class Question(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
+    translations: Mapped[list["QuestionTranslation"]] = relationship(
+        back_populates="question",
+        cascade="all, delete-orphan",
+    )
+
+
+class QuestionTranslation(Base):
+    __tablename__ = "question_translations"
+
+    __table_args__ = (
+        UniqueConstraint(
+            "question_id",
+            "lang",
+            name="uq_question_translations_question_id_lang",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+
+    question_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "questions.id",
+            name="fk_question_translations_question_id_questions",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+        index=True,
+    )
+
+    lang: Mapped[QuestionLang] = mapped_column(
+        Enum(QuestionLang, name="translation_lang"), nullable=False
+    )
+
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    question: Mapped["Question"] = relationship(back_populates="translations")
+
 
 class QuestionOption(Base):
     __tablename__ = "question_options"
@@ -131,5 +178,58 @@ class QuestionOption(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
+    translations: Mapped[list["QuestionOptionTranslation"]] = relationship(
+        back_populates="option",
+        cascade="all, delete-orphan",
+    )
 
-__all__ = ["Prisma", "Question", "QuestionOption", "QuestionSection", "QuestionType"]
+
+class QuestionOptionTranslation(Base):
+    __tablename__ = "question_option_translations"
+
+    __table_args__ = (
+        UniqueConstraint(
+            "option_id",
+            "lang",
+            name="uq_question_option_translations_option_id_lang",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+
+    option_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "question_options.id",
+            name="fk_question_option_translations_option_id_question_options",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+        index=True,
+    )
+
+    lang: Mapped[QuestionLang] = mapped_column(
+        Enum(QuestionLang, name="translation_lang"), nullable=False
+    )
+
+    label: Mapped[str] = mapped_column(Text, nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    option: Mapped["QuestionOption"] = relationship(back_populates="translations")
+
+
+__all__ = [
+    "Prisma",
+    "Question",
+    "QuestionLang",
+    "QuestionOption",
+    "QuestionOptionTranslation",
+    "QuestionSection",
+    "QuestionTranslation",
+    "QuestionType",
+]
