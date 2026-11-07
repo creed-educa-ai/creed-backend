@@ -46,6 +46,13 @@ class QuestionSection(enum.Enum):
     CLOSING = "closing"
 
 
+class QuestionLang(enum.Enum):
+    """Idioma da pergunta."""
+
+    EN = "english"
+    ES = "spanish"
+
+
 class Question(Base):
     __tablename__ = "questions"
 
