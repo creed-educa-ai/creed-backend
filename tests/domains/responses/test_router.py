@@ -27,6 +27,7 @@ from app.shared.exceptions import (
     ConflictError,
     ForbiddenError,
     NotFoundError,
+    PeriodClosedError,
     ValidationError,
 )
 
@@ -50,9 +51,11 @@ class _FakeFormResponseService:
         *,
         recusar: Exception | None = None,
         faltam_obrigatorias: bool = False,
+        recusar_envio: Exception | None = None,
     ) -> None:
         self.itens = {fr.id: fr for fr in existentes or []}
         self.recusar = recusar
+        self.recusar_envio = recusar_envio
         self.faltam_obrigatorias = faltam_obrigatorias
         self.quem_pediu: tuple[uuid.UUID, uuid.UUID] | None = None
 
@@ -73,6 +76,8 @@ class _FakeFormResponseService:
     async def submit_form_response(
         self, form_response_id: uuid.UUID, *, link_id: uuid.UUID
     ) -> FormResponse:
+        if self.recusar_envio is not None:
+            raise self.recusar_envio
         form_response = self.itens.get(form_response_id)
         if form_response is None:
             raise NotFoundError(f"FormResponse {form_response_id} não encontrado")
@@ -434,3 +439,37 @@ class TestListarAnswers:
         response = TestClient(app).get(f"/form-responses/{uuid.uuid4()}/answers")
 
         assert response.status_code == 401
+
+
+class TestForaDoPeriodo:
+    """O 423 e a mensagem são o que o front usa para dizer que o período acabou."""
+
+    DETALHE = "O período deste questionário terminou"
+    ERRO = PeriodClosedError(DETALHE)
+
+    def test_abrir_devolve_423(self, app: FastAPI, client: TestClient) -> None:
+        _use_fake_service(app, _FakeFormResponseService(recusar=self.ERRO))
+
+        resposta = client.post("/form-responses", json={"form_id": str(uuid.uuid4())})
+
+        assert resposta.status_code == 423
+        assert resposta.json() == {"detail": self.DETALHE}
+
+    def test_enviar_devolve_423(self, app: FastAPI, client: TestClient) -> None:
+        _use_fake_service(app, _FakeFormResponseService(recusar_envio=self.ERRO))
+
+        resposta = client.patch(f"/form-responses/{uuid.uuid4()}")
+
+        assert resposta.status_code == 423
+        assert resposta.json() == {"detail": self.DETALHE}
+
+    def test_gravar_devolve_423(self, app: FastAPI, client: TestClient) -> None:
+        _use_fake_answer_service(app, _FakeAnswerService(recusar=self.ERRO))
+
+        resposta = client.post(
+            f"/form-responses/{uuid.uuid4()}/answers",
+            json={"question_id": str(uuid.uuid4()), "value": "texto"},
+        )
+
+        assert resposta.status_code == 423
+        assert resposta.json() == {"detail": self.DETALHE}

@@ -47,8 +47,9 @@ def get_answer_service(
     form_responses: Annotated[FormResponseRepository, Depends(get_repository)],
     questions: QuestionServiceDep,
     options: QuestionOptionServiceDep,
+    forms: FormServiceDep,
 ) -> AnswerService:
-    return AnswerService(answers, form_responses, questions, options)
+    return AnswerService(answers, form_responses, questions, options, forms)
 
 
 AnswerServiceDep = Annotated[AnswerService, Depends(get_answer_service)]

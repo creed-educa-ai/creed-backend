@@ -1,5 +1,6 @@
 """Schemas Pydantic do domínio forms."""
 
+import enum
 import uuid
 from datetime import datetime
 
@@ -75,3 +76,28 @@ class FormRead(FormBase):
     def de_model(cls, form: Form) -> "FormRead":
         """Monta a saída a partir do model."""
         return cls.model_validate(form)
+
+
+class PeriodStatus(enum.Enum):
+    """Situação do período em relação ao momento da consulta."""
+
+    PAST = "past"
+    OPEN = "open"
+    SCHEDULED = "scheduled"
+
+
+class PeriodRead(FormRead):
+    """Um período: o formulário, com as datas sempre preenchidas e a situação."""
+
+    opens_at: datetime = Field(description="Quando o período abre.")
+    closes_at: datetime = Field(description="Quando o período fecha.")
+    period_status: PeriodStatus = Field(
+        description="Situação do período, calculada pelo back no momento da consulta."
+    )
+
+    @classmethod
+    def de_form(cls, form: Form, period_status: PeriodStatus) -> "PeriodRead":
+        """Monta a saída a partir do model e da situação já calculada."""
+        return cls(
+            **FormRead.model_validate(form).model_dump(), period_status=period_status
+        )

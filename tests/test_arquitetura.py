@@ -64,6 +64,14 @@ COMPOE_COM_SERVICE_DE: dict[str, str] = {
 
 SUBMODULOS_DE_COMPOSICAO = {"service", "dependencies"}
 
+# Exceção declarada: schemas.py pode usar o schema de saída de outro domínio numa
+# resposta que junta os dois. Formato: (domínio, domínio importado) -> motivo.
+SCHEMA_DE_SAIDA_DE_OUTRO_DOMINIO: dict[tuple[str, str], str] = {
+    ("responses", "forms"): (
+        "GET /forms/current devolve o FormRead junto da resposta, sem duplicar o schema"
+    ),
+}
+
 IMPORT_DE_DOMINIO = re.compile(r"from app\.domains\.(\w+)\.(\w+)")
 
 
@@ -165,7 +173,12 @@ def test_dominio_nao_importa_dominio(dominio: Path) -> None:
                     dominio.name in COMPOE_COM_SERVICE_DE
                     and submodulo in SUBMODULOS_DE_COMPOSICAO
                 )
-                if not (leitura_por_join or composicao_por_service):
+                schema_de_saida = (
+                    (dominio.name, alvo) in SCHEMA_DE_SAIDA_DE_OUTRO_DOMINIO
+                    and arquivo.name == "schemas.py"
+                    and submodulo == "schemas"
+                )
+                if not (leitura_por_join or composicao_por_service or schema_de_saida):
                     invasores.append(f"{arquivo.name}: {linha.strip()}")
 
     assert not invasores, (
