@@ -12,9 +12,16 @@ from app.core.database import SessionDep
 from app.domains.forms.dependencies import ServiceDep as FormServiceDep
 from app.domains.questions.repository import (
     QuestionOptionRepository,
+    QuestionOptionTranslationRepository,
     QuestionRepository,
+    QuestionTranslationRepository,
 )
-from app.domains.questions.service import QuestionOptionService, QuestionService
+from app.domains.questions.service import (
+    QuestionOptionService,
+    QuestionOptionTranslationService,
+    QuestionService,
+    QuestionTranslationService,
+)
 
 
 def get_repository(
@@ -33,6 +40,27 @@ def get_service(
 ServiceDep = Annotated[QuestionService, Depends(get_service)]
 
 
+def get_translation_repository(
+    db: SessionDep,
+) -> QuestionTranslationRepository:
+    return QuestionTranslationRepository(db)
+
+
+def get_translation_service(
+    repository: Annotated[
+        QuestionTranslationRepository, Depends(get_translation_repository)
+    ],
+    questions: Annotated[QuestionService, Depends(get_service)],
+    forms: FormServiceDep,
+) -> QuestionTranslationService:
+    return QuestionTranslationService(repository, questions, forms)
+
+
+QuestionTranslationServiceDep = Annotated[
+    QuestionTranslationService, Depends(get_translation_service)
+]
+
+
 def get_option_repository(
     db: SessionDep,
 ) -> QuestionOptionRepository:
@@ -48,3 +76,26 @@ def get_option_service(
 
 
 OptionServiceDep = Annotated[QuestionOptionService, Depends(get_option_service)]
+
+
+def get_option_translation_repository(
+    db: SessionDep,
+) -> QuestionOptionTranslationRepository:
+    return QuestionOptionTranslationRepository(db)
+
+
+def get_option_translation_service(
+    repository: Annotated[
+        QuestionOptionTranslationRepository,
+        Depends(get_option_translation_repository),
+    ],
+    options: Annotated[QuestionOptionService, Depends(get_option_service)],
+    questions: Annotated[QuestionService, Depends(get_service)],
+    forms: FormServiceDep,
+) -> QuestionOptionTranslationService:
+    return QuestionOptionTranslationService(repository, options, questions, forms)
+
+
+QuestionOptionTranslationServiceDep = Annotated[
+    QuestionOptionTranslationService, Depends(get_option_translation_service)
+]

@@ -9,6 +9,10 @@ condicionalmente, em vez de devolver tudo e deixar o service filtrar.
 NAO e decisao de negocio, e devolver `None` (nao levantar) e o que
 `test_arquitetura.py` exige desta camada: quem decide o que `None` significa
 e o service.
+
+Traducoes (EN/ES) ficam em tabelas proprias; o PT vive em `Question.text` e
+`QuestionOption.label`. Quando `lang` e pedido, so a traducao daquele idioma e
+carregada (filtro dentro do `selectinload`), sem N+1.
 """
 
 import uuid
@@ -16,11 +20,15 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.domains.questions.models import (
     Question,
+    QuestionLang,
     QuestionOption,
+    QuestionOptionTranslation,
     QuestionSection,
+    QuestionTranslation,
 )
 
 
@@ -49,12 +57,20 @@ class QuestionRepository:
         return result.scalar_one_or_none()
 
     async def list_by_form(
-        self, form_id: uuid.UUID, section: QuestionSection | None = None
+        self,
+        form_id: uuid.UUID,
+        section: QuestionSection | None = None,
+        lang: QuestionLang | None = None,
     ) -> list[Question]:
         query = select(Question).where(Question.form_id == form_id)
 
         if section is not None:
             query = query.where(Question.section == section)
+
+        if lang is not None:
+            query = query.options(
+                selectinload(Question.translations.and_(QuestionTranslation.lang == lang))
+            )
 
         query = query.order_by(Question.order_index)
 
@@ -80,6 +96,40 @@ class QuestionRepository:
             select(Question).where(
                 Question.form_id == form_id,
                 Question.order_index == order_index,
+            )
+        )
+        return result.scalar_one_or_none()
+
+
+class QuestionTranslationRepository:
+    def __init__(self, db: AsyncSession) -> None:
+        self.db = db
+
+    async def insert(
+        self, translation: QuestionTranslation
+    ) -> QuestionTranslation | None:
+        """Grava a traducao de uma pergunta.
+
+        Devolve `None` se (question_id, lang) ja existe: a UniqueConstraint fecha
+        a corrida que a checagem do service sozinha nao fecha.
+        """
+        self.db.add(translation)
+        try:
+            await self.db.flush()
+        except IntegrityError as exc:
+            if "uq_question_translations_question_id_lang" not in str(exc.orig):
+                raise
+            return None
+        await self.db.refresh(translation)
+        return translation
+
+    async def get_by_question_and_lang(
+        self, question_id: uuid.UUID, lang: QuestionLang
+    ) -> QuestionTranslation | None:
+        result = await self.db.execute(
+            select(QuestionTranslation).where(
+                QuestionTranslation.question_id == question_id,
+                QuestionTranslation.lang == lang,
             )
         )
         return result.scalar_one_or_none()
@@ -118,6 +168,39 @@ class QuestionOptionRepository:
             select(QuestionOption).where(
                 QuestionOption.question_id == question_id,
                 QuestionOption.order_index == order_index,
+            )
+        )
+        return result.scalar_one_or_none()
+
+
+class QuestionOptionTranslationRepository:
+    def __init__(self, db: AsyncSession) -> None:
+        self.db = db
+
+    async def insert(
+        self, translation: QuestionOptionTranslation
+    ) -> QuestionOptionTranslation | None:
+        """Grava a traducao de uma alternativa.
+
+        Devolve `None` se (option_id, lang) ja existe.
+        """
+        self.db.add(translation)
+        try:
+            await self.db.flush()
+        except IntegrityError as exc:
+            if "uq_question_option_translations_option_id_lang" not in str(exc.orig):
+                raise
+            return None
+        await self.db.refresh(translation)
+        return translation
+
+    async def get_by_option_and_lang(
+        self, option_id: uuid.UUID, lang: QuestionLang
+    ) -> QuestionOptionTranslation | None:
+        result = await self.db.execute(
+            select(QuestionOptionTranslation).where(
+                QuestionOptionTranslation.option_id == option_id,
+                QuestionOptionTranslation.lang == lang,
             )
         )
         return result.scalar_one_or_none()

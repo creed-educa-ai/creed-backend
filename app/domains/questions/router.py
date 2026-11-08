@@ -2,13 +2,16 @@
 
 Esta camada é fina de propósito: recebe, valida via Pydantic, delega ao
 service e devolve. Nenhuma regra de negócio aqui, e nenhum import de
-`models` — o tipo da seção vem de `schemas.py` (tests/test_arquitetura.py
+`models` — os tipos de seção e idioma vêm de `schemas.py` (tests/test_arquitetura.py
 reprova rota que importe de models.py).
 
-Sem prefixo próprio: os dois endereços não compartilham um caminho comum
-(`/questions` e `/forms/{form_id}/questions`), então cada rota escreve o
-caminho inteiro. O prefixo `/api/v1` vem da configuração central, no
-registro em app/main.py.
+Sem prefixo próprio: os endereços não compartilham um caminho comum
+(`/questions`, `/forms/{form_id}/questions`, `/questions/{question_id}/translations`
+e `/options/{option_id}/translations`), então cada rota escreve o caminho inteiro.
+O prefixo `/api/v1` vem da configuração central, no registro em app/main.py.
+
+Idiomas: o PT é o padrão e vive na própria pergunta/alternativa. O `?lang=` aceita
+só `en` e `es`; quem quer o PT omite o parâmetro.
 """
 
 import uuid
@@ -16,11 +19,20 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 
-from app.domains.questions.dependencies import ServiceDep
+from app.domains.questions.dependencies import (
+    QuestionOptionTranslationServiceDep,
+    QuestionTranslationServiceDep,
+    ServiceDep,
+)
 from app.domains.questions.schemas import (
     QuestionCreate,
+    QuestionLang,
+    QuestionOptionTranslationCreate,
+    QuestionOptionTranslationResponse,
     QuestionResponse,
     QuestionSection,
+    QuestionTranslationCreate,
+    QuestionTranslationResponse,
 )
 from app.shared.authorization import AuthenticatedUser, CurrentUserDep, require_role
 from app.shared.exceptions import (
@@ -58,6 +70,29 @@ def _forbidden(description: str) -> dict[int | str, dict[str, Any]]:
     }
 
 
+def _error(
+    status_code: int, description: str, example: str
+) -> dict[int | str, dict[str, Any]]:
+    return {
+        status_code: {
+            "model": ErrorResponse,
+            "description": description,
+            "content": {"application/json": {"example": {"detail": example}}},
+        },
+    }
+
+
+_INVALID_BODY: dict[int | str, dict[str, Any]] = {
+    status.HTTP_422_UNPROCESSABLE_CONTENT: {
+        "model": ValidationErrorResponse,
+        "description": (
+            "Corpo inválido: `detail` é uma lista, um item por campo recusado "
+            "(inclui idioma fora de `en`/`es`)."
+        ),
+    },
+}
+
+
 @router.post(
     "/questions",
     response_model=QuestionResponse,
@@ -66,7 +101,8 @@ def _forbidden(description: str) -> dict[int | str, dict[str, Any]]:
     description=(
         "Cadastra uma pergunta num formulário, na seção e posição informadas. "
         "O formulário precisa já existir. Exige o papel admin ou gestor; o "
-        "gestor só cadastra em formulário da própria organização."
+        "gestor só cadastra em formulário da própria organização. O texto é "
+        "sempre o PT; traduções entram por `POST /questions/{id}/translations`."
     ),
     response_description="Pergunta criada.",
     operation_id="create_question",
@@ -132,9 +168,11 @@ async def create_question(
     summary="Listar perguntas de um formulário",
     description=(
         "Lista as perguntas de um formulário em ordem de posição, com filtro "
-        "opcional por seção. Formulário sem pergunta nenhuma devolve lista vazia; "
-        "formulário inexistente devolve 404. Qualquer papel lê as perguntas de "
-        "formulário da própria organização; o admin lê de qualquer uma."
+        "opcional por seção. Com `lang`, o enunciado sai traduzido quando existir "
+        "tradução naquele idioma; sem tradução, volta o PT. Formulário sem pergunta "
+        "nenhuma devolve lista vazia; formulário inexistente devolve 404. Qualquer "
+        "papel lê as perguntas de formulário da própria organização; o admin lê de "
+        "qualquer uma."
     ),
     response_description="Perguntas do formulário, na seção pedida quando houver filtro.",
     operation_id="list_questions",
@@ -174,11 +212,22 @@ async def list_questions(
             examples=["assessment"],
         ),
     ] = None,
+    lang: Annotated[
+        QuestionLang | None,
+        Query(
+            description=(
+                "Idioma do enunciado (`en` ou `es`). Omitido, volta o PT; "
+                "sem tradução no idioma pedido, também volta o PT."
+            ),
+            examples=["en"],
+        ),
+    ] = None,
 ) -> list[QuestionResponse]:
     try:
         questions = await service.list_for_form(
             form_id,
             section,
+            lang,
             role=user.role,
             organization_id=user.organization_uuid,
         )
@@ -186,4 +235,127 @@ async def list_questions(
         raise HTTPException(status.HTTP_404_NOT_FOUND, exc.message) from exc
     except ForbiddenError as exc:
         raise HTTPException(status.HTTP_403_FORBIDDEN, exc.message) from exc
-    return [QuestionResponse.de_model(question) for question in questions]
+    return [QuestionResponse.de_model(question, lang=lang) for question in questions]
+
+
+@router.post(
+    "/questions/{question_id}/translations",
+    response_model=QuestionTranslationResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Traduzir pergunta",
+    description=(
+        "Cadastra a tradução (`en` ou `es`) do enunciado de uma pergunta. No máximo "
+        "uma tradução por idioma: repetir devolve 409. Exige o papel admin ou "
+        "gestor; o gestor só traduz pergunta de formulário da própria organização."
+    ),
+    response_description="Tradução criada.",
+    operation_id="create_question_translation",
+    responses={
+        **_UNAUTHORIZED,
+        **_forbidden(
+            "Papel sem permissão, ou pergunta de formulário de outra organização."
+        ),
+        **_error(
+            status.HTTP_404_NOT_FOUND,
+            "Pergunta não encontrada.",
+            "Pergunta 7ae21494-975f-46ab-97cc-4c42b5ae7aaa não encontrada",
+        ),
+        **_error(
+            status.HTTP_409_CONFLICT,
+            "A pergunta já tem tradução nesse idioma.",
+            (
+                "Já existe tradução 'en' para a pergunta "
+                "7ae21494-975f-46ab-97cc-4c42b5ae7aaa"
+            ),
+        ),
+        **_INVALID_BODY,
+    },
+)
+async def create_question_translation(
+    question_id: Annotated[
+        uuid.UUID,
+        Path(
+            description="Identificador da pergunta a traduzir.",
+            examples=["7ae21494-975f-46ab-97cc-4c42b5ae7aaa"],
+        ),
+    ],
+    dados: QuestionTranslationCreate,
+    service: QuestionTranslationServiceDep,
+    user: EditorDep,
+) -> QuestionTranslationResponse:
+    try:
+        translation = await service.create(
+            question_id,
+            dados,
+            role=user.role,
+            organization_id=user.organization_uuid,
+        )
+    except NotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, exc.message) from exc
+    except ForbiddenError as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, exc.message) from exc
+    except ConflictError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, exc.message) from exc
+    return QuestionTranslationResponse.de_model(translation)
+
+
+@router.post(
+    "/options/{option_id}/translations",
+    response_model=QuestionOptionTranslationResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Traduzir alternativa",
+    description=(
+        "Cadastra a tradução (`en` ou `es`) do texto de uma alternativa. O `value` "
+        "não é traduzido. No máximo uma tradução por idioma: repetir devolve 409. "
+        "Exige o papel admin ou gestor; o gestor só traduz alternativa de "
+        "formulário da própria organização."
+    ),
+    response_description="Tradução criada.",
+    operation_id="create_question_option_translation",
+    responses={
+        **_UNAUTHORIZED,
+        **_forbidden(
+            "Papel sem permissão, ou alternativa de formulário de outra organização."
+        ),
+        **_error(
+            status.HTTP_404_NOT_FOUND,
+            "Alternativa não encontrada.",
+            "Alternativa 7ae21494-975f-46ab-97cc-4c42b5ae7aab não encontrada",
+        ),
+        **_error(
+            status.HTTP_409_CONFLICT,
+            "A alternativa já tem tradução nesse idioma.",
+            (
+                "Já existe tradução 'en' para a alternativa "
+                "7ae21494-975f-46ab-97cc-4c42b5ae7aab"
+            ),
+        ),
+        **_INVALID_BODY,
+    },
+)
+async def create_question_option_translation(
+    option_id: Annotated[
+        uuid.UUID,
+        Path(
+            description="Identificador da alternativa a traduzir.",
+            examples=["7ae21494-975f-46ab-97cc-4c42b5ae7aab"],
+        ),
+    ],
+    dados: QuestionOptionTranslationCreate,
+    service: QuestionOptionTranslationServiceDep,
+    user: EditorDep,
+) -> QuestionOptionTranslationResponse:
+    try:
+        translation = await service.create(
+            option_id,
+            dados,
+            role=user.role,
+            organization_id=user.organization_uuid,
+        )
+    except NotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, exc.message) from exc
+    except ForbiddenError as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, exc.message) from exc
+    except ConflictError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, exc.message) from exc
+    return QuestionOptionTranslationResponse.de_model(translation)

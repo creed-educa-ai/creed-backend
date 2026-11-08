@@ -21,7 +21,9 @@ from app.domains.questions.models import (
     Question,
     QuestionLang,
     QuestionOption,
+    QuestionOptionTranslation,
     QuestionSection,
+    QuestionTranslation,
     QuestionType,
 )
 from app.shared.enums import Dimension, Prisma
@@ -207,6 +209,11 @@ class QuestionTranslationResponse(BaseModel):
     text: str = Field(description="Enunciado da pergunta no idioma informado.")
     created_at: datetime = Field(description="Data e hora de criação da tradução.")
 
+    @classmethod
+    def de_model(cls, translation: QuestionTranslation) -> "QuestionTranslationResponse":
+        """Monta a saída a partir do model."""
+        return cls.model_validate(translation)
+
 
 class QuestionOptionBase(BaseModel):
     label: str = Field(
@@ -327,3 +334,10 @@ class QuestionOptionTranslationResponse(BaseModel):
     lang: QuestionLang = Field(description="Idioma da tradução.")
     label: str = Field(description="Texto da alternativa no idioma informado.")
     created_at: datetime = Field(description="Data e hora de criação da tradução.")
+
+    @classmethod
+    def de_model(
+        cls, translation: QuestionOptionTranslation
+    ) -> "QuestionOptionTranslationResponse":
+        """Monta a saída a partir do model."""
+        return cls.model_validate(translation)
