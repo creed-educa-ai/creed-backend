@@ -49,6 +49,9 @@ class FormRead(FormBase):
                     "name": "Formulário de exemplo",
                     "organization_id": "e5c0e7fa-3e57-427a-8d7b-a4ab5fb6c339",
                     "status": "draft",
+                    "opens_at": "2026-10-01T00:00:00Z",
+                    "closes_at": "2026-10-31T23:59:59Z",
+                    "link_id": "3f2b8c1e-7a4d-4e9b-9c0a-5d6e7f8a9b0c",
                     "created_at": "2026-09-22T14:30:00Z",
                 }
             ]
@@ -57,6 +60,15 @@ class FormRead(FormBase):
 
     id: uuid.UUID = Field(description="Identificador do formulário na plataforma.")
     status: FormStatus = Field(description="Estado do formulário.")
+    opens_at: datetime | None = Field(
+        description="Quando o questionário abre. Nulo: sem período definido."
+    )
+    closes_at: datetime | None = Field(
+        description="Quando o questionário fecha. Nulo: sem período definido."
+    )
+    link_id: uuid.UUID | None = Field(
+        description="Vínculo da única pessoa que responde. Nulo: a organização inteira."
+    )
     created_at: datetime = Field(description="Data e hora de criação do formulário.")
 
     @classmethod
