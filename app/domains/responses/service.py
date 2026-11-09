@@ -15,7 +15,7 @@ from app.domains.forms.service import FormService
 from app.domains.questions.service import QuestionOptionService, QuestionService
 from app.domains.responses.models import Answer, FormResponse, FormResponseStatus
 from app.domains.responses.repository import AnswerRepository, FormResponseRepository
-from app.domains.responses.schemas import AnswerCreate
+from app.domains.responses.schemas import AnswerCreate, CurrentFormRead
 from app.shared.exceptions import (
     ConflictError,
     ForbiddenError,
@@ -75,6 +75,17 @@ class FormResponseService:
         self.questions = questions
         self.answers = answers
 
+    async def get_current(
+        self, *, link_id: uuid.UUID, organization_id: uuid.UUID
+    ) -> CurrentFormRead:
+        """O questionário aberto para o vínculo logado e a resposta dele, se houver."""
+        form = await self.forms.get_current(
+            link_id=link_id, organization_id=organization_id
+        )
+        form_response = await self.repository.get_by_form_and_vinculo(form.id, link_id)
+
+        return CurrentFormRead.de_models(form, form_response)
+
     async def create_form_response(
         self,
         form_id: uuid.UUID,
@@ -100,6 +111,7 @@ class FormResponseService:
         self.forms.check_same_organization(
             form.organization_id, organization_id=organization_id
         )
+        await self.forms.check_accepts_answers(form_id, link_id=link_id)
 
         existing = await self.repository.get_by_form_and_vinculo(form_id, link_id)
 
@@ -125,13 +137,14 @@ class FormResponseService:
         """Só o dono envia, e só com as obrigatórias respondidas, descritivas e
         objetivas.
 
-        Ordem: existe (404), é do dono (403), em andamento (409), obrigatórias
-        (422).
+        Ordem: existe (404), é do dono (403), em andamento (409), público (403),
+        período (423), obrigatórias (422).
         """
         form_response = await _own_form_response(
             self.repository, form_response_id, link_id=link_id
         )
         _check_in_progress(form_response)
+        await self.forms.check_accepts_answers(form_response.form_id, link_id=link_id)
 
         required = await self.questions.list_required(form_response.form_id)
         answers = await self.answers.list_by_form_response(form_response_id)
@@ -157,17 +170,20 @@ class AnswerService:
         form_responses: FormResponseRepository,
         questions: QuestionService,
         options: QuestionOptionService,
+        forms: FormService,
     ) -> None:
         self.answers = answers
         self.form_responses = form_responses
         self.questions = questions
         self.options = options
+        self.forms = forms
 
     async def record(
         self, form_response_id: uuid.UUID, dados: AnswerCreate, *, link_id: uuid.UUID
     ) -> Answer:
         """Grava a resposta de uma pergunta, na ordem de conferência da spec da
-        CREED-47: 404, 403, 409, 422 (pergunta), 422 (forma da resposta), 409.
+        CREED-47: 404, 403, 409, público (403), período (423), 422 (pergunta), 422
+        (forma da resposta), 409.
 
         A forma depende do tipo da pergunta: a descritiva leva texto e nenhuma
         alternativa; a objetiva leva uma alternativa daquela pergunta e nenhum
@@ -184,6 +200,7 @@ class AnswerService:
             self.form_responses, form_response_id, link_id=link_id
         )
         _check_in_progress(form_response)
+        await self.forms.check_accepts_answers(form_response.form_id, link_id=link_id)
 
         # A pergunta veio no corpo: inexistente é 422, não 404 (CREED-47, item 11).
         try:

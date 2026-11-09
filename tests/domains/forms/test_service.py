@@ -6,14 +6,19 @@ só na própria organização, qualquer que seja o papel.
 """
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from app.domains.forms.models import Form, FormStatus
-from app.domains.forms.schemas import FormCreate, FormRead
+from app.domains.forms.schemas import FormCreate, FormRead, PeriodStatus
 from app.domains.forms.service import FormService
-from app.shared.exceptions import ForbiddenError, NotFoundError, ValidationError
+from app.shared.exceptions import (
+    ForbiddenError,
+    NotFoundError,
+    PeriodClosedError,
+    ValidationError,
+)
 
 
 class FakeFormRepository:
@@ -242,3 +247,189 @@ class TestFormRead:
     def test_recusa_organization_id_invalido(self) -> None:
         with pytest.raises(ValueError):
             FormCreate(name="Formulário válido", organization_id="não-é-um-uuid")
+
+
+class TestGetCurrent:
+    async def test_devolve_o_formulario_aberto_e_repassa_quem_pede(self) -> None:
+        form = um_form()
+        link_id, organization_id = uuid.uuid4(), uuid.uuid4()
+        chamadas: list[tuple[uuid.UUID, uuid.UUID, datetime]] = []
+
+        class _Repository(FakeFormRepository):
+            async def get_open_for_link(
+                self, organization_id: uuid.UUID, link_id: uuid.UUID, now: datetime
+            ) -> Form | None:
+                chamadas.append((organization_id, link_id, now))
+                return form
+
+        antes = datetime.now(UTC)
+        resultado = await servico(_Repository()).get_current(
+            link_id=link_id, organization_id=organization_id
+        )
+
+        assert resultado is form
+        assert chamadas[0][:2] == (organization_id, link_id)
+        assert antes <= chamadas[0][2] <= datetime.now(UTC)
+
+    async def test_sem_formulario_aberto_levanta_not_found(self) -> None:
+        class _Repository(FakeFormRepository):
+            async def get_open_for_link(
+                self, organization_id: uuid.UUID, link_id: uuid.UUID, now: datetime
+            ) -> Form | None:
+                return None
+
+        with pytest.raises(NotFoundError):
+            await servico(_Repository()).get_current(
+                link_id=uuid.uuid4(), organization_id=uuid.uuid4()
+            )
+
+
+class TestCheckAcceptsAnswers:
+    AGORA = datetime(2026, 11, 15, 12, 0, tzinfo=UTC)
+    ABRE = datetime(2026, 11, 1, tzinfo=UTC)
+    FECHA = datetime(2026, 11, 30, tzinfo=UTC)
+
+    @pytest.fixture(autouse=True)
+    def relogio(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self.definir_agora(monkeypatch, self.AGORA)
+
+    def definir_agora(self, monkeypatch: pytest.MonkeyPatch, agora: datetime) -> None:
+        class _Relogio(datetime):
+            @classmethod
+            def now(cls, tz: object = None) -> datetime:  # type: ignore[override]
+                return agora
+
+        monkeypatch.setattr("app.domains.forms.service.datetime", _Relogio)
+
+    async def conferir(self, form: Form, link_id: uuid.UUID | None = None) -> None:
+        await servico(FakeFormRepository([form])).check_accepts_answers(
+            form.id, link_id=link_id or uuid.uuid4()
+        )
+
+    def aberto(self, **campos: object) -> Form:
+        return um_form(opens_at=self.ABRE, closes_at=self.FECHA, **campos)
+
+    async def test_para_todos_aceita_qualquer_vinculo(self) -> None:
+        await self.conferir(self.aberto(link_id=None))
+
+    async def test_individual_aceita_o_proprio_vinculo(self) -> None:
+        link_id = uuid.uuid4()
+
+        await self.conferir(self.aberto(link_id=link_id), link_id)
+
+    async def test_individual_recusa_outro_vinculo(self) -> None:
+        with pytest.raises(ForbiddenError):
+            await self.conferir(self.aberto(link_id=uuid.uuid4()))
+
+    async def test_publico_vem_antes_do_periodo(self) -> None:
+        form = um_form(
+            opens_at=self.ABRE - timedelta(days=9),
+            closes_at=self.ABRE,
+            link_id=uuid.uuid4(),
+        )
+
+        with pytest.raises(ForbiddenError):
+            await self.conferir(form)
+
+    async def test_no_instante_de_abertura_aceita(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self.definir_agora(monkeypatch, self.ABRE)
+
+        await self.conferir(self.aberto())
+
+    async def test_antes_da_abertura_recusa_e_diz_o_motivo(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self.definir_agora(monkeypatch, self.ABRE - timedelta(seconds=1))
+
+        with pytest.raises(PeriodClosedError, match="ainda não começou"):
+            await self.conferir(self.aberto())
+
+    async def test_no_instante_de_fechamento_recusa_e_diz_o_motivo(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self.definir_agora(monkeypatch, self.FECHA)
+
+        with pytest.raises(PeriodClosedError, match="terminou"):
+            await self.conferir(self.aberto())
+
+    async def test_sem_periodo_recusa(self) -> None:
+        with pytest.raises(PeriodClosedError, match="não tem período"):
+            await self.conferir(um_form(opens_at=None, closes_at=None))
+
+    async def test_formulario_inexistente_levanta_not_found(self) -> None:
+        with pytest.raises(NotFoundError):
+            await servico(FakeFormRepository()).check_accepts_answers(
+                uuid.uuid4(), link_id=uuid.uuid4()
+            )
+
+
+class TestListPeriods:
+    ORG = uuid.UUID("00000000-0000-0000-0000-00000000000a")
+    OUTRA_ORG = uuid.UUID("00000000-0000-0000-0000-00000000000b")
+
+    def repositorio(self, forms: list[Form] | None = None) -> FakeFormRepository:
+        class _Repository(FakeFormRepository):
+            pedido: tuple[uuid.UUID, uuid.UUID | None] | None = None
+
+            async def list_periods(
+                self, organization_id: uuid.UUID, link_id: uuid.UUID | None
+            ) -> list[Form]:
+                type(self).pedido = (organization_id, link_id)
+                return list(forms or [])
+
+        return _Repository()
+
+    def periodo(self, abre: timedelta, fecha: timedelta) -> Form:
+        agora = datetime.now(UTC)
+        return um_form(opens_at=agora + abre, closes_at=agora + fecha, link_id=None)
+
+    async def test_calcula_a_situacao_de_cada_periodo(self) -> None:
+        dia = timedelta(days=1)
+        forms = [
+            self.periodo(dia, 2 * dia),
+            self.periodo(-dia, dia),
+            self.periodo(-2 * dia, -dia),
+        ]
+
+        periodos = await servico(self.repositorio(forms)).list_periods(
+            self.ORG, link_id=None, role="gestor", organization_id=self.ORG
+        )
+
+        assert [p.period_status for p in periodos] == [
+            PeriodStatus.SCHEDULED,
+            PeriodStatus.OPEN,
+            PeriodStatus.PAST,
+        ]
+        assert [p.id for p in periodos] == [f.id for f in forms]
+
+    async def test_gestor_em_outra_organizacao_e_recusado(self) -> None:
+        with pytest.raises(ForbiddenError):
+            await servico(self.repositorio()).list_periods(
+                self.OUTRA_ORG, link_id=None, role="gestor", organization_id=self.ORG
+            )
+
+    async def test_admin_em_outra_organizacao_e_recusado(self) -> None:
+        with pytest.raises(ForbiddenError):
+            await servico(self.repositorio()).list_periods(
+                self.OUTRA_ORG, link_id=None, role="admin", organization_id=self.ORG
+            )
+
+    async def test_gestor_nao_filtra_por_pessoa(self) -> None:
+        with pytest.raises(ForbiddenError):
+            await servico(self.repositorio()).list_periods(
+                self.ORG, link_id=uuid.uuid4(), role="gestor", organization_id=self.ORG
+            )
+
+    async def test_admin_filtra_por_pessoa(self) -> None:
+        link_id = uuid.uuid4()
+        repository = self.repositorio()
+
+        assert (
+            await servico(repository).list_periods(
+                self.ORG, link_id=link_id, role="admin", organization_id=self.ORG
+            )
+            == []
+        )
+        assert type(repository).pedido == (self.ORG, link_id)  # type: ignore[attr-defined]

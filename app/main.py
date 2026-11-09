@@ -16,6 +16,7 @@ from app.domains.dashboards.router import router as dashboards_router
 from app.domains.demographics.router import router as demographics_router
 from app.domains.department.router import router as department_router
 from app.domains.forms.router import router as forms_router
+from app.domains.forms.router_periods import router as periods_router
 from app.domains.links.router import router as links_router
 from app.domains.organizacoes.router import router as organizacoes_router
 from app.domains.participants.router import router as participants_router
@@ -25,6 +26,7 @@ from app.domains.questions.router import router as questions_router
 from app.domains.questions.router_options import router as question_options_router
 from app.domains.relatorios.router import router as relatorios_router
 from app.domains.responses.router import router as respostas_router
+from app.domains.responses.router_current import router as current_form_router
 from app.domains.users.router import router as user_router
 from app.shared.schemas import HealthResponse
 
@@ -141,6 +143,8 @@ async def health() -> HealthResponse:
 for _router in (
     authentication_router,
     respostas_router,
+    # Antes do `forms_router`: senão `/forms/{form_id}` captura `/forms/current`.
+    current_form_router,
     organizacoes_router,
     prismas_router,
     dashboards_router,
@@ -153,6 +157,7 @@ for _router in (
     links_router,
     participants_router,
     forms_router,
+    periods_router,
     department_router,
 ):
     app.include_router(_router, prefix=settings.API_V1_PREFIX)

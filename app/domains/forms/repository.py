@@ -5,8 +5,9 @@ Agregação pesada é empurrada para o Postgres, nunca feita em memória.
 """
 
 import uuid
+from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.forms.models import Form
@@ -19,6 +20,49 @@ class FormRepository:
     async def get_by_id(self, form_id: uuid.UUID) -> Form | None:
         result = await self.db.execute(select(Form).where(Form.id == form_id))
         return result.scalar_one_or_none()
+
+    async def get_open_for_link(
+        self, organization_id: uuid.UUID, link_id: uuid.UUID, now: datetime
+    ) -> Form | None:
+        """O formulário aberto em `now`, para a organização inteira ou só o vínculo.
+
+        Sem período (`opens_at` ou `closes_at` nulos), o formulário não entra: a
+        comparação com nulo nunca é verdadeira. O `limit(1)` e a ordem existem para
+        um eventual empate não virar erro: primeiro o do vínculo, depois o mais recente.
+        """
+        result = await self.db.execute(
+            select(Form)
+            .where(
+                Form.organization_id == organization_id,
+                or_(Form.link_id.is_(None), Form.link_id == link_id),
+                Form.opens_at <= now,
+                Form.closes_at > now,
+            )
+            .order_by(Form.link_id.is_(None), Form.opens_at.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
+    async def list_periods(
+        self, organization_id: uuid.UUID, link_id: uuid.UUID | None
+    ) -> list[Form]:
+        """Os períodos do público pedido, do mais recente ao mais antigo.
+
+        `link_id` nulo são os períodos "para todos". Formulário sem datas não é
+        período e fica de fora.
+        """
+        audience = Form.link_id.is_(None) if link_id is None else Form.link_id == link_id
+        result = await self.db.execute(
+            select(Form)
+            .where(
+                Form.organization_id == organization_id,
+                audience,
+                Form.opens_at.is_not(None),
+                Form.closes_at.is_not(None),
+            )
+            .order_by(Form.opens_at.desc())
+        )
+        return list(result.scalars().all())
 
     async def create(self, form: Form) -> Form:
         """Cria um formulário no banco."""
