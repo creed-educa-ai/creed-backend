@@ -102,8 +102,8 @@ class QuestionService:
         Sem a primeira conferencia, "formulario inexistente" e "formulario ainda
         sem perguntas" devolviam o mesmo 200 com lista vazia.
 
-        Com `lang`, as perguntas voltam com a traducao daquele idioma carregada
-        (quando existir); o fallback pro PT e do `QuestionResponse.de_model`.
+        Com `lang`, as perguntas e alternativas voltam com a traducao daquele
+        idioma carregada (quando existir); o fallback pro PT e do `de_model`.
         """
         await self.forms.get_for_user(form_id, role=role, organization_id=organization_id)
         return await self.repository.list_by_form(form_id, section, lang)

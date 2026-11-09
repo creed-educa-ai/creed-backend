@@ -9,9 +9,11 @@ o filtro `?section=`, e a rota nao pode importar de models.py.
 
 Idiomas: `Question.text` e `QuestionOption.label` sao sempre PT (português por padrão). Em
 `de_model(..., lang=...)` o texto sai traduzido se existir traducão,
-caso não exista, cai no PT.
+caso não exista, cai no PT. Na leitura, o `?lang=` usa `QuestionLangQuery`, que
+aceita também `pt`/`pt-BR`; na escrita de tradução, `QuestionLang` só tem EN e ES.
 """
 
+import enum
 import uuid
 from datetime import datetime
 
@@ -33,6 +35,7 @@ __all__ = [
     "Prisma",
     "QuestionCreate",
     "QuestionLang",
+    "QuestionLangQuery",
     "QuestionOptionCreate",
     "QuestionOptionResponse",
     "QuestionOptionTranslationCreate",
@@ -42,7 +45,25 @@ __all__ = [
     "QuestionTranslationCreate",
     "QuestionTranslationResponse",
     "QuestionType",
+    "QuestionWithOptionsResponse",
 ]
+
+
+class QuestionLangQuery(enum.Enum):
+    """Idioma pedido na leitura (`?lang=`). Diferente de `QuestionLang`, aceita o PT,
+    para o front mandar sempre o idioma da interface."""
+
+    PT = "pt"
+    PT_BR = "pt-BR"
+    EN = "en"
+    ES = "es"
+
+    @property
+    def translation_lang(self) -> QuestionLang | None:
+        """Idioma de tradução a carregar; `None` no PT, que é o texto original."""
+        if self in (QuestionLangQuery.PT, QuestionLangQuery.PT_BR):
+            return None
+        return QuestionLang(self.value)
 
 
 class QuestionBase(BaseModel):
@@ -291,6 +312,71 @@ class QuestionOptionResponse(QuestionOptionBase):
             if traducao.lang == lang:
                 return resposta.model_copy(update={"label": traducao.label})
         return resposta
+
+
+class QuestionWithOptionsResponse(QuestionResponse):
+    """Saída da listagem: a pergunta com as alternativas.
+
+    Só a listagem usa este formato: no cadastro (`POST /questions`) a relação
+    `options` não está carregada.
+    """
+
+    model_config = ConfigDict(
+        from_attributes=True,
+        json_schema_extra={
+            "examples": [
+                {
+                    "id": "7ae21494-975f-46ab-97cc-4c42b5ae7aaa",
+                    "form_id": "00000000-0000-0000-0000-000000000001",
+                    "text": "Como você avalia sua adaptabilidade?",
+                    "order_index": 0,
+                    "type": "objective",
+                    "section": "assessment",
+                    "required": True,
+                    "dimensao": "S2",
+                    "prisma": "seguranca_psicologica",
+                    "created_at": "2026-09-22T14:00:00Z",
+                    "options": [
+                        {
+                            "id": "7ae21494-975f-46ab-97cc-4c42b5ae7aab",
+                            "question_id": "7ae21494-975f-46ab-97cc-4c42b5ae7aaa",
+                            "label": "Sim",
+                            "value": "sim",
+                            "order_index": 0,
+                            "created_at": "2026-10-14T14:00:00Z",
+                        }
+                    ],
+                }
+            ]
+        },
+    )
+
+    options: list[QuestionOptionResponse] = Field(
+        description=(
+            "Alternativas da pergunta, em ordem de posição, no mesmo idioma do "
+            "enunciado. Vazia na pergunta descritiva."
+        )
+    )
+
+    @classmethod
+    def de_model(
+        cls, question: Question, lang: QuestionLang | None = None
+    ) -> "QuestionWithOptionsResponse":
+        """Monta a saída a partir do model.
+
+        Exige `question.options` carregado (selectinload no repository). O
+        fallback pro PT vale item a item.
+        """
+        pergunta = QuestionResponse.de_model(question, lang)
+        return cls.model_validate(
+            {
+                **pergunta.model_dump(),
+                "options": [
+                    QuestionOptionResponse.de_model(option, lang)
+                    for option in question.options
+                ],
+            }
+        )
 
 
 class QuestionOptionTranslationCreate(BaseModel):

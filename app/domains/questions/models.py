@@ -106,6 +106,12 @@ class Question(Base):
         cascade="all, delete-orphan",
     )
 
+    # Ordenada no banco: o `order_by` vira ORDER BY na consulta do selectinload.
+    options: Mapped[list["QuestionOption"]] = relationship(
+        back_populates="question",
+        order_by="QuestionOption.order_index",
+    )
+
 
 class QuestionTranslation(Base):
     __tablename__ = "question_translations"
@@ -177,6 +183,8 @@ class QuestionOption(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+    question: Mapped["Question"] = relationship(back_populates="options")
 
     translations: Mapped[list["QuestionOptionTranslation"]] = relationship(
         back_populates="option",

@@ -11,8 +11,9 @@ NAO e decisao de negocio, e devolver `None` (nao levantar) e o que
 e o service.
 
 Traducoes (EN/ES) ficam em tabelas proprias; o PT vive em `Question.text` e
-`QuestionOption.label`. Quando `lang` e pedido, so a traducao daquele idioma e
-carregada (filtro dentro do `selectinload`), sem N+1.
+`QuestionOption.label`. `list_by_form` sempre carrega as alternativas; quando
+`lang` e pedido, so a traducao daquele idioma e carregada, da pergunta e das
+alternativas (filtro dentro do `selectinload`), sem N+1.
 """
 
 import uuid
@@ -67,9 +68,18 @@ class QuestionRepository:
         if section is not None:
             query = query.where(Question.section == section)
 
-        if lang is not None:
+        if lang is None:
+            query = query.options(selectinload(Question.options))
+        else:
             query = query.options(
-                selectinload(Question.translations.and_(QuestionTranslation.lang == lang))
+                selectinload(
+                    Question.translations.and_(QuestionTranslation.lang == lang)
+                ),
+                selectinload(Question.options).selectinload(
+                    QuestionOption.translations.and_(
+                        QuestionOptionTranslation.lang == lang
+                    )
+                ),
             )
 
         query = query.order_by(Question.order_index)

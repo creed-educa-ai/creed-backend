@@ -10,8 +10,9 @@ Sem prefixo próprio: os endereços não compartilham um caminho comum
 e `/options/{option_id}/translations`), então cada rota escreve o caminho inteiro.
 O prefixo `/api/v1` vem da configuração central, no registro em app/main.py.
 
-Idiomas: o PT é o padrão e vive na própria pergunta/alternativa. O `?lang=` aceita
-só `en` e `es`; quem quer o PT omite o parâmetro.
+Idiomas: o PT é o padrão e vive na própria pergunta/alternativa. Na leitura, o
+`?lang=` aceita `pt`, `pt-BR`, `en` e `es` (omitido vale `pt`). Na escrita de
+tradução, o corpo só aceita `en` e `es`: o PT não é tradução.
 """
 
 import uuid
@@ -26,13 +27,14 @@ from app.domains.questions.dependencies import (
 )
 from app.domains.questions.schemas import (
     QuestionCreate,
-    QuestionLang,
+    QuestionLangQuery,
     QuestionOptionTranslationCreate,
     QuestionOptionTranslationResponse,
     QuestionResponse,
     QuestionSection,
     QuestionTranslationCreate,
     QuestionTranslationResponse,
+    QuestionWithOptionsResponse,
 )
 from app.shared.authorization import AuthenticatedUser, CurrentUserDep, require_role
 from app.shared.exceptions import (
@@ -164,15 +166,16 @@ async def create_question(
 
 @router.get(
     "/forms/{form_id}/questions",
-    response_model=list[QuestionResponse],
+    response_model=list[QuestionWithOptionsResponse],
     summary="Listar perguntas de um formulário",
     description=(
-        "Lista as perguntas de um formulário em ordem de posição, com filtro "
-        "opcional por seção. Com `lang`, o enunciado sai traduzido quando existir "
-        "tradução naquele idioma; sem tradução, volta o PT. Formulário sem pergunta "
-        "nenhuma devolve lista vazia; formulário inexistente devolve 404. Qualquer "
-        "papel lê as perguntas de formulário da própria organização; o admin lê de "
-        "qualquer uma."
+        "Lista as perguntas de um formulário em ordem de posição, cada uma com as "
+        "suas alternativas (também em ordem de posição), com filtro opcional por "
+        "seção. Com `lang`, o enunciado e o texto das alternativas saem traduzidos "
+        "quando existir tradução naquele idioma; sem tradução, volta o PT, item a "
+        "item. Formulário sem pergunta nenhuma devolve lista vazia; formulário "
+        "inexistente devolve 404. Qualquer papel lê as perguntas de formulário da "
+        "própria organização; o admin lê de qualquer uma."
     ),
     response_description="Perguntas do formulário, na seção pedida quando houver filtro.",
     operation_id="list_questions",
@@ -213,21 +216,23 @@ async def list_questions(
         ),
     ] = None,
     lang: Annotated[
-        QuestionLang | None,
+        QuestionLangQuery,
         Query(
             description=(
-                "Idioma do enunciado (`en` ou `es`). Omitido, volta o PT; "
-                "sem tradução no idioma pedido, também volta o PT."
+                "Idioma do enunciado e das alternativas: `pt` (ou `pt-BR`), `en` "
+                "ou `es`. Omitido, vale `pt`; sem tradução no idioma pedido, "
+                "também volta o PT."
             ),
             examples=["en"],
         ),
-    ] = None,
-) -> list[QuestionResponse]:
+    ] = QuestionLangQuery.PT,
+) -> list[QuestionWithOptionsResponse]:
+    translation_lang = lang.translation_lang
     try:
         questions = await service.list_for_form(
             form_id,
             section,
-            lang,
+            translation_lang,
             role=user.role,
             organization_id=user.organization_uuid,
         )
@@ -235,7 +240,10 @@ async def list_questions(
         raise HTTPException(status.HTTP_404_NOT_FOUND, exc.message) from exc
     except ForbiddenError as exc:
         raise HTTPException(status.HTTP_403_FORBIDDEN, exc.message) from exc
-    return [QuestionResponse.de_model(question, lang=lang) for question in questions]
+    return [
+        QuestionWithOptionsResponse.de_model(question, lang=translation_lang)
+        for question in questions
+    ]
 
 
 @router.post(
