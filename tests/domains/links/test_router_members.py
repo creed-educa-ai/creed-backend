@@ -1,0 +1,235 @@
+"""Testes de app/domains/links/router_members.py: o contrato HTTP da troca de setor.
+
+`TestClient` com `dependency_overrides`, como em `test_router.py` deste domínio. O
+service é um dublê que devolve o membro ou levanta a exceção do service real: o que
+se prova aqui é a tradução para o código HTTP e o que a guarda deixa passar. A regra
+(quem pode, o que é 404) está provada em `test_service_members.py`.
+"""
+
+import uuid
+from datetime import UTC, datetime
+from typing import Any
+
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from app.domains.links.dependencies import get_service as get_link_service
+from app.domains.links.models import Link, LinkType, Roles
+from app.domains.links.router_members import router
+from app.domains.links.service import Member
+from app.domains.users.dependencies import get_service as get_user_service
+from app.domains.users.service import UserAccess
+from app.shared.enums import DepartmentType
+from app.shared.exceptions import ForbiddenError, NotFoundError
+
+ORG_ID = uuid.UUID("8f14e45f-ceea-467e-adde-3f81905dbc1c")
+LINK_ID = uuid.UUID("d40b7a55-b9cc-4b78-ae5d-ab325fd655e2")
+URL = f"/api/v1/organizations/{ORG_ID}/members/{LINK_ID}"
+
+
+class _FakeLinkService:
+    """Dublê: guarda o que recebeu e devolve o membro, ou levanta `error`."""
+
+    def __init__(self, error: Exception | None = None) -> None:
+        self.error = error
+        self.calls: list[dict[str, Any]] = []
+
+    async def update_member_department(
+        self,
+        organization_id: uuid.UUID,
+        link_id: uuid.UUID,
+        department: DepartmentType | None,
+        *,
+        role: str,
+        own_organization_id: uuid.UUID,
+    ) -> Member:
+        self.calls.append(
+            {
+                "organization_id": organization_id,
+                "link_id": link_id,
+                "department": department,
+                "role": role,
+                "own_organization_id": own_organization_id,
+            }
+        )
+        if self.error is not None:
+            raise self.error
+        link = Link(
+            id=link_id,
+            participant_id=uuid.uuid4(),
+            organization_id=organization_id,
+            department_id=uuid.uuid4() if department else None,
+            type=LinkType.EMPREGO,
+            role=Roles.RESPONDENTE,
+            start_at=datetime(2026, 11, 1, tzinfo=UTC),
+            end_at=None,
+            created_at=datetime(2026, 11, 1, tzinfo=UTC),
+            updated_at=datetime(2026, 11, 9, 14, tzinfo=UTC),
+        )
+        return Member(
+            link=link, name="Ana Souza", email="ana@empresa.com.br", department=department
+        )
+
+
+class _FakeUserService:
+    def __init__(self, access: UserAccess) -> None:
+        self._access = access
+
+    async def get_active_user_access_by_email(self, email: str) -> UserAccess | None:
+        return self._access
+
+
+def _install_validate_token(monkeypatch: pytest.MonkeyPatch, roles: list[str]) -> None:
+    async def _fake(_token: str) -> dict[str, Any]:
+        return {
+            "sub": "user-123",
+            "email": "dev@creed.example.com",
+            "realm_access": {"roles": roles},
+        }
+
+    monkeypatch.setattr("app.shared.authorization.validate_token", _fake)
+
+
+def _client(
+    monkeypatch: pytest.MonkeyPatch,
+    link_service: _FakeLinkService,
+    role: str | None = "gestor",
+) -> TestClient:
+    app = FastAPI()
+    app.include_router(router, prefix="/api/v1")
+    app.dependency_overrides[get_link_service] = lambda: link_service
+    if role is not None:
+        _install_validate_token(monkeypatch, [role])
+        access = UserAccess(
+            id=uuid.uuid4(),
+            email="dev@creed.example.com",
+            role=role,
+            link_id=uuid.uuid4(),
+            organization_id=ORG_ID,
+        )
+        app.dependency_overrides[get_user_service] = lambda: _FakeUserService(access)
+    return TestClient(app)
+
+
+AUTH = {"Authorization": "Bearer token-de-teste"}
+
+
+def test_gestor_picks_a_department_and_gets_the_member_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    link_service = _FakeLinkService()
+
+    response = _client(monkeypatch, link_service).patch(
+        URL, json={"department": "Marketing"}, headers=AUTH
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "link_id": str(LINK_ID),
+        "name": "Ana Souza",
+        "email": "ana@empresa.com.br",
+        "role": "respondente",
+        "type": "emprego",
+        "department": "Marketing",
+        "updated_at": "2026-11-09T14:00:00Z",
+    }
+    # Papel e organização vêm do vínculo de quem pede, não do corpo.
+    assert link_service.calls == [
+        {
+            "organization_id": ORG_ID,
+            "link_id": LINK_ID,
+            "department": DepartmentType.MARKETING,
+            "role": "gestor",
+            "own_organization_id": ORG_ID,
+        }
+    ]
+
+
+def test_null_removes_the_department(monkeypatch: pytest.MonkeyPatch) -> None:
+    response = _client(monkeypatch, _FakeLinkService()).patch(
+        URL, json={"department": None}, headers=AUTH
+    )
+
+    assert response.status_code == 200
+    assert response.json()["department"] is None
+
+
+def test_without_authorization_returns_401(monkeypatch: pytest.MonkeyPatch) -> None:
+    link_service = _FakeLinkService()
+
+    response = _client(monkeypatch, link_service, role=None).patch(
+        URL, json={"department": "Marketing"}
+    )
+
+    assert response.status_code == 401
+    assert link_service.calls == []
+
+
+def test_respondente_returns_403_without_calling_the_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    link_service = _FakeLinkService()
+
+    response = _client(monkeypatch, link_service, role="respondente").patch(
+        URL, json={"department": "Marketing"}, headers=AUTH
+    )
+
+    assert response.status_code == 403
+    assert link_service.calls == []
+
+
+def test_service_forbidden_becomes_403(monkeypatch: pytest.MonkeyPatch) -> None:
+    # O gestor de outra organização passa pela guarda (é gestor) e é barrado
+    # pelo service: o router só traduz.
+    link_service = _FakeLinkService(
+        ForbiddenError("Sem acesso aos membros desta organização")
+    )
+
+    response = _client(monkeypatch, link_service).patch(
+        URL, json={"department": "Marketing"}, headers=AUTH
+    )
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": "Sem acesso aos membros desta organização"}
+
+
+def test_service_not_found_becomes_404(monkeypatch: pytest.MonkeyPatch) -> None:
+    link_service = _FakeLinkService(NotFoundError(f"Membro {LINK_ID} não encontrado"))
+
+    response = _client(monkeypatch, link_service).patch(
+        URL, json={"department": "Marketing"}, headers=AUTH
+    )
+
+    assert response.status_code == 404
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {},
+        {"department": "Vendas"},
+        {"department": "Recursos Humanos"},
+        {"department": "Marketing", "role": "admin"},
+    ],
+    ids=["vazio", "fora-dos-cinco", "rotulo-com-espaco", "campo-a-mais"],
+)
+def test_invalid_body_returns_422_without_calling_the_service(
+    monkeypatch: pytest.MonkeyPatch, body: dict[str, Any]
+) -> None:
+    link_service = _FakeLinkService()
+
+    response = _client(monkeypatch, link_service).patch(URL, json=body, headers=AUTH)
+
+    assert response.status_code == 422
+    assert link_service.calls == []
+
+
+def test_link_id_not_uuid_returns_422(monkeypatch: pytest.MonkeyPatch) -> None:
+    response = _client(monkeypatch, _FakeLinkService()).patch(
+        f"/api/v1/organizations/{ORG_ID}/members/nao-e-uuid",
+        json={"department": "Marketing"},
+        headers=AUTH,
+    )
+
+    assert response.status_code == 422

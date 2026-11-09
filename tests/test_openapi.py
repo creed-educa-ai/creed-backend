@@ -60,6 +60,7 @@ def test_all_endpoints_have_method_summary_description_and_operation_id() -> Non
         ("/api/v1/participants/{participant_id}", "get"),
         ("/api/v1/questions", "post"),
         ("/api/v1/forms/{form_id}/questions", "get"),
+        ("/api/v1/organizations/{organization_id}/members/{link_id}", "patch"),
     }
 
     documented_operations = {
@@ -173,6 +174,12 @@ def test_success_error_and_bearer_authentication_responses_are_documented() -> N
         "409",
         "422",
     }
+    # Troca de setor do membro: 403 antes de 404, e corpo inválido é 422 (CREED-6910).
+    assert set(
+        _operation(
+            schema, "/api/v1/organizations/{organization_id}/members/{link_id}", "patch"
+        )["responses"]
+    ) >= {"200", "401", "403", "404", "422"}
     # Referência inexistente no corpo é 422; no caminho, 404 (CREED-47).
     assert set(
         _operation(schema, "/api/v1/organizations/{organization_id}/links", "post")[

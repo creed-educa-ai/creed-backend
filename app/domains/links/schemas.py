@@ -13,6 +13,7 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.domains.links.models import Link, LinkType, Roles
+from app.shared.enums import DepartmentType
 
 
 class LinkCreate(BaseModel):
@@ -84,3 +85,85 @@ class LinkResponse(BaseModel):
     def from_model(cls, link: Link) -> "LinkResponse":
         """Monta a saída a partir do model."""
         return cls.model_validate(link)
+
+
+class MemberDepartmentUpdate(BaseModel):
+    """Corpo da troca de setor de um membro.
+
+    `department` é obrigatório: ou um dos cinco setores, ou `null` para tirar o
+    setor. Corpo vazio é 422, e não um "não muda nada" silencioso. Campo a mais
+    (papel, tipo) também é 422: esta rota só mexe no setor.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "examples": [{"department": "Marketing"}, {"department": None}]
+        },
+    )
+
+    department: DepartmentType | None = Field(
+        description=(
+            "Setor do membro, um dos cinco fixos. `null` tira o setor. A empresa que "
+            "ainda não tem o setor ganha o cadastro dele na hora."
+        )
+    )
+
+
+class MemberResponse(BaseModel):
+    """Um membro da organização: o vínculo visto com a pessoa.
+
+    A listagem de membros (M-2) devolve este mesmo schema, acrescido do período.
+    """
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "link_id": "d40b7a55-b9cc-4b78-ae5d-ab325fd655e2",
+                    "name": "Ana Souza",
+                    "email": "ana@empresa.com.br",
+                    "role": "respondente",
+                    "type": "emprego",
+                    "department": "Marketing",
+                    "updated_at": "2026-11-09T14:00:00Z",
+                }
+            ]
+        }
+    )
+
+    link_id: uuid.UUID = Field(description="Identificador do vínculo do membro.")
+    name: str = Field(description="Nome da pessoa.")
+    email: str | None = Field(
+        description="E-mail de acesso. `null` quando o vínculo não tem login."
+    )
+    role: Roles = Field(description="Papel do membro nesta organização.")
+    type: LinkType = Field(description="Tipo do vínculo com a organização.")
+    department: DepartmentType | None = Field(description="Setor do membro, se houver.")
+    updated_at: datetime | None = Field(
+        description="Última alteração do vínculo, se houve."
+    )
+
+    @classmethod
+    def from_model(
+        cls,
+        link: Link,
+        *,
+        name: str,
+        email: str | None,
+        department: DepartmentType | None,
+    ) -> "MemberResponse":
+        """Monta a saída a partir do vínculo e do que veio das outras tabelas.
+
+        Nome, e-mail e setor não moram no `Link`: quem chama já os leu (na mesma
+        consulta, em `LinkRepository.get_member`) e os passa aqui.
+        """
+        return cls(
+            link_id=link.id,
+            name=name,
+            email=email,
+            role=link.role,
+            type=link.type,
+            department=department,
+            updated_at=link.updated_at,
+        )

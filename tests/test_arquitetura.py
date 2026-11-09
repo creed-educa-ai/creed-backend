@@ -27,7 +27,13 @@ NOMES = [caminho.name for caminho in DOMINIOS]
 # outro domínio por JOIN, no repository — escrever fora do próprio domínio, nunca.
 # Formato: nome do domínio -> motivo. Exemplo de como preencher:
 #     "dashboards": "agrega respondentes e prismas; ver docstring do repository"
-LEITURA_ENTRE_DOMINIOS: dict[str, str] = {}
+LEITURA_ENTRE_DOMINIOS: dict[str, str] = {
+    "links": (
+        "le o membro (vinculo + nome do participante + e-mail do login + tipo do "
+        "setor) numa consulta so; grava so em links. Ver docstring do repository e "
+        "o adendo da CREED-6910 ao ADR-0004."
+    ),
+}
 
 # Exceção declarada: schemas.py pode reexportar um tipo de VALOR de
 # models.py (Enum — nunca model de tabela) para o router usar, em vez de
@@ -111,13 +117,16 @@ def test_service_nao_conhece_http_nem_orm(dominio: Path) -> None:
 
 @pytest.mark.parametrize("dominio", DOMINIOS, ids=NOMES)
 def test_router_nao_conhece_models_nem_orm(dominio: Path) -> None:
+    # Todo `router*.py`, não só `router.py`: domínio pode ter um segundo router
+    # (`questions/router_options.py`, `links/router_members.py`).
     proibidos = [
-        linha
-        for linha in _imports(_codigo(dominio / "router.py"))
+        f"{arquivo.name}: {linha}"
+        for arquivo in sorted(dominio.glob("router*.py"))
+        for linha in _imports(_codigo(arquivo))
         if ".models import" in linha or "sqlalchemy" in linha
     ]
     assert not proibidos, (
-        f"{dominio.name}/router.py conhece a tabela: {proibidos}. "
+        f"{dominio.name} tem router que conhece a tabela: {proibidos}. "
         "O mapeamento model -> schema é `de_model()`, em schemas.py."
     )
 
