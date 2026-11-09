@@ -58,6 +58,8 @@ def test_all_endpoints_have_method_summary_description_and_operation_id() -> Non
         ("/api/v1/participants/{participant_id}", "get"),
         ("/api/v1/questions", "post"),
         ("/api/v1/forms/{form_id}/questions", "get"),
+        ("/api/v1/questions/{question_id}/translations", "post"),
+        ("/api/v1/options/{option_id}/translations", "post"),
     }
 
     documented_operations = {
@@ -187,6 +189,17 @@ def test_success_error_and_bearer_authentication_responses_are_documented() -> N
     assert set(
         _operation(schema, "/api/v1/forms/{form_id}/questions", "get")["responses"]
     ) >= {"200", "401", "403", "404"}
+    # Tradução de pergunta e de alternativa (CREED-61): uma por idioma.
+    assert set(
+        _operation(schema, "/api/v1/questions/{question_id}/translations", "post")[
+            "responses"
+        ]
+    ) >= {"201", "401", "403", "404", "409", "422"}
+    assert set(
+        _operation(schema, "/api/v1/options/{option_id}/translations", "post")[
+            "responses"
+        ]
+    ) >= {"201", "401", "403", "404", "409", "422"}
     # Formulário e pergunta exigem login desde a CREED-47 (P-033).
     assert set(_operation(schema, "/api/v1/forms", "post")["responses"]) >= {
         "201",

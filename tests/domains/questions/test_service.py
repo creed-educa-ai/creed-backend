@@ -2,8 +2,8 @@
 
 Sem banco e sem HTTP: o repository e o `FormService` sao substituidos por
 dubles em memoria. O que se prova aqui e a regra de negocio — o formulario
-precisa existir, conflito de posicao repetida e que a secao pedida chega ate
-a camada de banco.
+precisa existir, conflito de posicao repetida, uma traducao por idioma e que a
+secao e o idioma pedidos chegam ate a camada de banco.
 
 ⚠️ Este teste NAO prova ordenacao nem filtro por secao de verdade: o duble
 filtra em memoria, sem rodar consulta nenhuma. Ordenacao e filtro reais sao
@@ -19,12 +19,25 @@ import pytest
 
 from app.domains.questions.models import (
     Question,
+    QuestionLang,
     QuestionOption,
+    QuestionOptionTranslation,
     QuestionSection,
+    QuestionTranslation,
     QuestionType,
 )
-from app.domains.questions.schemas import QuestionCreate, QuestionOptionCreate
-from app.domains.questions.service import QuestionOptionService, QuestionService
+from app.domains.questions.schemas import (
+    QuestionCreate,
+    QuestionOptionCreate,
+    QuestionOptionTranslationCreate,
+    QuestionTranslationCreate,
+)
+from app.domains.questions.service import (
+    QuestionOptionService,
+    QuestionOptionTranslationService,
+    QuestionService,
+    QuestionTranslationService,
+)
 from app.shared.enums import Dimension
 from app.shared.exceptions import (
     ConflictError,
@@ -46,6 +59,7 @@ class FakeQuestionRepository:
     ) -> None:
         self.itens: list[Question] = list(existentes or [])
         self.secao_pedida: QuestionSection | str | None = "nao chamado"
+        self.idioma_pedido: QuestionLang | str | None = "nao chamado"
         self.tipo_pedido: QuestionType | None = None
         self.recusar_insert = recusar_insert
 
@@ -62,9 +76,13 @@ class FakeQuestionRepository:
         return [q for q in self.itens if q.form_id == form_id]
 
     async def list_by_form(
-        self, form_id: uuid.UUID, section: QuestionSection | None = None
+        self,
+        form_id: uuid.UUID,
+        section: QuestionSection | None = None,
+        lang: QuestionLang | None = None,
     ) -> list[Question]:
         self.secao_pedida = section
+        self.idioma_pedido = lang
         return [q for q in self.itens if q.form_id == form_id]
 
     async def get_by_form_and_order(
@@ -332,6 +350,27 @@ class TestListarQuestionsDoFormulario:
         )
 
         assert repository.secao_pedida is None
+
+    async def test_repassa_o_idioma_pedido_para_o_repository(self) -> None:
+        """Carregar so a traducao do idioma e do repository; aqui, so o repasse."""
+        form_id = uuid.uuid4()
+        repository = FakeQuestionRepository([uma_question(form_id=form_id)])
+
+        await servico(repository).list_for_form(
+            form_id, None, QuestionLang.ES, role="gestor", organization_id=ORG
+        )
+
+        assert repository.idioma_pedido is QuestionLang.ES
+
+    async def test_sem_idioma_repassa_none(self) -> None:
+        form_id = uuid.uuid4()
+        repository = FakeQuestionRepository([uma_question(form_id=form_id)])
+
+        await servico(repository).list_for_form(
+            form_id, role="gestor", organization_id=ORG
+        )
+
+        assert repository.idioma_pedido is None
 
     async def test_formulario_sem_pergunta_devolve_lista_vazia(self) -> None:
         repository = FakeQuestionRepository()
@@ -615,3 +654,287 @@ class TestBuscarQuestionOption:
 
         with pytest.raises(NotFoundError, match=re.escape(str(option_id))):
             await option_service(FakeQuestionOptionRepository()).get(option_id)
+
+
+class FakeQuestionTranslationRepository:
+    """Duble do repository de traducoes de pergunta: guarda em lista."""
+
+    def __init__(
+        self,
+        existentes: list[QuestionTranslation] | None = None,
+        recusar_insert: bool = False,
+    ) -> None:
+        self.itens: list[QuestionTranslation] = list(existentes or [])
+        self.recusar_insert = recusar_insert
+
+    async def insert(
+        self, translation: QuestionTranslation
+    ) -> QuestionTranslation | None:
+        if self.recusar_insert:
+            return None
+        self.itens.append(translation)
+        return translation
+
+    async def get_by_question_and_lang(
+        self, question_id: uuid.UUID, lang: QuestionLang
+    ) -> QuestionTranslation | None:
+        return next(
+            (t for t in self.itens if t.question_id == question_id and t.lang == lang),
+            None,
+        )
+
+
+class FakeQuestionOptionTranslationRepository:
+    """Duble do repository de traducoes de alternativa: guarda em lista."""
+
+    def __init__(
+        self,
+        existentes: list[QuestionOptionTranslation] | None = None,
+        recusar_insert: bool = False,
+    ) -> None:
+        self.itens: list[QuestionOptionTranslation] = list(existentes or [])
+        self.recusar_insert = recusar_insert
+
+    async def insert(
+        self, translation: QuestionOptionTranslation
+    ) -> QuestionOptionTranslation | None:
+        if self.recusar_insert:
+            return None
+        self.itens.append(translation)
+        return translation
+
+    async def get_by_option_and_lang(
+        self, option_id: uuid.UUID, lang: QuestionLang
+    ) -> QuestionOptionTranslation | None:
+        return next(
+            (t for t in self.itens if t.option_id == option_id and t.lang == lang),
+            None,
+        )
+
+
+def servico_de_traducao(
+    traducoes: FakeQuestionTranslationRepository,
+    perguntas: list[Question] | None = None,
+    forms: FakeFormService | None = None,
+) -> QuestionTranslationService:
+    """Service real de traducao, com o `QuestionService` real por baixo."""
+    form_service = forms or FakeFormService()
+    question_service = QuestionService(
+        FakeQuestionRepository(perguntas),  # type: ignore[arg-type]
+        form_service,  # type: ignore[arg-type]
+    )
+    return QuestionTranslationService(
+        traducoes,  # type: ignore[arg-type]
+        question_service,
+        form_service,  # type: ignore[arg-type]
+    )
+
+
+def servico_de_traducao_de_alternativa(
+    traducoes: FakeQuestionOptionTranslationRepository,
+    alternativas: list[QuestionOption] | None = None,
+    perguntas: list[Question] | None = None,
+    forms: FakeFormService | None = None,
+) -> QuestionOptionTranslationService:
+    """Service real de traducao de alternativa, com os services reais por baixo."""
+    form_service = forms or FakeFormService()
+    question_service = QuestionService(
+        FakeQuestionRepository(perguntas),  # type: ignore[arg-type]
+        form_service,  # type: ignore[arg-type]
+    )
+    return QuestionOptionTranslationService(
+        traducoes,  # type: ignore[arg-type]
+        QuestionOptionService(
+            FakeQuestionOptionRepository(alternativas),  # type: ignore[arg-type]
+            question_service,
+            form_service,  # type: ignore[arg-type]
+        ),
+        question_service,
+        form_service,  # type: ignore[arg-type]
+    )
+
+
+class TestCriarTraducaoDePergunta:
+    async def test_persiste_a_traducao_do_payload(self) -> None:
+        question = uma_question()
+        traducoes = FakeQuestionTranslationRepository()
+
+        criada = await servico_de_traducao(traducoes, [question]).create(
+            question.id,
+            QuestionTranslationCreate(lang=QuestionLang.EN, text="Do you adapt well?"),
+            role="gestor",
+            organization_id=ORG,
+        )
+
+        assert criada.question_id == question.id
+        assert (criada.lang, criada.text) == (QuestionLang.EN, "Do you adapt well?")
+        assert traducoes.itens == [criada]
+
+    async def test_pergunta_inexistente_vira_not_found_sem_gravar(self) -> None:
+        traducoes = FakeQuestionTranslationRepository()
+        question_id = uuid.uuid4()
+
+        with pytest.raises(NotFoundError, match=re.escape(str(question_id))):
+            await servico_de_traducao(traducoes).create(
+                question_id,
+                QuestionTranslationCreate(lang=QuestionLang.EN, text="Text"),
+                role="gestor",
+                organization_id=ORG,
+            )
+
+        assert traducoes.itens == []
+
+    async def test_pergunta_de_outra_organizacao_vira_forbidden_sem_gravar(
+        self,
+    ) -> None:
+        question = uma_question()
+        traducoes = FakeQuestionTranslationRepository()
+
+        with pytest.raises(ForbiddenError):
+            await servico_de_traducao(
+                traducoes, [question], FakeFormService(proibido=True)
+            ).create(
+                question.id,
+                QuestionTranslationCreate(lang=QuestionLang.EN, text="Text"),
+                role="gestor",
+                organization_id=uuid.uuid4(),
+            )
+
+        assert traducoes.itens == []
+
+    async def test_idioma_ja_traduzido_vira_conflito_sem_gravar(self) -> None:
+        question = uma_question()
+        existente = QuestionTranslation(
+            question_id=question.id, lang=QuestionLang.EN, text="Text"
+        )
+        traducoes = FakeQuestionTranslationRepository([existente])
+
+        with pytest.raises(ConflictError, match=re.escape(str(question.id))):
+            await servico_de_traducao(traducoes, [question]).create(
+                question.id,
+                QuestionTranslationCreate(lang=QuestionLang.EN, text="Other text"),
+                role="gestor",
+                organization_id=ORG,
+            )
+
+        assert traducoes.itens == [existente]
+
+    async def test_corrida_na_gravacao_vira_conflito_sem_gravar(self) -> None:
+        question = uma_question()
+        traducoes = FakeQuestionTranslationRepository(recusar_insert=True)
+
+        with pytest.raises(ConflictError, match=re.escape(str(question.id))):
+            await servico_de_traducao(traducoes, [question]).create(
+                question.id,
+                QuestionTranslationCreate(lang=QuestionLang.EN, text="Text"),
+                role="gestor",
+                organization_id=ORG,
+            )
+
+        assert traducoes.itens == []
+
+    async def test_outro_idioma_na_mesma_pergunta_e_aceito(self) -> None:
+        question = uma_question()
+        existente = QuestionTranslation(
+            question_id=question.id, lang=QuestionLang.EN, text="Text"
+        )
+        traducoes = FakeQuestionTranslationRepository([existente])
+
+        criada = await servico_de_traducao(traducoes, [question]).create(
+            question.id,
+            QuestionTranslationCreate(lang=QuestionLang.ES, text="Texto"),
+            role="gestor",
+            organization_id=ORG,
+        )
+
+        assert traducoes.itens == [existente, criada]
+
+
+class TestCriarTraducaoDeAlternativa:
+    async def test_persiste_a_traducao_do_payload(self) -> None:
+        question = uma_question()
+        option = an_option(question_id=question.id)
+        traducoes = FakeQuestionOptionTranslationRepository()
+
+        criada = await servico_de_traducao_de_alternativa(
+            traducoes, [option], [question]
+        ).create(
+            option.id,
+            QuestionOptionTranslationCreate(lang=QuestionLang.ES, label="Sí"),
+            role="gestor",
+            organization_id=ORG,
+        )
+
+        assert criada.option_id == option.id
+        assert (criada.lang, criada.label) == (QuestionLang.ES, "Sí")
+        assert traducoes.itens == [criada]
+
+    async def test_alternativa_inexistente_vira_not_found_sem_gravar(self) -> None:
+        traducoes = FakeQuestionOptionTranslationRepository()
+        option_id = uuid.uuid4()
+
+        with pytest.raises(NotFoundError, match=re.escape(str(option_id))):
+            await servico_de_traducao_de_alternativa(traducoes).create(
+                option_id,
+                QuestionOptionTranslationCreate(lang=QuestionLang.EN, label="Yes"),
+                role="gestor",
+                organization_id=ORG,
+            )
+
+        assert traducoes.itens == []
+
+    async def test_alternativa_de_outra_organizacao_vira_forbidden_sem_gravar(
+        self,
+    ) -> None:
+        question = uma_question()
+        option = an_option(question_id=question.id)
+        traducoes = FakeQuestionOptionTranslationRepository()
+
+        with pytest.raises(ForbiddenError):
+            await servico_de_traducao_de_alternativa(
+                traducoes, [option], [question], FakeFormService(proibido=True)
+            ).create(
+                option.id,
+                QuestionOptionTranslationCreate(lang=QuestionLang.EN, label="Yes"),
+                role="gestor",
+                organization_id=uuid.uuid4(),
+            )
+
+        assert traducoes.itens == []
+
+    async def test_idioma_ja_traduzido_vira_conflito_sem_gravar(self) -> None:
+        question = uma_question()
+        option = an_option(question_id=question.id)
+        existente = QuestionOptionTranslation(
+            option_id=option.id, lang=QuestionLang.EN, label="Yes"
+        )
+        traducoes = FakeQuestionOptionTranslationRepository([existente])
+
+        with pytest.raises(ConflictError, match=re.escape(str(option.id))):
+            await servico_de_traducao_de_alternativa(
+                traducoes, [option], [question]
+            ).create(
+                option.id,
+                QuestionOptionTranslationCreate(lang=QuestionLang.EN, label="Yeah"),
+                role="gestor",
+                organization_id=ORG,
+            )
+
+        assert traducoes.itens == [existente]
+
+    async def test_corrida_na_gravacao_vira_conflito_sem_gravar(self) -> None:
+        question = uma_question()
+        option = an_option(question_id=question.id)
+        traducoes = FakeQuestionOptionTranslationRepository(recusar_insert=True)
+
+        with pytest.raises(ConflictError, match=re.escape(str(option.id))):
+            await servico_de_traducao_de_alternativa(
+                traducoes, [option], [question]
+            ).create(
+                option.id,
+                QuestionOptionTranslationCreate(lang=QuestionLang.EN, label="Yes"),
+                role="gestor",
+                organization_id=ORG,
+            )
+
+        assert traducoes.itens == []

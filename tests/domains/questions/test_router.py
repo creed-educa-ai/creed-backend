@@ -19,10 +19,26 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.domains.questions.dependencies import get_service
-from app.domains.questions.models import Question, QuestionSection, QuestionType
+from app.domains.questions.dependencies import (
+    get_option_translation_service,
+    get_service,
+    get_translation_service,
+)
+from app.domains.questions.models import (
+    Question,
+    QuestionLang,
+    QuestionOption,
+    QuestionOptionTranslation,
+    QuestionSection,
+    QuestionTranslation,
+    QuestionType,
+)
 from app.domains.questions.router import router
-from app.domains.questions.schemas import QuestionCreate
+from app.domains.questions.schemas import (
+    QuestionCreate,
+    QuestionOptionTranslationCreate,
+    QuestionTranslationCreate,
+)
 from app.domains.users.dependencies import get_service as get_user_service
 from app.domains.users.service import UserAccess
 from app.shared.exceptions import (
@@ -63,6 +79,7 @@ class _FakeQuestionService:
         self.formulario_inexistente = formulario_inexistente
         self.proibido = proibido
         self.quem_pediu: tuple[str, uuid.UUID] | None = None
+        self.idioma_pedido: QuestionLang | str | None = "nao chamado"
 
     async def create(
         self, request: QuestionCreate, *, role: str, organization_id: uuid.UUID
@@ -97,11 +114,13 @@ class _FakeQuestionService:
         self,
         form_id: uuid.UUID,
         section: QuestionSection | None = None,
+        lang: QuestionLang | None = None,
         *,
         role: str,
         organization_id: uuid.UUID,
     ) -> list[Question]:
         self.quem_pediu = (role, organization_id)
+        self.idioma_pedido = lang
         if self.proibido:
             raise ForbiddenError("Sem acesso a formulário de outra organização")
         if self.formulario_inexistente:
@@ -465,3 +484,345 @@ class TestGuarda:
 
         assert client.post("/questions", json=_payload()).status_code == 403
         assert client.get(f"/forms/{uuid.uuid4()}/questions").status_code == 403
+
+
+def _pergunta_com_alternativas(form_id: uuid.UUID) -> Question:
+    """Pergunta com tradução EN; das duas alternativas, só a primeira tem tradução."""
+    question_id = uuid.uuid4()
+    return Question(
+        id=question_id,
+        form_id=form_id,
+        text="Você se adapta bem?",
+        order_index=0,
+        type=QuestionType.OBJECTIVE,
+        section=QuestionSection.ASSESSMENT,
+        required=True,
+        dimensao=None,
+        prisma=None,
+        created_at=datetime(2026, 9, 22, tzinfo=UTC),
+        translations=[
+            QuestionTranslation(lang=QuestionLang.EN, text="Do you adapt well?")
+        ],
+        options=[
+            QuestionOption(
+                id=uuid.uuid4(),
+                question_id=question_id,
+                label="Sim",
+                value="sim",
+                order_index=0,
+                created_at=datetime(2026, 10, 14, tzinfo=UTC),
+                translations=[
+                    QuestionOptionTranslation(lang=QuestionLang.EN, label="Yes")
+                ],
+            ),
+            QuestionOption(
+                id=uuid.uuid4(),
+                question_id=question_id,
+                label="Não",
+                value="nao",
+                order_index=1,
+                created_at=datetime(2026, 10, 14, tzinfo=UTC),
+            ),
+        ],
+    )
+
+
+class TestListarPorIdioma:
+    def test_cada_pergunta_vem_com_as_alternativas(
+        self, app: FastAPI, client: TestClient
+    ) -> None:
+        form_id = uuid.uuid4()
+        _use_fake_service(
+            app, _FakeQuestionService([_pergunta_com_alternativas(form_id)])
+        )
+
+        response = client.get(f"/forms/{form_id}/questions")
+
+        assert response.status_code == 200
+        options = response.json()[0]["options"]
+        assert set(options[0]) == {
+            "id",
+            "question_id",
+            "label",
+            "value",
+            "order_index",
+            "created_at",
+        }
+        assert [option["value"] for option in options] == ["sim", "nao"]
+
+    @pytest.mark.parametrize("query", ["", "?lang=pt", "?lang=pt-BR"])
+    def test_sem_lang_ou_com_pt_devolve_o_pt(
+        self, app: FastAPI, client: TestClient, query: str
+    ) -> None:
+        form_id = uuid.uuid4()
+        service = _FakeQuestionService([_pergunta_com_alternativas(form_id)])
+        _use_fake_service(app, service)
+
+        response = client.get(f"/forms/{form_id}/questions{query}")
+
+        assert response.status_code == 200
+        body = response.json()[0]
+        assert body["text"] == "Você se adapta bem?"
+        assert [option["label"] for option in body["options"]] == ["Sim", "Não"]
+        assert service.idioma_pedido is None
+
+    def test_lang_en_traduz_e_cai_no_pt_onde_nao_ha_traducao(
+        self, app: FastAPI, client: TestClient
+    ) -> None:
+        form_id = uuid.uuid4()
+        service = _FakeQuestionService([_pergunta_com_alternativas(form_id)])
+        _use_fake_service(app, service)
+
+        response = client.get(f"/forms/{form_id}/questions?lang=en")
+
+        assert response.status_code == 200
+        body = response.json()[0]
+        assert body["text"] == "Do you adapt well?"
+        assert [option["label"] for option in body["options"]] == ["Yes", "Não"]
+        assert service.idioma_pedido is QuestionLang.EN
+
+    def test_lang_fora_da_lista_devolve_422(
+        self, app: FastAPI, client: TestClient
+    ) -> None:
+        _use_fake_service(app, _FakeQuestionService())
+
+        response = client.get(f"/forms/{uuid.uuid4()}/questions?lang=fr")
+
+        assert response.status_code == 422
+
+
+QUESTION_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
+OPTION_ID = uuid.UUID("00000000-0000-0000-0000-000000000003")
+
+
+class _FakeTranslationService:
+    """Duble da service de tradução de pergunta: devolve a tradução ou levanta o
+    erro configurado. A regra (idioma repetido, acesso) é provada em test_service.py.
+    """
+
+    def __init__(self, erro: Exception | None = None) -> None:
+        self.erro = erro
+        self.pedido: tuple[uuid.UUID, str, uuid.UUID] | None = None
+
+    async def create(
+        self,
+        question_id: uuid.UUID,
+        request: QuestionTranslationCreate,
+        *,
+        role: str,
+        organization_id: uuid.UUID,
+    ) -> QuestionTranslation:
+        self.pedido = (question_id, role, organization_id)
+        if self.erro is not None:
+            raise self.erro
+        return QuestionTranslation(
+            id=uuid.uuid4(),
+            question_id=question_id,
+            lang=request.lang,
+            text=request.text,
+            created_at=datetime(2026, 11, 7, tzinfo=UTC),
+        )
+
+
+class _FakeOptionTranslationService:
+    """Mesmo duble, para a tradução de alternativa."""
+
+    def __init__(self, erro: Exception | None = None) -> None:
+        self.erro = erro
+        self.pedido: tuple[uuid.UUID, str, uuid.UUID] | None = None
+
+    async def create(
+        self,
+        option_id: uuid.UUID,
+        request: QuestionOptionTranslationCreate,
+        *,
+        role: str,
+        organization_id: uuid.UUID,
+    ) -> QuestionOptionTranslation:
+        self.pedido = (option_id, role, organization_id)
+        if self.erro is not None:
+            raise self.erro
+        return QuestionOptionTranslation(
+            id=uuid.uuid4(),
+            option_id=option_id,
+            lang=request.lang,
+            label=request.label,
+            created_at=datetime(2026, 11, 7, tzinfo=UTC),
+        )
+
+
+def _use_fake_translation_service(app: FastAPI, fake: _FakeTranslationService) -> None:
+    app.dependency_overrides[get_translation_service] = lambda: fake
+
+
+def _use_fake_option_translation_service(
+    app: FastAPI, fake: _FakeOptionTranslationService
+) -> None:
+    app.dependency_overrides[get_option_translation_service] = lambda: fake
+
+
+_URL_TRADUCAO_PERGUNTA = f"/questions/{QUESTION_ID}/translations"
+_TRADUCAO_PERGUNTA = {"lang": "en", "text": "Do you adapt well?"}
+_URL_TRADUCAO_ALTERNATIVA = f"/options/{OPTION_ID}/translations"
+_TRADUCAO_ALTERNATIVA = {"lang": "es", "label": "Sí"}
+
+
+class TestTraduzirPergunta:
+    def test_com_corpo_valido_devolve_201_com_o_corpo_completo(
+        self, app: FastAPI, client: TestClient
+    ) -> None:
+        service = _FakeTranslationService()
+        _use_fake_translation_service(app, service)
+
+        response = client.post(_URL_TRADUCAO_PERGUNTA, json=_TRADUCAO_PERGUNTA)
+
+        assert response.status_code == 201
+        body = response.json()
+        assert set(body) == {"id", "question_id", "lang", "text", "created_at"}
+        assert (body["question_id"], body["lang"]) == (str(QUESTION_ID), "en")
+        assert service.pedido == (QUESTION_ID, "admin", ORGANIZATION_ID)
+
+    def test_pergunta_inexistente_devolve_404(
+        self, app: FastAPI, client: TestClient
+    ) -> None:
+        mensagem = f"Pergunta {QUESTION_ID} não encontrada"
+        _use_fake_translation_service(
+            app, _FakeTranslationService(NotFoundError(mensagem))
+        )
+
+        response = client.post(_URL_TRADUCAO_PERGUNTA, json=_TRADUCAO_PERGUNTA)
+
+        assert response.status_code == 404
+        assert response.json()["detail"] == mensagem
+
+    def test_idioma_ja_traduzido_devolve_409(
+        self, app: FastAPI, client: TestClient
+    ) -> None:
+        _use_fake_translation_service(
+            app, _FakeTranslationService(ConflictError("Já existe tradução 'en'"))
+        )
+
+        response = client.post(_URL_TRADUCAO_PERGUNTA, json=_TRADUCAO_PERGUNTA)
+
+        assert response.status_code == 409
+
+    def test_pergunta_de_outra_organizacao_devolve_403(
+        self, app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        autenticar_como(app, monkeypatch, "gestor")
+        _use_fake_translation_service(
+            app,
+            _FakeTranslationService(
+                ForbiddenError("Sem acesso a formulário de outra organização")
+            ),
+        )
+
+        response = client.post(_URL_TRADUCAO_PERGUNTA, json=_TRADUCAO_PERGUNTA)
+
+        assert response.status_code == 403
+
+    def test_com_lang_pt_devolve_422_sem_chamar_o_service(
+        self, app: FastAPI, client: TestClient
+    ) -> None:
+        """O PT vive em `Question.text`: não é tradução."""
+        service = _FakeTranslationService()
+        _use_fake_translation_service(app, service)
+
+        response = client.post(
+            _URL_TRADUCAO_PERGUNTA, json={**_TRADUCAO_PERGUNTA, "lang": "pt"}
+        )
+
+        assert response.status_code == 422
+        assert service.pedido is None
+
+    def test_respondente_devolve_403_pela_guarda(
+        self, app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        autenticar_como(app, monkeypatch, "respondente")
+        service = _FakeTranslationService()
+        _use_fake_translation_service(app, service)
+
+        response = client.post(_URL_TRADUCAO_PERGUNTA, json=_TRADUCAO_PERGUNTA)
+
+        assert response.status_code == 403
+        assert service.pedido is None
+
+
+class TestTraduzirAlternativa:
+    def test_com_corpo_valido_devolve_201_com_o_corpo_completo(
+        self, app: FastAPI, client: TestClient
+    ) -> None:
+        service = _FakeOptionTranslationService()
+        _use_fake_option_translation_service(app, service)
+
+        response = client.post(_URL_TRADUCAO_ALTERNATIVA, json=_TRADUCAO_ALTERNATIVA)
+
+        assert response.status_code == 201
+        body = response.json()
+        assert set(body) == {"id", "option_id", "lang", "label", "created_at"}
+        assert (body["option_id"], body["lang"]) == (str(OPTION_ID), "es")
+        assert service.pedido == (OPTION_ID, "admin", ORGANIZATION_ID)
+
+    def test_alternativa_inexistente_devolve_404(
+        self, app: FastAPI, client: TestClient
+    ) -> None:
+        mensagem = f"Alternativa {OPTION_ID} não encontrada"
+        _use_fake_option_translation_service(
+            app, _FakeOptionTranslationService(NotFoundError(mensagem))
+        )
+
+        response = client.post(_URL_TRADUCAO_ALTERNATIVA, json=_TRADUCAO_ALTERNATIVA)
+
+        assert response.status_code == 404
+        assert response.json()["detail"] == mensagem
+
+    def test_idioma_ja_traduzido_devolve_409(
+        self, app: FastAPI, client: TestClient
+    ) -> None:
+        _use_fake_option_translation_service(
+            app, _FakeOptionTranslationService(ConflictError("Já existe tradução 'es'"))
+        )
+
+        response = client.post(_URL_TRADUCAO_ALTERNATIVA, json=_TRADUCAO_ALTERNATIVA)
+
+        assert response.status_code == 409
+
+    def test_alternativa_de_outra_organizacao_devolve_403(
+        self, app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        autenticar_como(app, monkeypatch, "gestor")
+        _use_fake_option_translation_service(
+            app,
+            _FakeOptionTranslationService(
+                ForbiddenError("Sem acesso a formulário de outra organização")
+            ),
+        )
+
+        response = client.post(_URL_TRADUCAO_ALTERNATIVA, json=_TRADUCAO_ALTERNATIVA)
+
+        assert response.status_code == 403
+
+    def test_com_lang_pt_devolve_422_sem_chamar_o_service(
+        self, app: FastAPI, client: TestClient
+    ) -> None:
+        service = _FakeOptionTranslationService()
+        _use_fake_option_translation_service(app, service)
+
+        response = client.post(
+            _URL_TRADUCAO_ALTERNATIVA, json={**_TRADUCAO_ALTERNATIVA, "lang": "pt"}
+        )
+
+        assert response.status_code == 422
+        assert service.pedido is None
+
+    def test_respondente_devolve_403_pela_guarda(
+        self, app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        autenticar_como(app, monkeypatch, "respondente")
+        service = _FakeOptionTranslationService()
+        _use_fake_option_translation_service(app, service)
+
+        response = client.post(_URL_TRADUCAO_ALTERNATIVA, json=_TRADUCAO_ALTERNATIVA)
+
+        assert response.status_code == 403
+        assert service.pedido is None
