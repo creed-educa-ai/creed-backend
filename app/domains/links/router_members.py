@@ -6,6 +6,10 @@ recurso que a tela de membros enxerga. O dono continua sendo o domínio `links`:
 é o segundo router dele, como `questions/router_options.py` é o de `questions`. A
 listagem (M-2) e a exclusão (M-3) de membros entram neste mesmo arquivo.
 
+A exclusão delega ao `MemberRemovalService`, de `users`, e não ao `LinkService`: ela
+apaga também o login, e quem compõe com `users` sem import circular é o próprio
+`users` (ver a docstring de `users/service.py`).
+
 Camada fina de propósito: recebe, valida via Pydantic, delega ao service e devolve.
 Nenhuma regra de negócio aqui, e nenhum import de `models`.
 """
@@ -22,8 +26,14 @@ from app.domains.links.schemas import (
     MemberListItem,
     MemberResponse,
 )
+from app.domains.users.dependencies import MemberRemovalServiceDep
 from app.shared.authorization import AuthenticatedUser, require_role
-from app.shared.exceptions import ForbiddenError, NotFoundError
+from app.shared.exceptions import (
+    ConflictError,
+    ForbiddenError,
+    NotFoundError,
+    ServiceUnavailableError,
+)
 from app.shared.schemas import ErrorResponse, ValidationErrorResponse
 
 router = APIRouter(prefix="/organizations/{organization_id}/members", tags=["members"])
@@ -213,3 +223,98 @@ async def update_member_department(
         email=member.email,
         department=member.department,
     )
+
+
+# A exclusão usa o 401 da troca de setor; os outros têm motivo próprio.
+_DELETE_ERRORS: dict[int | str, dict[str, Any]] = {
+    status.HTTP_401_UNAUTHORIZED: _ERRORS[status.HTTP_401_UNAUTHORIZED],
+    status.HTTP_403_FORBIDDEN: {
+        "model": ErrorResponse,
+        "description": (
+            "Papel respondente, ou organização que não é a do próprio vínculo, para "
+            "o gestor e também para o admin (P-071). Conferido antes da busca: a "
+            "resposta não revela se o membro existe."
+        ),
+        "content": {
+            "application/json": {
+                "example": {"detail": "Sem acesso aos membros desta organização"}
+            }
+        },
+    },
+    status.HTTP_404_NOT_FOUND: _ERRORS[status.HTTP_404_NOT_FOUND],
+    status.HTTP_409_CONFLICT: {
+        "model": ErrorResponse,
+        "description": "O membro é quem está pedindo: ninguém exclui o próprio acesso.",
+        "content": {
+            "application/json": {
+                "example": {"detail": "Não é possível excluir o próprio acesso"}
+            }
+        },
+    },
+    status.HTTP_503_SERVICE_UNAVAILABLE: {
+        "model": ErrorResponse,
+        "description": (
+            "O Keycloak não respondeu ao apagar o login. Nada foi apagado no banco, e "
+            "a mesma chamada pode ser repetida."
+        ),
+        "content": {
+            "application/json": {
+                "example": {
+                    "detail": "Não foi possível remover o acesso agora. Tente de novo."
+                }
+            }
+        },
+    },
+}
+
+
+@router.delete(
+    "/{link_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Excluir um membro",
+    description=(
+        "Exclui o membro de vez, e não há como desfazer: as respostas dele, os "
+        "questionários feitos só para ele (os períodos individuais), o vínculo, o "
+        "login (no banco e no Keycloak) e, se a pessoa não tiver vínculo com outra "
+        "organização, o participante e os dados demográficos. Saem junto os insights "
+        "e os dashboards das respostas e do login (P-072). O gestor exclui na própria "
+        "organização, e o admin, na da CREED, que é a do vínculo dele (P-071). "
+        "Ninguém exclui a si mesmo."
+    ),
+    response_description="Membro excluído; a resposta não possui corpo.",
+    operation_id="delete_member",
+    responses=_DELETE_ERRORS,
+)
+async def delete_member(
+    organization_id: Annotated[
+        uuid.UUID,
+        Path(
+            description="Organização do membro.",
+            examples=["8f14e45f-ceea-467e-adde-3f81905dbc1c"],
+        ),
+    ],
+    link_id: Annotated[
+        uuid.UUID,
+        Path(
+            description="Vínculo do membro com a organização.",
+            examples=["d40b7a55-b9cc-4b78-ae5d-ab325fd655e2"],
+        ),
+    ],
+    service: MemberRemovalServiceDep,
+    user: ManagerDep,
+) -> None:
+    try:
+        await service.remove_member(
+            organization_id,
+            link_id,
+            own_organization_id=user.organization_uuid,
+            own_link_id=user.link_uuid,
+        )
+    except ForbiddenError as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, exc.message) from exc
+    except NotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, exc.message) from exc
+    except ConflictError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, exc.message) from exc
+    except ServiceUnavailableError as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, exc.message) from exc

@@ -62,7 +62,8 @@ COMPOE_COM_SERVICE_DE: dict[str, str] = {
     "links": (
         "confere participante, organizacao e setor pelo ParticipantService, "
         "OrganizationService e DepartmentService; escolhe o periodo do membro com "
-        "pick_period e period_status do forms.service"
+        "pick_period e period_status do forms.service; a exclusao de membro "
+        "(router_members.py) delega ao MemberRemovalService de users.dependencies"
     ),
     "organizacoes": "consulta documento pelo DocumentService",
     "participants": "consulta documento pelo DocumentService",
@@ -71,7 +72,12 @@ COMPOE_COM_SERVICE_DE: dict[str, str] = {
         "confere formulario, pergunta e alternativa pelo FormService, "
         "QuestionService e QuestionOptionService"
     ),
-    "users": "le o papel e a organizacao do vinculo pelo LinkService",
+    "users": (
+        "le o papel e a organizacao do vinculo pelo LinkService; a exclusao de membro "
+        "(M-3, MemberRemovalService) apaga pelo service de cada dono: forms, "
+        "questions, responses, insights, dashboards, links, demographics e "
+        "participants"
+    ),
 }
 
 SUBMODULOS_DE_COMPOSICAO = {"service", "dependencies"}

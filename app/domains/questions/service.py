@@ -108,6 +108,14 @@ class QuestionService:
         """
         return await self.repository.list_required(form_id)
 
+    async def delete_for_forms(self, form_ids: list[uuid.UUID]) -> None:
+        """Apaga as perguntas dos questionarios individuais na exclusao de membro (M-3).
+
+        Sem regra de acesso: quem chama ja conferiu quem pede. As respostas que
+        apontam para estas perguntas ja sairam antes.
+        """
+        await self.repository.delete_by_forms(form_ids)
+
     def is_descriptive(self, question: Question) -> bool:
         """Responde por `responses`, que nao pode importar `QuestionType`."""
         return question.type is QuestionType.DESCRIPTIVE

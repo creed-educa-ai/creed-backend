@@ -13,7 +13,7 @@ e o service.
 
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -83,6 +83,22 @@ class QuestionRepository:
             )
         )
         return result.scalar_one_or_none()
+
+    async def delete_by_forms(self, form_ids: list[uuid.UUID]) -> None:
+        """Apaga as perguntas dos formularios e, antes, as alternativas delas.
+
+        As duas tabelas sao deste dominio, entao a ordem mora aqui: a alternativa
+        aponta para a pergunta, e o banco recusaria apagar a pergunta primeiro.
+        """
+        if not form_ids:
+            return
+        questions_of_forms = select(Question.id).where(Question.form_id.in_(form_ids))
+        await self.db.execute(
+            delete(QuestionOption).where(
+                QuestionOption.question_id.in_(questions_of_forms)
+            )
+        )
+        await self.db.execute(delete(Question).where(Question.form_id.in_(form_ids)))
 
 
 class QuestionOptionRepository:

@@ -7,7 +7,7 @@ Agregação pesada é empurrada para o Postgres, nunca feita em memória.
 import uuid
 from datetime import datetime
 
-from sqlalchemy import or_, select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.forms.models import Form
@@ -70,3 +70,13 @@ class FormRepository:
         await self.db.flush()
         await self.db.refresh(form)
         return form
+
+    async def list_ids_by_link(self, link_id: uuid.UUID) -> list[uuid.UUID]:
+        """Os formulários feitos só para este vínculo, com ou sem datas."""
+        result = await self.db.execute(select(Form.id).where(Form.link_id == link_id))
+        return list(result.scalars().all())
+
+    async def delete_by_ids(self, form_ids: list[uuid.UUID]) -> None:
+        if not form_ids:
+            return
+        await self.db.execute(delete(Form).where(Form.id.in_(form_ids)))

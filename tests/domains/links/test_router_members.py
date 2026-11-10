@@ -1,4 +1,4 @@
-"""Testes de app/domains/links/router_members.py: o contrato HTTP da troca de setor.
+"""Testes de app/domains/links/router_members.py: o contrato HTTP das rotas de membros.
 
 `TestClient` com `dependency_overrides`, como em `test_router.py` deste domínio. O
 service é um dublê que devolve o membro ou levanta a exceção do service real: o que
@@ -20,10 +20,16 @@ from app.domains.links.models import Link, LinkType, Roles
 from app.domains.links.router_members import router
 from app.domains.links.schemas import MemberPeriod
 from app.domains.links.service import Member, MemberWithPeriod
+from app.domains.users.dependencies import get_member_removal_service
 from app.domains.users.dependencies import get_service as get_user_service
 from app.domains.users.service import UserAccess
 from app.shared.enums import DepartmentType
-from app.shared.exceptions import ForbiddenError, NotFoundError
+from app.shared.exceptions import (
+    ConflictError,
+    ForbiddenError,
+    NotFoundError,
+    ServiceUnavailableError,
+)
 
 ORG_ID = uuid.UUID("8f14e45f-ceea-467e-adde-3f81905dbc1c")
 LINK_ID = uuid.UUID("d40b7a55-b9cc-4b78-ae5d-ab325fd655e2")
@@ -399,6 +405,135 @@ def test_invalid_type_returns_422_without_calling_the_service(
 
     response = _client(monkeypatch, service).get(
         LIST_URL, params={"type": "vendedor"}, headers=AUTH
+    )
+
+    assert response.status_code == 422
+    assert service.calls == []
+
+
+# --- Exclusão de membro (M-3) ------------------------------------------------
+
+OWN_LINK_ID = uuid.UUID("3f2b8c1e-7a4d-4e9b-9c0a-5d6e7f8a9b0c")
+
+
+class _FakeRemovalService:
+    """Dublê do `MemberRemovalService`: guarda o que recebeu, ou levanta `error`."""
+
+    def __init__(self, error: Exception | None = None) -> None:
+        self.error = error
+        self.calls: list[dict[str, Any]] = []
+
+    async def remove_member(
+        self,
+        organization_id: uuid.UUID,
+        link_id: uuid.UUID,
+        *,
+        own_organization_id: uuid.UUID,
+        own_link_id: uuid.UUID,
+    ) -> None:
+        self.calls.append(
+            {
+                "organization_id": organization_id,
+                "link_id": link_id,
+                "own_organization_id": own_organization_id,
+                "own_link_id": own_link_id,
+            }
+        )
+        if self.error is not None:
+            raise self.error
+
+
+def _delete_client(
+    monkeypatch: pytest.MonkeyPatch,
+    removal_service: _FakeRemovalService,
+    role: str | None = "gestor",
+) -> TestClient:
+    app = FastAPI()
+    app.include_router(router, prefix="/api/v1")
+    app.dependency_overrides[get_member_removal_service] = lambda: removal_service
+    if role is not None:
+        _install_validate_token(monkeypatch, [role])
+        access = UserAccess(
+            id=uuid.uuid4(),
+            email="dev@creed.example.com",
+            role=role,
+            link_id=OWN_LINK_ID,
+            organization_id=ORG_ID,
+        )
+        app.dependency_overrides[get_user_service] = lambda: _FakeUserService(access)
+    return TestClient(app)
+
+
+@pytest.mark.parametrize("role", ["gestor", "admin"])
+def test_delete_returns_204_without_body(
+    monkeypatch: pytest.MonkeyPatch, role: str
+) -> None:
+    service = _FakeRemovalService()
+
+    response = _delete_client(monkeypatch, service, role=role).delete(URL, headers=AUTH)
+
+    assert response.status_code == 204
+    assert response.content == b""
+    # A organização e o vínculo de quem pede vêm da sessão, não do endereço.
+    assert service.calls == [
+        {
+            "organization_id": ORG_ID,
+            "link_id": LINK_ID,
+            "own_organization_id": ORG_ID,
+            "own_link_id": OWN_LINK_ID,
+        }
+    ]
+
+
+def test_delete_without_authorization_returns_401(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _FakeRemovalService()
+
+    response = _delete_client(monkeypatch, service, role=None).delete(URL)
+
+    assert response.status_code == 401
+    assert service.calls == []
+
+
+def test_delete_as_respondente_returns_403_without_calling_the_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _FakeRemovalService()
+
+    response = _delete_client(monkeypatch, service, role="respondente").delete(
+        URL, headers=AUTH
+    )
+
+    assert response.status_code == 403
+    assert service.calls == []
+
+
+@pytest.mark.parametrize(
+    ("error", "expected_status"),
+    [
+        (ForbiddenError("Sem acesso aos membros desta organização"), 403),
+        (NotFoundError(f"Membro {LINK_ID} não encontrado"), 404),
+        (ConflictError("Não é possível excluir o próprio acesso"), 409),
+        (ServiceUnavailableError("Não foi possível remover o acesso agora."), 503),
+    ],
+)
+def test_delete_translates_service_errors(
+    monkeypatch: pytest.MonkeyPatch, error: Exception, expected_status: int
+) -> None:
+    service = _FakeRemovalService(error=error)
+
+    response = _delete_client(monkeypatch, service).delete(URL, headers=AUTH)
+
+    assert response.status_code == expected_status
+    assert response.json() == {"detail": str(error)}
+
+
+def test_delete_link_id_not_uuid_returns_422(monkeypatch: pytest.MonkeyPatch) -> None:
+    service = _FakeRemovalService()
+
+    response = _delete_client(monkeypatch, service).delete(
+        f"/api/v1/organizations/{ORG_ID}/members/nao-e-uuid", headers=AUTH
     )
 
     assert response.status_code == 422
