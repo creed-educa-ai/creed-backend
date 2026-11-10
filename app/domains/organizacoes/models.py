@@ -3,8 +3,13 @@
 Organização é a instituição parceira à qual as pessoas se vinculam (`Link`,
 em `links/models.py`). O documento dela (CNPJ, NIPC, VAT) mora em `documents`,
 e quem aponta é a organização ([C3]): um documento por organização, no máximo.
+
+O status é um enum só da organização (`OrganizationStatus`), e não o `RecordStatus`
+de `user` e `participants`: "pendente" é o estado da empresa que se cadastrou e
+ainda não foi aprovada, e não pode virar valor válido de login nem de participante.
 """
 
+import enum
 import uuid
 from datetime import datetime
 
@@ -13,7 +18,18 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
-from app.shared.enums import RecordStatus
+
+
+class OrganizationStatus(enum.Enum):
+    """Tipo `organization_status` no banco, só de `organizations`.
+
+    No banco ficam os nomes (`PENDING`...), como no `recordstatus` e no `doc_type`:
+    o SQLAlchemy grava o nome do membro. A API mostra o valor (`pending`...).
+    """
+
+    PENDING = "pending"
+    ACTIVE = "active"
+    INACTIVE = "inactive"
 
 
 class Organization(Base):
@@ -36,9 +52,16 @@ class Organization(Base):
         ForeignKey("documents.id", name="fk_organizations_document_id_documents"),
         nullable=False,
     )
-    status: Mapped[RecordStatus] = mapped_column(
-        Enum(RecordStatus), nullable=False, default=RecordStatus.ACTIVE
+    status: Mapped[OrganizationStatus] = mapped_column(
+        Enum(OrganizationStatus, name="organization_status"),
+        nullable=False,
+        default=OrganizationStatus.ACTIVE,
     )
+    # Dados de contato do cadastro público: nulos nas organizações criadas pela
+    # administradora (`POST /organizacoes`), que não os pede.
+    email: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    contact_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    phone: Mapped[str | None] = mapped_column(String(30), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

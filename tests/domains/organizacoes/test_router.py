@@ -3,7 +3,8 @@
 A guarda roda de verdade: só o `validate_token` e o `UserService` são dublês, como
 em `tests/domains/forms/test_router.py`. A regra de organização do `gestor` é
 provada em `test_service.py`; aqui se prova a guarda de papel, a tradução das
-exceções do service em status HTTP e o formato da saída.
+exceções do service em status HTTP e o formato da saída, com o documento que
+o `with_documents` junta.
 """
 
 import uuid
@@ -15,9 +16,10 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.domains.organizacoes.dependencies import get_service
-from app.domains.organizacoes.models import Organization
+from app.domains.organizacoes.models import Organization, OrganizationStatus
 from app.domains.organizacoes.router import router
 from app.domains.organizacoes.schemas import OrganizationCreate, OrganizationUpdate
+from app.domains.organizacoes.service import OrganizationWithDocument
 from app.domains.users.dependencies import get_service as get_user_service
 from app.domains.users.service import UserAccess
 from app.shared.enums import RecordStatus
@@ -37,8 +39,24 @@ FAKE_ORGANIZATION = Organization(
     name="Organização Exemplo",
     address="Av. Ipiranga, 6681",
     document_id=DOCUMENT_ID,
-    status=RecordStatus.ACTIVE,
+    status=OrganizationStatus.ACTIVE,
+    email=None,
+    contact_name=None,
+    phone=None,
     created_at=datetime(2026, 10, 15, tzinfo=UTC),
+    updated_at=None,
+)
+
+PENDING_ORGANIZATION = Organization(
+    id=ORGANIZATION_ID,
+    name="Empresa Pendente",
+    address="[A informar]",
+    document_id=DOCUMENT_ID,
+    status=OrganizationStatus.PENDING,
+    email="gestora@empresa.com.br",
+    contact_name="Gestora Teste",
+    phone="51 99999-0000",
+    created_at=datetime(2026, 11, 10, tzinfo=UTC),
     updated_at=None,
 )
 
@@ -48,6 +66,10 @@ CHAVES_DA_SAIDA = {
     "address",
     "document_id",
     "status",
+    "email",
+    "contact_name",
+    "phone",
+    "document",
     "created_at",
     "updated_at",
 }
@@ -61,11 +83,19 @@ class _FakeService:
     """Dublê: devolve o que for configurado, sem reimplementar a regra.
 
     `erro` faz qualquer operação levantar aquela exceção, como o service real
-    faria. `chamadas` guarda o que o router passou, para conferir.
+    faria. `chamadas` guarda o que o router passou, para conferir. `organization`
+    é o que toda operação devolve. `with_documents` não entra em `chamadas`: ele
+    só junta o documento, e a saída já prova que o router passou por ele.
     """
 
-    def __init__(self, *, erro: DomainError | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        erro: DomainError | None = None,
+        organization: Organization = FAKE_ORGANIZATION,
+    ) -> None:
         self.erro = erro
+        self.organization = organization
         self.chamadas: list[tuple[str, Any]] = []
 
     def _talvez_falhar(self) -> None:
@@ -75,28 +105,40 @@ class _FakeService:
     async def create(self, request: OrganizationCreate) -> Organization:
         self.chamadas.append(("create", request))
         self._talvez_falhar()
-        return FAKE_ORGANIZATION
+        return self.organization
 
     async def get(
         self, organization_id: uuid.UUID, *, role: str, own_organization_id: uuid.UUID
     ) -> Organization:
         self.chamadas.append(("get", (organization_id, role, own_organization_id)))
         self._talvez_falhar()
-        return FAKE_ORGANIZATION
+        return self.organization
 
     async def list_page(
         self, pagina: int, tamanho_pagina: int
     ) -> tuple[list[Organization], int]:
         self.chamadas.append(("list_page", (pagina, tamanho_pagina)))
         self._talvez_falhar()
-        return [FAKE_ORGANIZATION], 1
+        return [self.organization], 1
+
+    async def with_documents(
+        self, organizations: list[Organization]
+    ) -> list[OrganizationWithDocument]:
+        return [
+            OrganizationWithDocument(
+                organization=organization,
+                document_type="cnpj",
+                document_value="12345678000190",
+            )
+            for organization in organizations
+        ]
 
     async def update(
         self, organization_id: uuid.UUID, request: OrganizationUpdate
     ) -> Organization:
         self.chamadas.append(("update", (organization_id, request)))
         self._talvez_falhar()
-        return FAKE_ORGANIZATION
+        return self.organization
 
 
 class _FakeUserService:
@@ -216,6 +258,8 @@ class TestCriar:
         assert set(body) == CHAVES_DA_SAIDA
         assert body["status"] == "active"
         assert body["document_id"] == str(DOCUMENT_ID)
+        assert (body["email"], body["contact_name"], body["phone"]) == (None, None, None)
+        assert body["document"] == {"type": "cnpj", "value": "12345678000190"}
 
     def test_documento_inexistente_devolve_422(
         self, app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
@@ -290,7 +334,24 @@ class TestListar:
         assert set(body) == {"itens", "total", "pagina", "tamanho_pagina"}
         assert (body["total"], body["pagina"], body["tamanho_pagina"]) == (1, 2, 10)
         assert set(body["itens"][0]) == CHAVES_DA_SAIDA
+        assert body["itens"][0]["document"] == {
+            "type": "cnpj",
+            "value": "12345678000190",
+        }
         assert service.chamadas == [("list_page", (2, 10))]
+
+    def test_pendente_vem_com_status_e_dados_de_contato(
+        self, app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        autenticar_como(app, monkeypatch, "admin")
+        usar_service(app, _FakeService(organization=PENDING_ORGANIZATION))
+
+        [item] = client.get(URL, headers=TOKEN).json()["itens"]
+
+        assert item["status"] == "pending"
+        assert item["email"] == "gestora@empresa.com.br"
+        assert item["contact_name"] == "Gestora Teste"
+        assert item["phone"] == "51 99999-0000"
 
     def test_sem_query_usa_a_primeira_pagina_com_50(
         self, app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
@@ -335,7 +396,10 @@ class TestConsultar:
         response = client.get(URL_DA_ORGANIZACAO, headers=TOKEN)
 
         assert response.status_code == 200
-        assert set(response.json()) == CHAVES_DA_SAIDA
+        body = response.json()
+        assert set(body) == CHAVES_DA_SAIDA
+        assert body["document"] == {"type": "cnpj", "value": "12345678000190"}
+        assert (body["email"], body["contact_name"], body["phone"]) == (None, None, None)
         assert service.chamadas == [("get", (ORGANIZATION_ID, role, ORGANIZATION_ID))]
 
     def test_respondente_devolve_403_pela_guarda(
@@ -397,6 +461,45 @@ class TestAlterar:
         response = client.patch(URL_DA_ORGANIZACAO, json={"name": "X"}, headers=TOKEN)
 
         assert response.status_code == 404
+
+    def test_status_numa_pendente_devolve_409(
+        self, app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        autenticar_como(app, monkeypatch, "admin")
+        erro = ConflictError("A empresa está pendente: aprove ou rejeite o cadastro")
+        usar_service(app, _FakeService(erro=erro))
+
+        response = client.patch(
+            URL_DA_ORGANIZACAO, json={"status": "active"}, headers=TOKEN
+        )
+
+        assert response.status_code == 409
+        assert response.json()["detail"] == erro.message
+
+    def test_so_o_nome_de_uma_pendente_devolve_200_ainda_pendente(
+        self, app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        autenticar_como(app, monkeypatch, "admin")
+        usar_service(app, _FakeService(organization=PENDING_ORGANIZATION))
+
+        response = client.patch(URL_DA_ORGANIZACAO, json={"name": "X"}, headers=TOKEN)
+
+        assert response.status_code == 200
+        assert response.json()["status"] == "pending"
+
+    def test_status_pending_devolve_422_sem_chegar_ao_service(
+        self, app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Só a aprovação e a rejeição tiram de `pending`; o PATCH nem aceita o valor."""
+        autenticar_como(app, monkeypatch, "admin")
+        service = usar_service(app, _FakeService())
+
+        response = client.patch(
+            URL_DA_ORGANIZACAO, json={"status": "pending"}, headers=TOKEN
+        )
+
+        assert response.status_code == 422
+        assert service.chamadas == []
 
     @pytest.mark.parametrize("campo", ["name", "address", "status"])
     def test_null_explicito_devolve_422_sem_chegar_ao_service(

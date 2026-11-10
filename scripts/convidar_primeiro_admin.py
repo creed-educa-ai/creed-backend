@@ -40,7 +40,7 @@ from app.domains.documents.repository import DocumentRepository
 from app.domains.documents.service import DocumentService
 from app.domains.links.repository import LinkRepository
 from app.domains.links.service import LinkService
-from app.domains.organizacoes.models import Organization
+from app.domains.organizacoes.models import Organization, OrganizationStatus
 from app.domains.organizacoes.repository import OrganizationRepository
 from app.domains.organizacoes.service import OrganizationService
 from app.domains.participants.repository import ParticipantRepository
@@ -48,7 +48,7 @@ from app.domains.participants.service import ParticipantService
 from app.domains.users.repository import UserRepository
 from app.domains.users.schemas import MemberInvite
 from app.domains.users.service import MemberService, UserService
-from app.shared.enums import RecordStatus, Roles
+from app.shared.enums import Roles
 from app.shared.exceptions import ConflictError, DomainError
 
 # 🟡 Premissa P-048 — o admin da plataforma tem o vínculo dele na organização da
@@ -156,7 +156,7 @@ async def _ensure_creed_organization(
                 name=CREED_ORGANIZATION_NAME,
                 address=CREED_ORGANIZATION_ADDRESS,
                 document_id=CREED_ORGANIZATION_DOCUMENT_ID,
-                status=RecordStatus.ACTIVE,
+                status=OrganizationStatus.ACTIVE,
             )
         )
         # `None`: o documento da CREED já está ligado a outra organização

@@ -1,23 +1,26 @@
 """Regra de negócio do domínio organizacoes (ADR-0004).
 
 Esta camada não conhece HTTP nem detalhes de ORM. Documento é de outro domínio:
-a pergunta "ele existe?" vai ao `DocumentService`, nunca ao model de `documents`
-— o mesmo caminho de `participants/service.py`.
+a pergunta "ele existe?" e a leitura do número vão ao `DocumentService`, nunca ao
+model de `documents` — o mesmo caminho de `participants/service.py`.
 
 Quem pode o quê (CREED-38):
 - `admin` cadastra, lista, lê e altera qualquer organização. Restringir cadastro,
   listagem e alteração a `admin` é do router (`require_role`).
 - `gestor` só lê a própria organização. Essa regra mora aqui, porque compara o
   recurso com quem pede (P-033, a mesma regra de `forms`).
+
+Uma organização `pending` (empresa que se cadastrou e ainda não foi aprovada) só
+sai desse estado pela aprovação ou pela rejeição: o PATCH não troca o status dela.
 """
 
 import uuid
+from dataclasses import dataclass
 
 from app.domains.documents.service import DocumentService
-from app.domains.organizacoes.models import Organization
+from app.domains.organizacoes.models import Organization, OrganizationStatus
 from app.domains.organizacoes.repository import OrganizationRepository
 from app.domains.organizacoes.schemas import OrganizationCreate, OrganizationUpdate
-from app.shared.enums import RecordStatus
 from app.shared.exceptions import (
     ConflictError,
     ForbiddenError,
@@ -26,6 +29,19 @@ from app.shared.exceptions import (
 )
 
 ADMIN = "admin"
+
+
+@dataclass
+class OrganizationWithDocument:
+    """Uma organização com o documento dela: o que toda resposta da API mostra.
+
+    `document_type` é o valor do `DocType` (`cpf`, `cnpj`...). O documento mora em
+    `documents`, e este domínio não importa o model de lá.
+    """
+
+    organization: Organization
+    document_type: str
+    document_value: str
 
 
 def _documento_em_uso(document_id: uuid.UUID) -> ConflictError:
@@ -50,7 +66,7 @@ class OrganizationService:
             name=request.name,
             address=request.address,
             document_id=request.document_id,
-            status=RecordStatus.ACTIVE,
+            status=OrganizationStatus.ACTIVE,
         )
         created = await self.repository.create(organization)
 
@@ -79,6 +95,40 @@ class OrganizationService:
 
         return organization
 
+    async def with_documents(
+        self, organizations: list[Organization]
+    ) -> list[OrganizationWithDocument]:
+        """Junta a cada organização o documento dela, na ordem recebida.
+
+        Uma chamada ao `DocumentService` para a lista inteira, qualquer que seja o
+        tamanho dela: uma página de organizações não vira uma consulta por linha.
+
+        Documento ausente levanta `RuntimeError` (500), e não é pulado nem trocado
+        por vazio: `document_id` é `NOT NULL` com chave estrangeira, então só falta
+        com o banco inconsistente, e esconder isso mostraria uma empresa sem
+        documento na tela da administradora.
+        """
+        document_ids = [organization.document_id for organization in organizations]
+        documents = await self.documents.list_by_ids(document_ids)
+        documents_by_id = {document.id: document for document in documents}
+
+        result: list[OrganizationWithDocument] = []
+        for organization in organizations:
+            document = documents_by_id.get(organization.document_id)
+            if document is None:
+                raise RuntimeError(
+                    f"Organização {organization.id} aponta para o documento "
+                    f"{organization.document_id}, que não existe"
+                )
+            result.append(
+                OrganizationWithDocument(
+                    organization=organization,
+                    document_type=document.type.value,
+                    document_value=document.value,
+                )
+            )
+        return result
+
     async def organization_exists(self, organization_id: uuid.UUID) -> bool:
         """Só "existe?", sem regra de acesso: é o que `links`, `department` e
         `forms` usam para conferir a organização que recebem."""
@@ -96,12 +146,29 @@ class OrganizationService:
     async def update(
         self, organization_id: uuid.UUID, request: OrganizationUpdate
     ) -> Organization:
-        """Altera só os campos enviados: o que não veio no PATCH fica como está."""
+        """Altera só os campos enviados: o que não veio no PATCH fica como está.
+
+        Numa organização `pending`, o corpo com `status` é recusado inteiro
+        (`ConflictError`), antes de qualquer campo mudar: ela só sai desse estado
+        pela aprovação ou pela rejeição. 🟡 Premissa P-075 — nome e endereço dela
+        continuam editáveis, que é como a administradora corrige o endereço.
+        """
         organization = await self.repository.get_by_id(organization_id)
         if organization is None:
             raise NotFoundError(f"Organização {organization_id} não encontrada")
 
-        for campo, valor in request.model_dump(exclude_unset=True).items():
+        changes = request.model_dump(exclude_unset=True)
+
+        if "status" in changes:
+            if organization.status is OrganizationStatus.PENDING:
+                raise ConflictError(
+                    "A empresa está pendente: aprove ou rejeite o cadastro"
+                )
+            # O PATCH recebe `RecordStatus` (`active`/`inactive`); a coluna é do
+            # enum da organização, que tem os mesmos valores e mais o `pending`.
+            changes["status"] = OrganizationStatus(changes["status"].value)
+
+        for campo, valor in changes.items():
             setattr(organization, campo, valor)
 
         return await self.repository.save(organization)

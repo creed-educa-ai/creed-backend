@@ -8,7 +8,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.domains.organizacoes.models import Organization
+from app.domains.organizacoes.models import Organization, OrganizationStatus
 from app.shared.enums import RecordStatus
 from app.shared.validators import sem_caractere_de_controle
 
@@ -33,6 +33,10 @@ class OrganizationUpdate(BaseModel):
 
     `document_id` fica de fora: trocar o documento de uma organização não está no
     contrato da CREED-38.
+
+    `status` é `RecordStatus`, e não `OrganizationStatus`, de propósito: o PATCH não
+    aceita `pending` (422). Tirar uma empresa de `pending` também não é do PATCH:
+    o service recusa (409), porque ela só sai desse estado aprovada ou rejeitada.
     """
 
     model_config = ConfigDict(str_strip_whitespace=True)
@@ -60,11 +64,17 @@ class OrganizationUpdate(BaseModel):
         return None if valor is None else sem_caractere_de_controle(valor)
 
 
+class OrganizationDocument(BaseModel):
+    """O documento da organização, como a tela da administradora mostra."""
+
+    type: str = Field(description="Tipo do documento: `cpf`, `cnpj`, `nipc`...")
+    value: str = Field(description="Número do documento, como está guardado.")
+
+
 class OrganizationResponse(BaseModel):
     """Representação de saída de uma organização."""
 
     model_config = ConfigDict(
-        from_attributes=True,
         json_schema_extra={
             "examples": [
                 {
@@ -72,7 +82,11 @@ class OrganizationResponse(BaseModel):
                     "name": "Organização Exemplo",
                     "address": "Av. Ipiranga, 6681, Porto Alegre - RS",
                     "document_id": "3b2f8c1a-6d4e-4f7a-9c5b-1e0d2a8f6b94",
-                    "status": "active",
+                    "status": "pending",
+                    "email": "gestora@empresa.com.br",
+                    "contact_name": "Gestora Exemplo",
+                    "phone": "51 99999-0000",
+                    "document": {"type": "cnpj", "value": "12345678000190"},
                     "created_at": "2026-10-15T14:30:00Z",
                     "updated_at": None,
                 }
@@ -84,13 +98,49 @@ class OrganizationResponse(BaseModel):
     name: str = Field(description="Nome da organização.")
     address: str = Field(description="Endereço, em texto livre (P-021).")
     document_id: uuid.UUID = Field(description="Documento da organização.")
-    status: RecordStatus = Field(description="Estado do cadastro da organização.")
+    status: OrganizationStatus = Field(
+        description=(
+            "Estado do cadastro. `pending` é a empresa que se cadastrou e ainda não "
+            "foi aprovada."
+        )
+    )
+    email: str | None = Field(
+        description="E-mail informado no cadastro; nulo se a organização não o tem."
+    )
+    contact_name: str | None = Field(
+        description="Nome do responsável informado no cadastro; nulo se não há."
+    )
+    phone: str | None = Field(
+        description="Telefone informado no cadastro; nulo se não há."
+    )
+    document: OrganizationDocument = Field(
+        description="Tipo e número do documento apontado por `document_id`."
+    )
     created_at: datetime = Field(description="Data e hora do cadastro.")
     updated_at: datetime | None = Field(
         description="Data e hora da última alteração; nulo se nunca foi alterada."
     )
 
     @classmethod
-    def de_model(cls, organization: Organization) -> "OrganizationResponse":
-        """Monta a saída a partir do model."""
-        return cls.model_validate(organization)
+    def de_model(
+        cls, organization: Organization, document_type: str, document_value: str
+    ) -> "OrganizationResponse":
+        """Monta a saída a partir do model e do documento dele.
+
+        O documento não vem de `organization`: mora em `documents`, e quem o lê é o
+        `OrganizationService.with_documents`. Este schema não importa o service, que
+        já importa este arquivo.
+        """
+        return cls(
+            id=organization.id,
+            name=organization.name,
+            address=organization.address,
+            document_id=organization.document_id,
+            status=organization.status,
+            email=organization.email,
+            contact_name=organization.contact_name,
+            phone=organization.phone,
+            document=OrganizationDocument(type=document_type, value=document_value),
+            created_at=organization.created_at,
+            updated_at=organization.updated_at,
+        )

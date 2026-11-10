@@ -22,7 +22,7 @@ import pytest
 
 from app.domains.links.models import Link
 from app.domains.links.service import LinkService
-from app.domains.organizacoes.models import Organization
+from app.domains.organizacoes.models import Organization, OrganizationStatus
 from app.domains.organizacoes.service import OrganizationService
 from app.domains.participants.models import Participant
 from app.domains.participants.service import ParticipantService
@@ -100,7 +100,7 @@ class FakeOrganizationRepository:
                 name="Organização Exemplo",
                 address="Av. Ipiranga, 6681, Porto Alegre",
                 document_id=uuid.uuid4(),
-                status=RecordStatus.ACTIVE,
+                status=OrganizationStatus.ACTIVE,
             )
             for organization_id in ids
         }
@@ -269,7 +269,7 @@ class TestAdmin:
         """
         scenario = Scenario()
         organization = scenario.organizations.items[OWN_ORGANIZATION_ID]
-        organization.status = RecordStatus.INACTIVE
+        organization.status = OrganizationStatus.INACTIVE
 
         await scenario.invite()
 
