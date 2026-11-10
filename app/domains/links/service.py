@@ -6,14 +6,29 @@ são de outros domínios: a pergunta "ele existe?" vai ao service dono de cada u
 """
 
 import uuid
+from dataclasses import dataclass
 
 from app.domains.department.service import DepartmentService
-from app.domains.links.models import Link
+from app.domains.links.models import Link, Roles
 from app.domains.links.repository import LinkRepository
 from app.domains.links.schemas import LinkCreate
 from app.domains.organizacoes.service import OrganizationService
 from app.domains.participants.service import ParticipantService
-from app.shared.exceptions import NotFoundError, ValidationError
+from app.shared.enums import DepartmentType
+from app.shared.exceptions import ForbiddenError, NotFoundError, ValidationError
+
+
+@dataclass
+class Member:
+    """Um vínculo visto com a pessoa: o que a tabela de membros mostra.
+
+    `email` é `None` quando o vínculo não tem login (criado sem convite).
+    """
+
+    link: Link
+    name: str
+    email: str | None
+    department: DepartmentType | None
 
 
 class LinkService:
@@ -82,3 +97,59 @@ class LinkService:
         (404 no cadastro de usuário, 401 no login — task 4 e 5).
         """
         return await self.repository.get_by_id(link_id)
+
+    async def update_member_department(
+        self,
+        organization_id: uuid.UUID,
+        link_id: uuid.UUID,
+        department: DepartmentType | None,
+        *,
+        role: str,
+        own_organization_id: uuid.UUID,
+    ) -> Member:
+        """Escolhe, troca ou tira (`None`) o setor de um membro da organização.
+
+        `role` e `own_organization_id` são de quem pede. A ordem de conferência é
+        acesso (403), depois vínculo (404): quem não pode mexer na organização
+        recebe 403 mesmo para um vínculo que não existe, e a resposta não revela
+        quais vínculos existem (mesma regra de `OrganizationService.get`).
+
+        O setor da empresa é criado na hora se ela ainda não tem aquele tipo
+        (`DepartmentService.get_or_create`). Não há conferência de organização
+        inexistente: o vínculo só é achado se for dela, então organização
+        inexistente já cai no 404.
+        """
+        self._check_can_manage_members(
+            organization_id, role=role, own_organization_id=own_organization_id
+        )
+
+        found = await self.repository.get_member(organization_id, link_id)
+        if found is None:
+            raise NotFoundError(
+                f"Membro {link_id} não encontrado na organização {organization_id}"
+            )
+        link, name, email, _old_department = found
+
+        if department is None:
+            link.department_id = None
+        else:
+            company_department = await self.departments.get_or_create(
+                organization_id, department
+            )
+            link.department_id = company_department.id
+
+        await self.repository.save(link)
+        return Member(link=link, name=name, email=email, department=department)
+
+    def _check_can_manage_members(
+        self, organization_id: uuid.UUID, *, role: str, own_organization_id: uuid.UUID
+    ) -> None:
+        """🟡 Premissa P-066: o `admin` mexe nos membros de qualquer organização;
+        o `gestor`, só nos da organização do próprio vínculo; o `respondente`, em
+        nenhuma. Confirmar na próxima reunião.
+        """
+        if role == Roles.ADMIN.value:
+            return
+        if role == Roles.GESTOR.value and organization_id == own_organization_id:
+            return
+        raise ForbiddenError("Sem acesso aos membros desta organização")

@@ -85,5 +85,5 @@ class Link(Base):
     )
 
     updated_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
+        DateTime(timezone=True), onupdate=func.now(), nullable=True
     )

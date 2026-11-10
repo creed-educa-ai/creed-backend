@@ -18,6 +18,7 @@ from app.domains.department.router import router as department_router
 from app.domains.forms.router import router as forms_router
 from app.domains.forms.router_periods import router as periods_router
 from app.domains.links.router import router as links_router
+from app.domains.links.router_members import router as link_members_router
 from app.domains.organizacoes.router import router as organizacoes_router
 from app.domains.participants.router import router as participants_router
 from app.domains.prismas.router import router as prismas_router
@@ -59,6 +60,10 @@ OPENAPI_TAGS = [
     {
         "name": "links",
         "description": "Criação do vínculo entre um participante e uma organização.",
+    },
+    {
+        "name": "members",
+        "description": "Membros de uma organização e o setor de cada um.",
     },
     {
         "name": "participants",
@@ -155,6 +160,7 @@ for _router in (
     relatorios_router,
     user_router,
     links_router,
+    link_members_router,
     participants_router,
     forms_router,
     periods_router,
