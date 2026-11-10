@@ -16,14 +16,14 @@ from fastapi.testclient import TestClient
 
 from app.domains.forms.schemas import PeriodStatus
 from app.domains.links.dependencies import get_service as get_link_service
-from app.domains.links.models import Link, LinkType, Roles
+from app.domains.links.models import Link
 from app.domains.links.router_members import router
 from app.domains.links.schemas import MemberPeriod
 from app.domains.links.service import Member, MemberWithPeriod
 from app.domains.users.dependencies import get_member_removal_service
 from app.domains.users.dependencies import get_service as get_user_service
 from app.domains.users.service import UserAccess
-from app.shared.enums import DepartmentType
+from app.shared.enums import DepartmentType, LinkType, Roles
 from app.shared.exceptions import (
     ConflictError,
     ForbiddenError,

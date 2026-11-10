@@ -16,10 +16,10 @@ from datetime import UTC, datetime
 
 import pytest
 
-from app.domains.links.models import Link, LinkType, Roles
+from app.domains.links.models import Link
 from app.domains.users.models import User
 from app.domains.users.service import MemberRemovalService
-from app.shared.enums import RecordStatus
+from app.shared.enums import LinkType, RecordStatus, Roles
 from app.shared.exceptions import (
     ConflictError,
     ForbiddenError,

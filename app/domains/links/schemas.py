@@ -13,8 +13,8 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.domains.forms.schemas import PeriodStatus
-from app.domains.links.models import Link, LinkType, Roles
-from app.shared.enums import DepartmentType
+from app.domains.links.models import Link
+from app.shared.enums import DepartmentType, LinkType, Roles
 
 # Reexporta `LinkType`: o filtro `?type=` da lista de membros (router_members.py)
 # precisa do tipo, e a rota não pode importar de models.py.

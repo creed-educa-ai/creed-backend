@@ -26,8 +26,9 @@ class FakeDemographicRepository:
         return self.demographic
 
     async def save(self, demographic: Demographic) -> Demographic:
+        # Sem flush, o id ainda é None; o mypy lê o Mapped[uuid.UUID] como preenchido.
         if demographic.id is None:
-            demographic.id = uuid.uuid4()
+            demographic.id = uuid.uuid4()  # type: ignore[unreachable]
             demographic.created_at = datetime(2026, 11, 4, tzinfo=UTC)
             demographic.updated_at = None
         self.demographic = demographic

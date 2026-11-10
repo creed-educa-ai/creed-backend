@@ -10,10 +10,11 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.domains.department.dependencies import get_service
-from app.domains.department.models import Department, DepartmentType
+from app.domains.department.models import Department
 from app.domains.department.router import router
 from app.domains.users.dependencies import get_service as get_user_service
 from app.domains.users.service import UserAccess
+from app.shared.enums import DepartmentType
 from app.shared.exceptions import NotFoundError, ValidationError
 
 TOKEN = {"Authorization": "Bearer valido"}

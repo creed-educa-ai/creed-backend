@@ -23,11 +23,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.department.models import Department
 from app.domains.forms.models import Form
-from app.domains.links.models import Link, LinkType
+from app.domains.links.models import Link
 from app.domains.participants.models import Participant
 from app.domains.responses.models import FormResponse, FormResponseStatus
 from app.domains.users.models import User
-from app.shared.enums import DepartmentType
+from app.shared.enums import DepartmentType, LinkType
 
 MemberRow = tuple[Link, str, str | None, DepartmentType | None]
 """Vínculo, nome do participante, e-mail do login (ou `None`) e tipo do setor."""

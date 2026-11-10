@@ -4,9 +4,10 @@ import uuid
 
 import pytest
 
-from app.domains.department.models import Department, DepartmentType
+from app.domains.department.models import Department
 from app.domains.department.schemas import DepartmentCreate
 from app.domains.department.service import DepartmentService
+from app.shared.enums import DepartmentType
 from app.shared.exceptions import NotFoundError, ValidationError
 
 

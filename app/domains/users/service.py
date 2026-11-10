@@ -28,15 +28,16 @@ from app.domains.demographics.service import DemographicService
 from app.domains.forms.service import FormService
 from app.domains.insights.service import InsightService
 from app.domains.links.service import LinkService
+from app.domains.organizacoes.service import OrganizationService
 from app.domains.participants.service import ParticipantService
 from app.domains.questions.service import QuestionService
 from app.domains.responses.service import FormResponseService
 from app.domains.users.models import User
 from app.domains.users.repository import UserRepository
-from app.domains.users.schemas import UserCreate
+from app.domains.users.schemas import MemberInvite, UserCreate
 from app.external_services.keycloak import admin as keycloak_admin
 from app.external_services.keycloak.client import KeycloakUnavailableError
-from app.shared.enums import RecordStatus
+from app.shared.enums import RecordStatus, Roles
 from app.shared.exceptions import (
     ConflictError,
     ForbiddenError,
@@ -48,6 +49,10 @@ logger = logging.getLogger(__name__)
 
 _CREATE_UNAVAILABLE = "Não foi possível criar o acesso agora. Tente de novo."
 _DELETE_UNAVAILABLE = "Não foi possível remover o acesso agora. Tente de novo."
+_INVITATION_UNAVAILABLE = "Não foi possível reenviar o convite agora. Tente de novo."
+_RESET_EMAIL_UNAVAILABLE = (
+    "Não foi possível enviar o e-mail de redefinição agora. Tente de novo."
+)
 
 
 @dataclass
@@ -233,6 +238,62 @@ class UserService:
         except KeycloakUnavailableError as exc:
             raise ServiceUnavailableError(_DELETE_UNAVAILABLE) from exc
 
+    async def resend_invitation_service(
+        self, user_id: uuid.UUID, *, role: str, own_organization_id: uuid.UUID
+    ) -> None:
+        """Manda de novo o e-mail do convite.
+
+        `role` e `own_organization_id` são de quem pede. É o mesmo e-mail do convite e
+        da redefinição de senha: para quem já definiu a senha, o link vira uma
+        redefinição, e isso é aceito (spec, D10).
+        """
+        user = await self.repository.get_by_id(user_id)
+        not_found_message = f"Usuário {user_id} não encontrado"
+
+        if user is None:
+            raise NotFoundError(not_found_message)
+
+        # 🟡 Premissa P-045 — o gestor reenvia só para quem é da organização dele.
+        # Usuário de outra organização é 404, como o inexistente, e com a mesma
+        # mensagem: dizer "existe, mas não é seu" vaza cadastro alheio (decisão 4 do
+        # contrato da CREED-23). A organização é a do vínculo do usuário.
+        # 🟡 Premissa P-058 — o reenvio não olha o papel nem o status do acesso.
+        if role != Roles.ADMIN.value:
+            link = await self.links.get_link_by_id_service(user.link_id)
+            if link is None or link.organization_id != own_organization_id:
+                raise NotFoundError(not_found_message)
+
+        try:
+            await keycloak_admin.send_update_password_email(user.keycloak_id)
+        except KeycloakUnavailableError as exc:
+            raise ServiceUnavailableError(_INVITATION_UNAVAILABLE) from exc
+
+    async def send_password_reset_service(self, email: str) -> None:
+        """Manda o e-mail de redefinição de senha, se o e-mail tem acesso ativo.
+
+        Para e-mail sem acesso, ou de acesso inativo, não manda nada e não levanta
+        erro: a resposta da rota (status, corpo e cabeçalhos) é a mesma para qualquer
+        e-mail válido. O tempo de resposta não é: com acesso, o service chama o
+        Keycloak e o SMTP; sem acesso, só consulta o banco. Por isso não é a regra do
+        login, que chama o Keycloak nos dois caminhos. O risco de enumeração pelo
+        tempo foi aceito pelo responsável técnico em 2026-10-29; a mitigação futura é
+        mandar o e-mail fora da requisição.
+        """
+        # O e-mail chega como a pessoa digitou ("Pessoa@..."), e o banco o guarda em
+        # minúsculas desde o cadastro. A comparação do repository é exata.
+        user = await self.repository.get_user_by_email(email.lower())
+
+        if user is None or user.status is not RecordStatus.ACTIVE:
+            return
+
+        try:
+            await keycloak_admin.send_update_password_email(user.keycloak_id)
+        except KeycloakUnavailableError as exc:
+            # Só acontece para e-mail com acesso, e só enquanto o Keycloak ou o SMTP
+            # estão fora: nessa janela o 503 revela o cadastro, e a spec aceita isso
+            # (Riscos). Fora dela, a resposta não revela; o tempo, sim (docstring).
+            raise ServiceUnavailableError(_RESET_EMAIL_UNAVAILABLE) from exc
+
 
 def _listed(keycloak_ids: list[uuid.UUID]) -> str:
     """Os ids como texto, prontos para copiar do log para o console do Keycloak."""
@@ -373,3 +434,66 @@ class MemberRemovalService:
                 )
                 raise
             removed.append(keycloak_id)
+
+
+class MemberService:
+    """O convite de membro: participante, vínculo e acesso numa chamada (D8).
+
+    Segunda classe deste arquivo, como o `QuestionOptionService`, e não métodos no
+    `UserService`: a guarda de toda rota protegida monta o `UserService`, e ele
+    passaria a montar participante e organização a cada requisição.
+
+    Compõe os donos pelo service de cada um. O `users` não monta `ParticipantCreate`
+    nem `LinkCreate`: quem monta são `create_member_participant` e
+    `create_member_link`, nos domínios donos (`tests/test_arquitetura.py`).
+    """
+
+    def __init__(
+        self,
+        users: UserService,
+        participants: ParticipantService,
+        links: LinkService,
+        organizations: OrganizationService,
+    ) -> None:
+        self.users = users
+        self.participants = participants
+        self.links = links
+        self.organizations = organizations
+
+    async def invite_member_service(
+        self,
+        organization_id: uuid.UUID,
+        request: MemberInvite,
+        *,
+        role: str,
+        own_organization_id: uuid.UUID,
+    ) -> CreatedUser:
+        """Cria participante, vínculo e acesso, e manda o convite. Tudo ou nada.
+
+        `role` e `own_organization_id` são de quem pede. Participante e vínculo são
+        gravados (flush) antes do acesso, porque o acesso precisa do id do vínculo.
+        Se o acesso falha (e-mail repetido, Keycloak ou SMTP fora do ar), o erro sobe
+        até o `get_db`, que desfaz os dois junto com o resto da requisição. A
+        compensação no Keycloak já é do `create_user_service` (D7).
+        """
+        # Organização alheia é 403 antes de 404, para não revelar quais existem
+        # (P-033). Quem compara é o dono da organização.
+        # 🟡 Premissa P-057 — organização inativa também recebe convite.
+        await self.organizations.get(
+            organization_id, role=role, own_organization_id=own_organization_id
+        )
+
+        # 🟡 Premissa P-045 — o gestor convida só como gestor ou respondente.
+        if role != Roles.ADMIN.value and request.role is Roles.ADMIN:
+            raise ForbiddenError("Só o admin convida com o papel admin")
+
+        participant = await self.participants.create_member_participant(request.name)
+        link = await self.links.create_member_link(
+            organization_id, participant.id, request.role, request.type
+        )
+
+        # O e-mail vai como veio: quem compara e grava em minúsculas é o
+        # `create_user_service`.
+        return await self.users.create_user_service(
+            UserCreate(name=request.name, email=request.email, link_id=link.id)
+        )

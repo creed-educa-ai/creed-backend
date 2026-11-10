@@ -50,6 +50,17 @@ class ParticipantService:
 
         return created
 
+    async def create_member_participant(self, name: str) -> Participant:
+        """O participante do convite de membro (CREED-23.8, D8): só o nome.
+
+        Existe para o `users` não montar `ParticipantCreate`, que é schema deste
+        domínio (`tests/test_arquitetura.py`). Sem documento, o cadastro não tem o que
+        conferir nem com quem conflitar.
+
+        🟡 Premissa P-046 — o nome vem de quem convida, o mesmo que vai para o usuário.
+        """
+        return await self.create_participant(ParticipantCreate(name=name))
+
     async def get_participant(self, participant_id: uuid.UUID) -> Participant:
         participant = await self.repository.get_by_id(participant_id)
 

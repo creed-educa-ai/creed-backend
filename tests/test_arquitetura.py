@@ -73,7 +73,10 @@ COMPOE_COM_SERVICE_DE: dict[str, str] = {
         "QuestionService e QuestionOptionService"
     ),
     "users": (
-        "le o papel e a organizacao do vinculo pelo LinkService; a exclusao de membro "
+        "le o papel e a organizacao do vinculo pelo LinkService; no convite de "
+        "membro, cria participante e vinculo pelo ParticipantService e pelo "
+        "LinkService e confere a organizacao pelo OrganizationService; a "
+        "exclusao de membro "
         "(M-3, MemberRemovalService) apaga pelo service de cada dono: forms, "
         "questions, responses, insights, dashboards, links, demographics e "
         "participants"

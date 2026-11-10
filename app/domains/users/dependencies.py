@@ -14,11 +14,14 @@ from app.domains.demographics.dependencies import ServiceDep as DemographicServi
 from app.domains.forms.dependencies import ServiceDep as FormServiceDep
 from app.domains.insights.dependencies import ServiceDep as InsightServiceDep
 from app.domains.links.dependencies import ServiceDep as LinkServiceDep
+from app.domains.organizacoes.dependencies import (
+    ServiceDep as OrganizationServiceDep,
+)
 from app.domains.participants.dependencies import ServiceDep as ParticipantServiceDep
 from app.domains.questions.dependencies import ServiceDep as QuestionServiceDep
 from app.domains.responses.dependencies import ServiceDep as FormResponseServiceDep
 from app.domains.users.repository import UserRepository
-from app.domains.users.service import MemberRemovalService, UserService
+from app.domains.users.service import MemberRemovalService, MemberService, UserService
 
 
 def get_repository(
@@ -64,3 +67,15 @@ def get_member_removal_service(
 MemberRemovalServiceDep = Annotated[
     MemberRemovalService, Depends(get_member_removal_service)
 ]
+
+
+def get_member_service(
+    users: Annotated[UserService, Depends(get_service)],
+    participants: ParticipantServiceDep,
+    links: LinkServiceDep,
+    organizations: OrganizationServiceDep,
+) -> MemberService:
+    return MemberService(users, participants, links, organizations)
+
+
+MemberServiceDep = Annotated[MemberService, Depends(get_member_service)]

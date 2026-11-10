@@ -14,10 +14,10 @@ import pytest
 
 from app.domains.forms.models import Form, FormStatus
 from app.domains.forms.schemas import PeriodStatus
-from app.domains.links.models import Link, LinkType, Roles
+from app.domains.links.models import Link
 from app.domains.links.schemas import MemberListItem, MemberPeriod
 from app.domains.links.service import LinkService, MemberWithPeriod
-from app.shared.enums import DepartmentType
+from app.shared.enums import DepartmentType, LinkType, Roles
 from app.shared.exceptions import ForbiddenError, NotFoundError
 
 ORGANIZATION = uuid.uuid4()

@@ -12,11 +12,16 @@ from fastapi import APIRouter, Depends, HTTPException, Path, status
 
 from app.domains.users.dependencies import ServiceDep
 from app.domains.users.schemas import UserCreate, UserResponse
-from app.shared.authorization import require_role
+from app.shared.authorization import AuthenticatedUser, require_role
 from app.shared.exceptions import ConflictError, NotFoundError, ServiceUnavailableError
 from app.shared.schemas import ErrorResponse
 
 router = APIRouter(prefix="/users", tags=["users"])
+
+# 🟡 Premissa P-045 — quem reenvia segue a regra de quem convida: o respondente não
+# reenvia. O recorte do gestor (organização) é do service, porque compara o usuário
+# com quem pede.
+InviterDep = Annotated[AuthenticatedUser, Depends(require_role("admin", "gestor"))]
 
 
 @router.post(
@@ -187,6 +192,88 @@ async def delete_user(
 ) -> None:
     try:
         await service.delete_user_service(user_id)
+    except NotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, exc.message) from exc
+    except ServiceUnavailableError as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, exc.message) from exc
+
+
+@router.post(
+    "/{user_id}/invitation",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Reenviar convite",
+    description=(
+        "Envia de novo o e-mail de convite, com um link novo para a pessoa definir "
+        "a senha. É o mesmo e-mail da redefinição de senha: para quem já definiu a "
+        "senha, o link serve para trocá-la. Exige o papel admin ou gestor: o admin "
+        "reenvia para qualquer usuário; o gestor, só para quem é da organização do "
+        "próprio vínculo. Usuário de outra organização responde como inexistente."
+    ),
+    response_description="Convite reenviado; a resposta não possui corpo.",
+    operation_id="resend_invitation",
+    responses={
+        status.HTTP_401_UNAUTHORIZED: {
+            "model": ErrorResponse,
+            "description": "Token ausente, inválido ou expirado.",
+            "content": {"application/json": {"example": {"detail": "Não autenticado"}}},
+        },
+        status.HTTP_403_FORBIDDEN: {
+            "model": ErrorResponse,
+            "description": "O usuário autenticado não tem o papel admin nem gestor.",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Cargo insuficiente para acessar"}
+                }
+            },
+        },
+        status.HTTP_404_NOT_FOUND: {
+            "model": ErrorResponse,
+            "description": (
+                "Usuário não encontrado, ou, para o gestor, de outra organização."
+            ),
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": (
+                            "Usuário d40b7a55-b9cc-4b78-ae5d-ab325fd655e2 não encontrado"
+                        )
+                    }
+                }
+            },
+        },
+        status.HTTP_503_SERVICE_UNAVAILABLE: {
+            "model": ErrorResponse,
+            "description": (
+                "O provedor de identidade ou o envio de e-mail não respondeu. Se o "
+                "provedor demorar, o e-mail pode ter saído mesmo assim."
+            ),
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": (
+                            "Não foi possível reenviar o convite agora. Tente de novo."
+                        )
+                    }
+                }
+            },
+        },
+    },
+)
+async def resend_invitation(
+    user_id: Annotated[
+        uuid.UUID,
+        Path(
+            description="Identificador do usuário que recebe o convite de novo.",
+            examples=["d40b7a55-b9cc-4b78-ae5d-ab325fd655e2"],
+        ),
+    ],
+    service: ServiceDep,
+    user: InviterDep,
+) -> None:
+    try:
+        await service.resend_invitation_service(
+            user_id, role=user.role, own_organization_id=user.organization_uuid
+        )
     except NotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, exc.message) from exc
     except ServiceUnavailableError as exc:

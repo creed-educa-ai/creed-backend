@@ -13,10 +13,10 @@ import pytest
 from pydantic import ValidationError
 
 from app.domains.department.models import Department
-from app.domains.links.models import Link, LinkType, Roles
+from app.domains.links.models import Link
 from app.domains.links.schemas import MemberDepartmentUpdate, MemberResponse
 from app.domains.links.service import LinkService
-from app.shared.enums import DepartmentType
+from app.shared.enums import DepartmentType, LinkType, Roles
 from app.shared.exceptions import ForbiddenError, NotFoundError
 
 
