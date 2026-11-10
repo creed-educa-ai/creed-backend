@@ -68,3 +68,12 @@ class ParticipantService:
             raise NotFoundError(f"Participante {participant_id} não encontrado")
 
         return participant
+
+    async def delete_participant(self, participant_id: uuid.UUID) -> None:
+        """Apaga a pessoa na exclusão de membro (M-3).
+
+        Quem chama já apagou os vínculos e o perfil demográfico, que apontam para o
+        participante. O documento fica: ele não aponta para a pessoa, é a pessoa
+        que aponta para ele, e a M-3 não o inclui.
+        """
+        await self.repository.delete_by_id(participant_id)

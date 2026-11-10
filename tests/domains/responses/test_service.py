@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.domains.forms.models import Form, FormStatus
 from app.domains.responses.models import Answer, FormResponse, FormResponseStatus
 from app.domains.responses.schemas import AnswerCreate
 from app.domains.responses.service import AnswerService, FormResponseService
@@ -17,6 +18,7 @@ from app.shared.exceptions import (
     ConflictError,
     ForbiddenError,
     NotFoundError,
+    PeriodClosedError,
     ValidationError,
 )
 
@@ -79,8 +81,22 @@ class FakeFormService:
     quebraria. A regra em si é provada em tests/domains/forms.
     """
 
-    def __init__(self, formularios: dict[uuid.UUID, uuid.UUID] | None = None) -> None:
+    def __init__(
+        self,
+        formularios: dict[uuid.UUID, uuid.UUID] | None = None,
+        *,
+        recusar_periodo: Exception | None = None,
+    ) -> None:
         self.formularios = formularios or {}
+        self.recusar_periodo = recusar_periodo
+        self.conferidos: list[tuple[uuid.UUID, uuid.UUID]] = []
+
+    async def check_accepts_answers(
+        self, form_id: uuid.UUID, *, link_id: uuid.UUID
+    ) -> None:
+        self.conferidos.append((form_id, link_id))
+        if self.recusar_periodo is not None:
+            raise self.recusar_periodo
 
     async def get(self, form_id: uuid.UUID) -> SimpleNamespace:
         if form_id not in self.formularios:
@@ -146,20 +162,16 @@ def uma_pergunta(
 class FakeQuestionService:
     """Dublê do `QuestionService`: "existe?", "é descritiva?" e "quais o envio exige?".
 
-    `list_required_descriptive` filtra em memória. O filtro real é SQL, no
-    repository de `questions`, e não é exercido por estes testes.
+    `list_required` filtra em memória. O filtro real é SQL, no repository de
+    `questions`, e não é exercido por estes testes.
     """
 
     def __init__(self, perguntas: list[SimpleNamespace] | None = None) -> None:
         self.perguntas = {p.id: p for p in perguntas or []}
 
-    async def list_required_descriptive(
-        self, form_id: uuid.UUID
-    ) -> list[SimpleNamespace]:
+    async def list_required(self, form_id: uuid.UUID) -> list[SimpleNamespace]:
         exigidas = [
-            p
-            for p in self.perguntas.values()
-            if p.form_id == form_id and p.descritiva and p.obrigatoria
+            p for p in self.perguntas.values() if p.form_id == form_id and p.obrigatoria
         ]
         return sorted(exigidas, key=lambda p: p.order_index)
 
@@ -170,6 +182,26 @@ class FakeQuestionService:
 
     def is_descriptive(self, question: SimpleNamespace) -> bool:
         return bool(question.descritiva)
+
+
+def uma_alternativa(pergunta: SimpleNamespace) -> SimpleNamespace:
+    return SimpleNamespace(id=uuid.uuid4(), question_id=pergunta.id)
+
+
+class FakeQuestionOptionService:
+    """Dublê do `QuestionOptionService`: só o "existe?" das alternativas dadas.
+
+    Alternativa fora da lista levanta `NotFoundError`, como o service real faz para
+    um id que não está no banco.
+    """
+
+    def __init__(self, alternativas: list[SimpleNamespace] | None = None) -> None:
+        self.alternativas = {a.id: a for a in alternativas or []}
+
+    async def get(self, option_id: uuid.UUID) -> SimpleNamespace:
+        if option_id not in self.alternativas:
+            raise NotFoundError(f"Alternativa {option_id} não encontrada")
+        return self.alternativas[option_id]
 
 
 def servico(
@@ -307,12 +339,26 @@ class TestEnvioExigeObrigatorias:
 
         assert resultado.status is FormResponseStatus.SUBMITTED
 
-    async def test_objetiva_obrigatoria_sem_resposta_nao_impede(self) -> None:
-        """D2: a objetiva ainda não pode ser respondida (CREED-37)."""
+    async def test_objetiva_obrigatoria_sem_resposta_vira_validation_error(
+        self,
+    ) -> None:
+        """Com as alternativas da CREED-37, a objetiva obrigatória conta (fecha o
+        D2 da CREED-47)."""
+        form_response = um_form_response()
+        objetiva = uma_pergunta(form_response.form_id, descritiva=False, posicao=4)
+
+        with pytest.raises(ValidationError, match="posição 4"):
+            await enviar(form_response, [objetiva], [])
+
+        assert form_response.status is FormResponseStatus.IN_PROGRESS
+
+    async def test_objetiva_obrigatoria_respondida_envia(self) -> None:
         form_response = um_form_response()
         objetiva = uma_pergunta(form_response.form_id, descritiva=False)
 
-        resultado = await enviar(form_response, [objetiva], [])
+        resultado = await enviar(
+            form_response, [objetiva], [uma_resposta(form_response, objetiva)]
+        )
 
         assert resultado.status is FormResponseStatus.SUBMITTED
 
@@ -420,7 +466,8 @@ class TestCreateFormResponse:
 class Cenario:
     """Uma resposta de formulário em andamento do vínculo `link_id`, com uma
     pergunta descritiva e uma objetiva do mesmo formulário, e uma descritiva de
-    outro formulário."""
+    outro formulário. A objetiva tem uma alternativa; há também uma alternativa de
+    outra objetiva, de fora deste formulário."""
 
     def __init__(self, **campos_da_resposta: object) -> None:
         self.link_id = uuid.uuid4()
@@ -430,7 +477,12 @@ class Cenario:
         self.descritiva = uma_pergunta(self.form_response.form_id)
         self.objetiva = uma_pergunta(self.form_response.form_id, descritiva=False)
         self.de_outro_formulario = uma_pergunta(uuid.uuid4())
+        self.alternativa = uma_alternativa(self.objetiva)
+        self.alternativa_alheia = uma_alternativa(
+            uma_pergunta(uuid.uuid4(), descritiva=False)
+        )
         self.answers = FakeAnswerRepository()
+        self.forms = FakeFormService()
         questions = FakeQuestionService(
             [self.descritiva, self.objetiva, self.de_outro_formulario]
         )
@@ -438,6 +490,10 @@ class Cenario:
             self.answers,  # type: ignore[arg-type]
             FakeFormResponseRepository([self.form_response]),  # type: ignore[arg-type]
             questions,  # type: ignore[arg-type]
+            FakeQuestionOptionService(  # type: ignore[arg-type]
+                [self.alternativa, self.alternativa_alheia]
+            ),
+            self.forms,  # type: ignore[arg-type]
         )
 
     async def gravar(
@@ -455,7 +511,8 @@ class Cenario:
 
 
 class TestRecordAnswer:
-    """Um teste por conferência, na ordem da spec: 404, 403, 409, 422 x 4, 409."""
+    """Um teste por conferência, na ordem da spec da CREED-47: 404, 403, 409, 422
+    (pergunta), 422 (forma da resposta, descritiva ou objetiva), 409."""
 
     async def test_grava_o_texto_da_descritiva_na_resposta_de_formulario(self) -> None:
         cenario = Cenario()
@@ -515,16 +572,81 @@ class TestRecordAnswer:
 
         assert cenario.answers.itens == []
 
-    async def test_pergunta_objetiva_vira_validation_error(self) -> None:
-        """D2: objetiva só com as alternativas da CREED-37."""
+    async def test_grava_a_alternativa_da_objetiva_sem_texto(self) -> None:
+        """Fecha o D2 da CREED-47: a objetiva chega com a alternativa da CREED-37."""
         cenario = Cenario()
 
-        with pytest.raises(ValidationError, match="CREED-37"):
+        resultado = await cenario.gravar(
+            AnswerCreate(
+                question_id=cenario.objetiva.id, option_id=cenario.alternativa.id
+            )
+        )
+
+        assert resultado.question_id == cenario.objetiva.id
+        assert resultado.option_id == cenario.alternativa.id
+        assert resultado.value is None
+        assert cenario.answers.itens == [resultado]
+
+    async def test_objetiva_sem_alternativa_vira_validation_error(self) -> None:
+        cenario = Cenario()
+
+        with pytest.raises(ValidationError, match="precisa de uma alternativa"):
+            await cenario.gravar(AnswerCreate(question_id=cenario.objetiva.id))
+
+        assert cenario.answers.itens == []
+
+    async def test_objetiva_com_texto_vira_validation_error(self) -> None:
+        """O texto não é descartado em silêncio: quem mandou fica sabendo."""
+        cenario = Cenario()
+
+        with pytest.raises(ValidationError, match="não aceita texto"):
             await cenario.gravar(
-                AnswerCreate(question_id=cenario.objetiva.id, option_id=uuid.uuid4())
+                AnswerCreate(
+                    question_id=cenario.objetiva.id,
+                    option_id=cenario.alternativa.id,
+                    value="texto",
+                )
             )
 
         assert cenario.answers.itens == []
+
+    async def test_alternativa_inexistente_vira_validation_error(self) -> None:
+        """A alternativa veio no corpo: inexistente é 422, não 404 (CREED-47)."""
+        cenario = Cenario()
+        option_id = uuid.uuid4()
+
+        with pytest.raises(ValidationError, match=str(option_id)):
+            await cenario.gravar(
+                AnswerCreate(question_id=cenario.objetiva.id, option_id=option_id)
+            )
+
+        assert cenario.answers.itens == []
+
+    async def test_alternativa_de_outra_pergunta_vira_validation_error(self) -> None:
+        cenario = Cenario()
+
+        with pytest.raises(ValidationError, match="não é da pergunta"):
+            await cenario.gravar(
+                AnswerCreate(
+                    question_id=cenario.objetiva.id,
+                    option_id=cenario.alternativa_alheia.id,
+                )
+            )
+
+        assert cenario.answers.itens == []
+
+    async def test_objetiva_ja_respondida_vira_conflict(self) -> None:
+        """P-032 vale para a objetiva também: uma alternativa, sem troca."""
+        cenario = Cenario()
+        dados = AnswerCreate(
+            question_id=cenario.objetiva.id, option_id=cenario.alternativa.id
+        )
+        primeira = await cenario.gravar(dados)
+
+        with pytest.raises(ConflictError, match="já foi respondida"):
+            await cenario.gravar(dados)
+
+        assert cenario.answers.itens == [primeira]
 
     async def test_alternativa_marcada_na_descritiva_vira_validation_error(
         self,
@@ -613,3 +735,165 @@ class TestGetAnswer:
         repository = FakeAnswerRepository()
 
         assert await repository.get_by_id(uuid.uuid4()) is None
+
+
+class TestGetCurrent:
+    def _forms(self, form: Form | None) -> FakeFormService:
+        class _Forms(FakeFormService):
+            async def get_current(
+                self, *, link_id: uuid.UUID, organization_id: uuid.UUID
+            ) -> Form:
+                if form is None:
+                    raise NotFoundError("Nenhum questionário disponível no momento")
+                return form
+
+        return _Forms()
+
+    def _form(self) -> Form:
+        return Form(
+            id=uuid.uuid4(),
+            name="Plasticidade Humana",
+            organization_id=ORG_A,
+            status=FormStatus.DRAFT,
+            opens_at=datetime(2026, 11, 1, tzinfo=UTC),
+            closes_at=datetime(2026, 11, 30, tzinfo=UTC),
+            link_id=None,
+            created_at=datetime(2026, 10, 30, tzinfo=UTC),
+        )
+
+    async def test_sem_resposta_vem_nulo(self) -> None:
+        form = self._form()
+
+        atual = await servico(
+            FakeFormResponseRepository(), self._forms(form)
+        ).get_current(link_id=uuid.uuid4(), organization_id=ORG_A)
+
+        assert atual.form.id == form.id
+        assert atual.form_response is None
+
+    @pytest.mark.parametrize(
+        "status", [FormResponseStatus.IN_PROGRESS, FormResponseStatus.SUBMITTED]
+    )
+    async def test_devolve_a_resposta_com_o_status_dela(
+        self, status: FormResponseStatus
+    ) -> None:
+        form = self._form()
+        form_response = um_form_response(form_id=form.id, status=status)
+
+        atual = await servico(
+            FakeFormResponseRepository([form_response]), self._forms(form)
+        ).get_current(link_id=form_response.vinculo_id, organization_id=ORG_A)
+
+        assert atual.form_response is not None
+        assert atual.form_response.id == form_response.id
+        assert atual.form_response.status is status
+
+    async def test_ignora_a_resposta_de_outro_vinculo(self) -> None:
+        form = self._form()
+        de_outro = um_form_response(form_id=form.id)
+
+        atual = await servico(
+            FakeFormResponseRepository([de_outro]), self._forms(form)
+        ).get_current(link_id=uuid.uuid4(), organization_id=ORG_A)
+
+        assert atual.form_response is None
+
+    async def test_sem_questionario_propaga_not_found(self) -> None:
+        with pytest.raises(NotFoundError):
+            await servico(FakeFormResponseRepository(), self._forms(None)).get_current(
+                link_id=uuid.uuid4(), organization_id=ORG_A
+            )
+
+
+class TestSoDentroDoPeriodo:
+    FECHADO = PeriodClosedError("O período deste questionário terminou")
+
+    async def test_abrir_confere_o_periodo_com_o_vinculo_do_login(self) -> None:
+        form_id, link_id = uuid.uuid4(), uuid.uuid4()
+        forms = FakeFormService({form_id: ORG_A})
+
+        await servico(FakeFormResponseRepository(), forms).create_form_response(
+            form_id, link_id=link_id, organization_id=ORG_A
+        )
+
+        assert forms.conferidos == [(form_id, link_id)]
+
+    async def test_abrir_fora_do_periodo_nao_cria(self) -> None:
+        form_id = uuid.uuid4()
+        repository = FakeFormResponseRepository()
+        forms = FakeFormService({form_id: ORG_A}, recusar_periodo=self.FECHADO)
+
+        with pytest.raises(PeriodClosedError):
+            await servico(repository, forms).create_form_response(
+                form_id, link_id=uuid.uuid4(), organization_id=ORG_A
+            )
+
+        assert repository.itens == []
+
+    async def test_abrir_periodo_de_outra_pessoa_e_recusado(self) -> None:
+        form_id = uuid.uuid4()
+        forms = FakeFormService(
+            {form_id: ORG_A},
+            recusar_periodo=ForbiddenError(
+                "Este questionário é destinado a outra pessoa"
+            ),
+        )
+
+        with pytest.raises(ForbiddenError):
+            await servico(FakeFormResponseRepository(), forms).create_form_response(
+                form_id, link_id=uuid.uuid4(), organization_id=ORG_A
+            )
+
+    async def test_periodo_fechado_vem_antes_da_resposta_duplicada(self) -> None:
+        existente = um_form_response()
+        forms = FakeFormService({existente.form_id: ORG_A}, recusar_periodo=self.FECHADO)
+
+        with pytest.raises(PeriodClosedError):
+            await servico(
+                FakeFormResponseRepository([existente]), forms
+            ).create_form_response(
+                existente.form_id,
+                link_id=existente.vinculo_id,
+                organization_id=ORG_A,
+            )
+
+    async def test_enviar_depois_do_fechamento_com_resposta_ja_comecada(self) -> None:
+        form_response = um_form_response()
+        forms = FakeFormService(recusar_periodo=self.FECHADO)
+
+        with pytest.raises(PeriodClosedError):
+            await servico(
+                FakeFormResponseRepository([form_response]), forms
+            ).submit_form_response(form_response.id, link_id=form_response.vinculo_id)
+
+        assert form_response.status is FormResponseStatus.IN_PROGRESS
+        assert form_response.submitted_at is None
+
+    async def test_ja_enviada_continua_409_com_periodo_fechado(self) -> None:
+        form_response = um_form_response(status=FormResponseStatus.SUBMITTED)
+        forms = FakeFormService(recusar_periodo=self.FECHADO)
+
+        with pytest.raises(ConflictError):
+            await servico(
+                FakeFormResponseRepository([form_response]), forms
+            ).submit_form_response(form_response.id, link_id=form_response.vinculo_id)
+
+    async def test_gravar_fora_do_periodo_nao_grava(self) -> None:
+        form_response = um_form_response()
+        answers = FakeAnswerRepository()
+        service = AnswerService(
+            answers,  # type: ignore[arg-type]
+            FakeFormResponseRepository([form_response]),  # type: ignore[arg-type]
+            FakeQuestionService(),  # type: ignore[arg-type]
+            FakeQuestionOptionService(),  # type: ignore[arg-type]
+            FakeFormService(recusar_periodo=self.FECHADO),  # type: ignore[arg-type]
+        )
+
+        with pytest.raises(PeriodClosedError):
+            await service.record(
+                form_response.id,
+                AnswerCreate(question_id=uuid.uuid4(), value="texto"),
+                link_id=form_response.vinculo_id,
+            )
+
+        assert answers.itens == []

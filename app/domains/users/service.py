@@ -12,15 +12,26 @@ domínio dono.
 Com o Keycloak, a conversa é pela Admin API (`keycloak_admin`), chamada como o
 `AuthenticationService` chama o `client.py`: as exceções de lá viram exceções de
 domínio aqui, e o router traduz para status.
+
+A exclusão de membro (M-3, `MemberRemovalService`) também mora aqui, e não em
+`links`, dono do vínculo: ela apaga o login, e `users` já depende de `links`. Em
+`links`, o `LinkService` precisaria do `UserService`, e os dois services se
+importariam um ao outro.
 """
 
 import logging
 import uuid
 from dataclasses import dataclass
 
+from app.domains.dashboards.service import DashboardService
+from app.domains.demographics.service import DemographicService
+from app.domains.forms.service import FormService
+from app.domains.insights.service import InsightService
 from app.domains.links.service import LinkService
 from app.domains.organizacoes.service import OrganizationService
 from app.domains.participants.service import ParticipantService
+from app.domains.questions.service import QuestionService
+from app.domains.responses.service import FormResponseService
 from app.domains.users.models import User
 from app.domains.users.repository import UserRepository
 from app.domains.users.schemas import MemberInvite, UserCreate
@@ -202,9 +213,26 @@ class UserService:
         # já apagou, ele sai só de lá; repetir a remoção resolve, porque o 404 do realm
         # é sucesso. Na ordem contrária, um flush que falhasse deixaria uma linha no
         # banco apontando para um usuário que o realm já apagou.
+        keycloak_id = await self.delete_login(user)
+        await self.remove_from_keycloak(keycloak_id)
+
+    async def get_login_of_link(self, link_id: uuid.UUID) -> User | None:
+        """O login do vínculo, ou `None` se o vínculo foi criado sem convite."""
+        return await self.repository.get_by_link_id(link_id)
+
+    async def delete_login(self, user: User) -> uuid.UUID:
+        """Apaga o login só no banco e devolve o `keycloak_id`, para o realm depois.
+
+        Separado de `remove_from_keycloak` porque quem apaga mais coisas no banco
+        (a exclusão de membro, M-3) chama o Keycloak só no fim, pela mesma razão de
+        `delete_user_service`.
+        """
         keycloak_id = user.keycloak_id
         await self.repository.delete(user)
+        return keycloak_id
 
+    async def remove_from_keycloak(self, keycloak_id: uuid.UUID) -> None:
+        """Apaga o usuário do realm. O 404 de lá é sucesso (`keycloak_admin`)."""
         try:
             await keycloak_admin.delete_user(keycloak_id)
         except KeycloakUnavailableError as exc:
@@ -265,6 +293,147 @@ class UserService:
             # estão fora: nessa janela o 503 revela o cadastro, e a spec aceita isso
             # (Riscos). Fora dela, a resposta não revela; o tempo, sim (docstring).
             raise ServiceUnavailableError(_RESET_EMAIL_UNAVAILABLE) from exc
+
+
+def _listed(keycloak_ids: list[uuid.UUID]) -> str:
+    """Os ids como texto, prontos para copiar do log para o console do Keycloak."""
+    return ", ".join(str(keycloak_id) for keycloak_id in keycloak_ids) or "nenhum"
+
+
+class MemberRemovalService:
+    """Exclui um membro de vez, com tudo o que é dele (M-3).
+
+    Cada tabela é apagada pelo service do dono (ADR-0004, item 4): este service só
+    decide quem pode e a ordem. A ordem é a das chaves estrangeiras, de quem aponta
+    para quem é apontado, porque o banco recusa apagar uma linha que outra ainda
+    referencia.
+    """
+
+    def __init__(
+        self,
+        users: UserService,
+        links: LinkService,
+        forms: FormService,
+        questions: QuestionService,
+        responses: FormResponseService,
+        insights: InsightService,
+        dashboards: DashboardService,
+        demographics: DemographicService,
+        participants: ParticipantService,
+    ) -> None:
+        self.users = users
+        self.links = links
+        self.forms = forms
+        self.questions = questions
+        self.responses = responses
+        self.insights = insights
+        self.dashboards = dashboards
+        self.demographics = demographics
+        self.participants = participants
+
+    async def remove_member(
+        self,
+        organization_id: uuid.UUID,
+        link_id: uuid.UUID,
+        *,
+        own_organization_id: uuid.UUID,
+        own_link_id: uuid.UUID,
+    ) -> None:
+        """Confere quem pede e exclui o membro: banco e, por último, Keycloak.
+
+        `own_organization_id` e `own_link_id` são de quem pede. A ordem de
+        conferência é acesso (403), a si mesmo (409), vínculo (404). O 409 vem antes
+        da busca porque o vínculo de quem pede sempre existe na própria organização.
+
+        🟡 Premissa P-071 — o `gestor` exclui na própria organização, e o `admin`
+        também só na própria, que é a da CREED (P-048), onde estão os mentorandos.
+        É mais estreito que a P-066 da listagem e da troca de setor, em que o
+        `admin` mexe em qualquer organização. O papel já foi conferido pela guarda.
+
+        🟡 Premissa P-074 — qualquer vínculo da organização pode ser o alvo, outro
+        `admin` ou `gestor` incluídos; a única recusa é a si mesmo. Confirmar na
+        próxima reunião.
+        """
+        if organization_id != own_organization_id:
+            raise ForbiddenError("Sem acesso aos membros desta organização")
+
+        if link_id == own_link_id:
+            raise ConflictError("Não é possível excluir o próprio acesso")
+
+        keycloak_id = await self.delete_member_data(organization_id, link_id)
+        if keycloak_id is not None:
+            await self.remove_logins_from_keycloak([keycloak_id])
+
+    async def delete_member_data(
+        self, organization_id: uuid.UUID, link_id: uuid.UUID
+    ) -> uuid.UUID | None:
+        """Apaga no banco tudo o que é do membro e devolve o `keycloak_id` do login,
+        ou `None` se ele não tinha login. Não chama o Keycloak nem confere acesso.
+        Vínculo inexistente, ou de outra organização, é `NotFoundError`.
+
+        Separado de `remove_member` para a exclusão de empresa (E-6) apagar cada
+        membro assim e chamar o Keycloak uma vez só, no fim, com todos os logins.
+
+        Saem as respostas, os questionários individuais, o login, o vínculo e, sem
+        outro vínculo, o participante e o perfil demográfico.
+
+        🟡 Premissa P-072 — saem também os insights e os dashboards das respostas
+        apagadas e do login, e as perguntas dos questionários individuais: o banco
+        não deixa apagar o que eles referenciam.
+        """
+        link = await self.links.get_member_link(organization_id, link_id)
+
+        form_ids = await self.forms.list_individual_form_ids(link.id)
+        response_ids = await self.responses.list_ids_for_member_removal(link.id, form_ids)
+        login = await self.users.get_login_of_link(link.id)
+
+        await self.insights.delete_for_form_responses(response_ids)
+        await self.dashboards.delete_for_member_removal(
+            response_ids, login.id if login is not None else None
+        )
+        await self.responses.delete_with_answers(response_ids)
+        await self.questions.delete_for_forms(form_ids)
+        await self.forms.delete_individual_forms(form_ids)
+
+        keycloak_id = await self.users.delete_login(login) if login is not None else None
+        await self.links.delete_link(link)
+
+        # A mesma pessoa em outra organização é outro vínculo do mesmo participante
+        # ([C2]): ela continua existindo para lá.
+        if not await self.links.participant_has_links(link.participant_id):
+            await self.demographics.delete_for_participant(link.participant_id)
+            await self.participants.delete_participant(link.participant_id)
+
+        return keycloak_id
+
+    async def remove_logins_from_keycloak(self, keycloak_ids: list[uuid.UUID]) -> None:
+        """Apaga os logins do realm, depois de o banco já ter apagado tudo.
+
+        🟡 Premissa P-073 — o Keycloak é chamado antes do commit, e não depois: se
+        ele falhar, o 503 faz o `get_db` desfazer o banco, e repetir a exclusão
+        resolve, porque o 404 do realm é sucesso. Commit primeiro deixaria logins
+        no realm sem linha no banco, e reconvidar o e-mail daria 409 até a limpeza
+        à mão. O que a M-3 e a E-6 pedem ("registrar o que sobrou") é o log abaixo.
+
+        Banco e realm não têm transação comum, e sobra uma janela: o realm apaga e
+        a resposta se perde (timeout), ou o commit falha depois. A pessoa fica no
+        banco sem conseguir entrar até alguém repetir a exclusão. O log diz quem.
+        """
+        removed: list[uuid.UUID] = []
+        for keycloak_id in keycloak_ids:
+            try:
+                await self.users.remove_from_keycloak(keycloak_id)
+            except ServiceUnavailableError:
+                logger.warning(
+                    "Exclusão desfeita no banco com o Keycloak indisponível. Já "
+                    "apagados no realm: %s. Talvez apagado (sem resposta): %s. Não "
+                    "tentados: %s. Repetir a exclusão resolve.",
+                    _listed(removed),
+                    keycloak_id,
+                    _listed(keycloak_ids[len(removed) + 1 :]),
+                )
+                raise
+            removed.append(keycloak_id)
 
 
 class MemberService:

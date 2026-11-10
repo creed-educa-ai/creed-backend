@@ -49,6 +49,21 @@ class Prisma(enum.Enum):
     NEUROINOVACAO_PRISMA = "neuroinovacao_prisma"
 
 
+class DepartmentType(enum.Enum):
+    """Os cinco setores fixos de uma organização.
+
+    Tipo `department_type` no banco, da tabela `departments`. Compartilhado por
+    `department` (o setor cadastrado da empresa) e `links` (o setor que a troca de
+    setor do membro recebe e devolve).
+    """
+
+    MARKETING = "Marketing"
+    FINANCEIRO = "Financeiro"
+    ADMINISTRATIVO = "Administrativo"
+    RECURSOS_HUMANOS = "RecursosHumanos"
+    TECNOLOGIA_INFORMACAO = "TecnologiaInformacao"
+
+
 class LinkType(enum.Enum):
     """Tipo do vínculo entre a pessoa e a organização.
 

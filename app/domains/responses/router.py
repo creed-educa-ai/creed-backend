@@ -25,6 +25,7 @@ from app.shared.exceptions import (
     ConflictError,
     ForbiddenError,
     NotFoundError,
+    PeriodClosedError,
     ValidationError,
 )
 from app.shared.schemas import ErrorResponse, ValidationErrorResponse
@@ -36,6 +37,18 @@ _UNAUTHORIZED: dict[int | str, dict[str, Any]] = {
         "model": ErrorResponse,
         "description": "Token ausente, inválido ou expirado.",
         "content": {"application/json": {"example": {"detail": "Não autenticado"}}},
+    },
+}
+
+_PERIOD_CLOSED: dict[int | str, dict[str, Any]] = {
+    status.HTTP_423_LOCKED: {
+        "model": ErrorResponse,
+        "description": "Fora do período do questionário: `detail` diz o motivo.",
+        "content": {
+            "application/json": {
+                "example": {"detail": "O período deste questionário terminou"}
+            }
+        },
     },
 }
 
@@ -56,9 +69,10 @@ _UNAUTHORIZED: dict[int | str, dict[str, Any]] = {
     operation_id="create_form_response",
     responses={
         **_UNAUTHORIZED,
+        **_PERIOD_CLOSED,
         status.HTTP_403_FORBIDDEN: {
             "model": ErrorResponse,
-            "description": "O formulário é de outra organização.",
+            "description": "O formulário é de outra organização ou de outra pessoa.",
             "content": {
                 "application/json": {
                     "example": {"detail": "Sem acesso a formulário de outra organização"}
@@ -106,6 +120,8 @@ async def criar_form_response(
             link_id=user.link_uuid,
             organization_id=user.organization_uuid,
         )
+    except PeriodClosedError as exc:
+        raise HTTPException(status.HTTP_423_LOCKED, exc.message) from exc
     except ValidationError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, exc.message) from exc
     except ForbiddenError as exc:
@@ -122,13 +138,14 @@ async def criar_form_response(
     description=(
         "Finaliza uma resposta em andamento, alterando o status para `submitted` "
         "e registrando a data de submissão. Só o vínculo que abriu a resposta "
-        "pode submetê-la, e só com todas as perguntas descritivas obrigatórias "
-        "respondidas. Objetivas obrigatórias ainda não são exigidas."
+        "pode submetê-la, e só com todas as perguntas obrigatórias respondidas, "
+        "descritivas e objetivas."
     ),
     response_description="Resposta finalizada com a data de submissão.",
     operation_id="submit_form_response",
     responses={
         **_UNAUTHORIZED,
+        **_PERIOD_CLOSED,
         status.HTTP_403_FORBIDDEN: {
             "model": ErrorResponse,
             "description": "A resposta de formulário é de outro vínculo.",
@@ -159,7 +176,7 @@ async def criar_form_response(
         status.HTTP_422_UNPROCESSABLE_CONTENT: {
             "model": ErrorResponse | ValidationErrorResponse,
             "description": (
-                "Pergunta descritiva obrigatória sem resposta: `detail` é texto e "
+                "Pergunta obrigatória sem resposta: `detail` é texto e "
                 "cita posição e id de cada uma. Identificador inválido no caminho: "
                 "`detail` é uma lista."
             ),
@@ -191,6 +208,8 @@ async def submeter_form_response(
         form_response = await service.submit_form_response(
             form_response_id, link_id=user.link_uuid
         )
+    except PeriodClosedError as exc:
+        raise HTTPException(status.HTTP_423_LOCKED, exc.message) from exc
     except NotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, exc.message) from exc
     except ForbiddenError as exc:
@@ -233,14 +252,16 @@ _NOT_OWNER: dict[int | str, dict[str, Any]] = {
     status_code=status.HTTP_201_CREATED,
     summary="Gravar resposta de uma pergunta",
     description=(
-        "Grava o texto de uma pergunta descritiva numa resposta de formulário em "
-        "andamento. Só o vínculo que abriu a resposta grava, e cada pergunta "
-        "recebe uma resposta só. Perguntas objetivas ainda são recusadas."
+        "Grava a resposta de uma pergunta numa resposta de formulário em "
+        "andamento: o texto, se a pergunta é descritiva, ou uma alternativa da "
+        "própria pergunta, se é objetiva. Só o vínculo que abriu a resposta grava, "
+        "e cada pergunta recebe uma resposta só."
     ),
     response_description="Resposta gravada.",
     operation_id="record_answer",
     responses={
         **_UNAUTHORIZED,
+        **_PERIOD_CLOSED,
         **_NOT_OWNER,
         status.HTTP_409_CONFLICT: {
             "model": ErrorResponse,
@@ -257,16 +278,16 @@ _NOT_OWNER: dict[int | str, dict[str, Any]] = {
         status.HTTP_422_UNPROCESSABLE_CONTENT: {
             "model": ErrorResponse | ValidationErrorResponse,
             "description": (
-                "Pergunta inexistente, de outro formulário ou objetiva, texto vazio "
-                "ou alternativa marcada: `detail` é texto. Corpo inválido: `detail` "
-                "é uma lista, um item por campo recusado."
+                "Pergunta inexistente ou de outro formulário; descritiva sem texto "
+                "ou com alternativa; objetiva sem alternativa, com texto, ou com "
+                "alternativa inexistente ou de outra pergunta: `detail` é texto. "
+                "Corpo inválido: `detail` é uma lista, um item por campo recusado."
             ),
             "content": {
                 "application/json": {
                     "example": {
                         "detail": (
-                            "Respostas a perguntas objetivas chegam com as "
-                            "alternativas (CREED-37)"
+                            "A resposta objetiva precisa de uma alternativa marcada"
                         )
                     }
                 }
@@ -282,6 +303,8 @@ async def gravar_answer(
 ) -> AnswerResponse:
     try:
         answer = await service.record(form_response_id, dados, link_id=user.link_uuid)
+    except PeriodClosedError as exc:
+        raise HTTPException(status.HTTP_423_LOCKED, exc.message) from exc
     except NotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, exc.message) from exc
     except ForbiddenError as exc:

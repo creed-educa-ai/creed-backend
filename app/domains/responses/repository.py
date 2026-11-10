@@ -6,7 +6,7 @@ de persistência da entidade FormResponse.
 
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.responses.models import Answer, FormResponse
@@ -41,6 +41,27 @@ class FormResponseRepository:
         await self.db.flush()
         await self.db.refresh(form_response)
         return form_response
+
+    async def list_ids_by_link_or_forms(
+        self, link_id: uuid.UUID, form_ids: list[uuid.UUID]
+    ) -> list[uuid.UUID]:
+        """As respostas do vínculo, mais as de qualquer vínculo nestes formulários."""
+        result = await self.db.execute(
+            select(FormResponse.id).where(
+                or_(
+                    FormResponse.vinculo_id == link_id,
+                    FormResponse.form_id.in_(form_ids),
+                )
+            )
+        )
+        return list(result.scalars().all())
+
+    async def delete_by_ids(self, form_response_ids: list[uuid.UUID]) -> None:
+        if not form_response_ids:
+            return
+        await self.db.execute(
+            delete(FormResponse).where(FormResponse.id.in_(form_response_ids))
+        )
 
 
 class AnswerRepository:
@@ -79,3 +100,10 @@ class AnswerRepository:
         await self.db.flush()
         await self.db.refresh(answer)
         return answer
+
+    async def delete_by_form_responses(self, form_response_ids: list[uuid.UUID]) -> None:
+        if not form_response_ids:
+            return
+        await self.db.execute(
+            delete(Answer).where(Answer.form_response_id.in_(form_response_ids))
+        )

@@ -13,9 +13,12 @@ from app import models  # noqa: F401  (registra todas as tabelas; ver app/models
 from app.core.config import settings
 from app.domains.authentication.router import router as authentication_router
 from app.domains.dashboards.router import router as dashboards_router
+from app.domains.demographics.router import router as demographics_router
 from app.domains.department.router import router as department_router
 from app.domains.forms.router import router as forms_router
+from app.domains.forms.router_periods import router as periods_router
 from app.domains.links.router import router as links_router
+from app.domains.links.router_members import router as link_members_router
 from app.domains.organizacoes.router import router as organizacoes_router
 from app.domains.participants.router import router as participants_router
 from app.domains.prismas.router import router as prismas_router
@@ -24,6 +27,7 @@ from app.domains.questions.router import router as questions_router
 from app.domains.questions.router_options import router as question_options_router
 from app.domains.relatorios.router import router as relatorios_router
 from app.domains.responses.router import router as respostas_router
+from app.domains.responses.router_current import router as current_form_router
 from app.domains.users.router import router as user_router
 from app.domains.users.router_members import router as members_router
 from app.shared.schemas import HealthResponse
@@ -63,6 +67,10 @@ OPENAPI_TAGS = [
         "description": "Criação do vínculo entre um participante e uma organização.",
     },
     {
+        "name": "members",
+        "description": "Membros de uma organização e o setor de cada um.",
+    },
+    {
         "name": "participants",
         "description": "Cadastro e consulta das pessoas participantes.",
     },
@@ -81,6 +89,10 @@ OPENAPI_TAGS = [
     {
         "name": "department",
         "description": "Cadastro e consulta dos setores.",
+    },
+    {
+        "name": "demographics",
+        "description": "Leitura e gravação do perfil demográfico da própria pessoa.",
     },
 ]
 
@@ -141,9 +153,12 @@ async def health() -> HealthResponse:
 for _router in (
     authentication_router,
     respostas_router,
+    # Antes do `forms_router`: senão `/forms/{form_id}` captura `/forms/current`.
+    current_form_router,
     organizacoes_router,
     prismas_router,
     dashboards_router,
+    demographics_router,
     prognosticos_router,
     questions_router,
     question_options_router,
@@ -151,8 +166,10 @@ for _router in (
     user_router,
     members_router,
     links_router,
+    link_members_router,
     participants_router,
     forms_router,
+    periods_router,
     department_router,
 ):
     app.include_router(_router, prefix=settings.API_V1_PREFIX)

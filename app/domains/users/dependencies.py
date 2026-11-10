@@ -9,15 +9,19 @@ from typing import Annotated
 from fastapi import Depends
 
 from app.core.database import SessionDep
+from app.domains.dashboards.dependencies import ServiceDep as DashboardServiceDep
+from app.domains.demographics.dependencies import ServiceDep as DemographicServiceDep
+from app.domains.forms.dependencies import ServiceDep as FormServiceDep
+from app.domains.insights.dependencies import ServiceDep as InsightServiceDep
 from app.domains.links.dependencies import ServiceDep as LinkServiceDep
 from app.domains.organizacoes.dependencies import (
     ServiceDep as OrganizationServiceDep,
 )
-from app.domains.participants.dependencies import (
-    ServiceDep as ParticipantServiceDep,
-)
+from app.domains.participants.dependencies import ServiceDep as ParticipantServiceDep
+from app.domains.questions.dependencies import ServiceDep as QuestionServiceDep
+from app.domains.responses.dependencies import ServiceDep as FormResponseServiceDep
 from app.domains.users.repository import UserRepository
-from app.domains.users.service import MemberService, UserService
+from app.domains.users.service import MemberRemovalService, MemberService, UserService
 
 
 def get_repository(
@@ -34,6 +38,35 @@ def get_service(
 
 
 ServiceDep = Annotated[UserService, Depends(get_service)]
+
+
+def get_member_removal_service(
+    users: Annotated[UserService, Depends(get_service)],
+    links: LinkServiceDep,
+    forms: FormServiceDep,
+    questions: QuestionServiceDep,
+    responses: FormResponseServiceDep,
+    insights: InsightServiceDep,
+    dashboards: DashboardServiceDep,
+    demographics: DemographicServiceDep,
+    participants: ParticipantServiceDep,
+) -> MemberRemovalService:
+    return MemberRemovalService(
+        users,
+        links,
+        forms,
+        questions,
+        responses,
+        insights,
+        dashboards,
+        demographics,
+        participants,
+    )
+
+
+MemberRemovalServiceDep = Annotated[
+    MemberRemovalService, Depends(get_member_removal_service)
+]
 
 
 def get_member_service(

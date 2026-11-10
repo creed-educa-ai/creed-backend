@@ -4,7 +4,6 @@ Os departamentos pertencem a uma organização e especificam a qual setor
 um participante está vinculado.
 """
 
-import enum
 import uuid
 
 from sqlalchemy import Enum, ForeignKey, UniqueConstraint
@@ -12,14 +11,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
-
-
-class DepartmentType(enum.Enum):
-    MARKETING = "Marketing"
-    FINANCEIRO = "Financeiro"
-    ADMINISTRATIVO = "Administrativo"
-    RECURSOS_HUMANOS = "RecursosHumanos"
-    TECNOLOGIA_INFORMACAO = "TecnologiaInformacao"
+from app.shared.enums import DepartmentType
 
 
 class Department(Base):
@@ -40,7 +32,9 @@ class Department(Base):
 
     organization_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("organizations.id"),
+        ForeignKey(
+            "organizations.id", name="fk_departments_organization_id_organizations"
+        ),
         nullable=False,
     )
 
