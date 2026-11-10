@@ -6,7 +6,7 @@ Esta camada não conhece HTTP nem detalhes de ORM.
 import uuid
 
 from app.domains.insights.models import InsightPrisma
-from app.domains.insights.repository import InsightPrismaRepository
+from app.domains.insights.repository import InsightPrismaRepository, InsightRepository
 from app.shared.enums import Prisma
 from app.shared.exceptions import ConflictError, NotFoundError
 
@@ -64,3 +64,12 @@ class InsightPrismaService:
             )
 
         await self.repository.delete(associacao)
+
+
+class InsightService:
+    def __init__(self, repository: InsightRepository) -> None:
+        self.repository = repository
+
+    async def delete_for_form_responses(self, form_response_ids: list[uuid.UUID]) -> None:
+        """Apaga os insights das respostas que a exclusão de membro (M-3) remove."""
+        await self.repository.delete_by_form_responses(form_response_ids)

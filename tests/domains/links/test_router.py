@@ -20,7 +20,7 @@ from app.domains.links.router import router
 from app.domains.links.schemas import LinkCreate
 from app.domains.users.dependencies import get_service as get_user_service
 from app.domains.users.service import UserAccess
-from app.shared.exceptions import ValidationError
+from app.shared.exceptions import NotFoundError, ValidationError
 
 VALID_BODY = {
     "participant_id": "e5c0e7fa-3e57-427a-8d7b-a4ab5fb6c339",
@@ -61,6 +61,15 @@ class _UnknownParticipantLinkService:
         self, organization_id: uuid.UUID, request: LinkCreate
     ) -> Link:
         raise ValidationError(f"Participante {request.participant_id} não encontrado")
+
+
+class _UnknownOrganizationLinkService:
+    """Dublê que recusa como o service real recusa uma organização inexistente."""
+
+    async def create_link_service(
+        self, organization_id: uuid.UUID, request: LinkCreate
+    ) -> Link:
+        raise NotFoundError(f"Organização {organization_id} não encontrada")
 
 
 class _FakeUserService:
@@ -219,3 +228,22 @@ def test_unknown_participant_returns_422_with_text_detail(
     assert response.json()["detail"] == (
         f"Participante {VALID_BODY['participant_id']} não encontrado"
     )
+
+
+def test_unknown_organization_returns_404_with_text_detail(
+    client: TestClient, app: FastAPI, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Prova só a tradução do router: `NotFoundError` -> 404.
+
+    A organização veio no endereço, por isso 404 e não 422. A regra é provada em
+    `test_service.py`.
+    """
+    _authorize_as(app, monkeypatch, "admin")
+    app.dependency_overrides[get_link_service] = _UnknownOrganizationLinkService
+
+    response = client.post(
+        URL, json=VALID_BODY, headers={"Authorization": "Bearer valid"}
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == f"Organização {ORG_ID} não encontrada"

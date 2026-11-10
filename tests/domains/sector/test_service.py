@@ -7,7 +7,17 @@ import pytest
 from app.domains.department.models import Department, DepartmentType
 from app.domains.department.schemas import DepartmentCreate
 from app.domains.department.service import DepartmentService
-from app.shared.exceptions import NotFoundError
+from app.shared.exceptions import NotFoundError, ValidationError
+
+
+class FakeOrganizationService:
+    """Dublê do `OrganizationService`: só responde se a organização existe."""
+
+    def __init__(self, *, existe: bool = True) -> None:
+        self.existe = existe
+
+    async def organization_exists(self, organization_id: uuid.UUID) -> bool:
+        return self.existe
 
 
 class FakeDepartmentRepository:
@@ -43,7 +53,10 @@ def repository() -> FakeDepartmentRepository:
 
 @pytest.fixture
 def service(repository: FakeDepartmentRepository) -> DepartmentService:
-    return DepartmentService(repository)  # type: ignore[arg-type]
+    return DepartmentService(
+        repository,  # type: ignore[arg-type]
+        FakeOrganizationService(),  # type: ignore[arg-type]
+    )
 
 
 class TestDepartmentService:
@@ -85,3 +98,25 @@ class TestDepartmentService:
         assert result.organization_id == um_department.organization_id
         assert result.type == um_department.type
         assert repository.department is result
+
+    @pytest.mark.asyncio
+    async def test_create_with_unknown_organization_is_validation_error(
+        self,
+        repository: FakeDepartmentRepository,
+    ) -> None:
+        """A organização veio no corpo: inexistente é 422, não 404 (CREED-47)."""
+        service = DepartmentService(
+            repository,  # type: ignore[arg-type]
+            FakeOrganizationService(existe=False),  # type: ignore[arg-type]
+        )
+        organization_id = uuid.uuid4()
+
+        with pytest.raises(ValidationError, match=str(organization_id)):
+            await service.create(
+                DepartmentCreate(
+                    organization_id=organization_id,
+                    type=DepartmentType.MARKETING,
+                )
+            )
+
+        assert repository.department is None

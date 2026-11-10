@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Path, status
 from app.domains.department.dependencies import ServiceDep
 from app.domains.department.schemas import DepartmentCreate, DepartmentResponse
 from app.shared.authorization import CurrentUserDep, require_role
-from app.shared.exceptions import NotFoundError
+from app.shared.exceptions import NotFoundError, ValidationError
 from app.shared.schemas import ErrorResponse, ValidationErrorResponse
 
 router = APIRouter(prefix="/department", tags=["department"])
@@ -23,7 +23,7 @@ router = APIRouter(prefix="/department", tags=["department"])
     response_model=DepartmentResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Criar setor",
-    description="Registra um novo setor na plataforma.",
+    description="Registra um novo setor numa organização já cadastrada na plataforma.",
     response_description="Setor criado na plataforma.",
     operation_id="create_department",
     dependencies=[Depends(require_role("admin"))],
@@ -36,9 +36,24 @@ router = APIRouter(prefix="/department", tags=["department"])
             "model": ErrorResponse,
             "description": "O usuário autenticado não tem o papel admin.",
         },
+        # Dois formatos no mesmo 422, como em `links`: o do service (`detail`
+        # texto) e o da validação do Pydantic (`detail` lista).
         status.HTTP_422_UNPROCESSABLE_ENTITY: {
-            "model": ValidationErrorResponse,
-            "description": "Dados enviados fora do formato esperado.",
+            "model": ErrorResponse | ValidationErrorResponse,
+            "description": (
+                "Organização inexistente: `detail` é texto. Corpo inválido: "
+                "`detail` é uma lista, um item por campo recusado."
+            ),
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": (
+                            "Organização 00000000-0000-0000-0000-000000000001 "
+                            "não encontrada"
+                        )
+                    }
+                }
+            },
         },
     },
 )
@@ -46,7 +61,10 @@ async def create_department(
     dados: DepartmentCreate,
     service: ServiceDep,
 ) -> DepartmentResponse:
-    created = await service.create(dados)
+    try:
+        created = await service.create(dados)
+    except ValidationError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, exc.message) from exc
     return DepartmentResponse.de_model(created)
 
 

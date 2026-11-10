@@ -6,30 +6,131 @@ isolada e testável.
 O formulário pertence a uma organização, e é aqui que mora a regra de quem age
 em qual organização. `questions` (`check_organization`, P-033) e `responses`
 (`check_same_organization`, P-031) a usam pela composição, em vez de repetir a
-comparação.
+comparação. Se a organização existe, quem responde é o `OrganizationService`.
 """
 
 import uuid
+from dataclasses import dataclass
+from datetime import UTC, datetime
 
 from app.domains.forms.models import Form, FormStatus
 from app.domains.forms.repository import FormRepository
-from app.domains.forms.schemas import FormCreate
-from app.shared.exceptions import ForbiddenError, NotFoundError
+from app.domains.forms.schemas import FormCreate, PeriodRead, PeriodStatus
+from app.domains.organizacoes.service import OrganizationService
+from app.shared.exceptions import (
+    ForbiddenError,
+    NotFoundError,
+    PeriodClosedError,
+    ValidationError,
+)
 
 ADMIN = "admin"
 
 
+def period_status(form: Form, now: datetime) -> PeriodStatus:
+    """A mesma janela de `get_current`: `opens_at <= agora < closes_at`.
+
+    Pública porque `links` a usa para o período de cada membro (CREED-697).
+    """
+    if now < form.opens_at:  # type: ignore[operator]
+        return PeriodStatus.SCHEDULED
+    if now >= form.closes_at:  # type: ignore[operator]
+        return PeriodStatus.PAST
+    return PeriodStatus.OPEN
+
+
+@dataclass
+class DatedPeriod:
+    """Um período com as duas datas garantidas: o `Form` as tem como opcionais.
+
+    É o que `pick_period` devolve, para quem usa o período (o `links`, na lista de
+    membros) ler as datas sem conferir nulo de novo, e a situação já calculada.
+    """
+
+    form: Form
+    opens_at: datetime
+    closes_at: datetime
+    status: PeriodStatus
+
+
+def pick_period(
+    periods: list[Form], link_id: uuid.UUID, now: datetime
+) -> DatedPeriod | None:
+    """O período que vale para um membro agora, ou `None` se não houver nenhum.
+
+    🟡 Premissa P-068: nesta ordem, o período aberto; se não houver, o próximo
+    agendado (o que abre primeiro); se não houver, o último que fechou. Entre dois
+    abertos, o individual vem antes do "para todos" e, depois, o que abriu por
+    último (a mesma ordem do `FormRepository.get_open_for_link`). Confirmar na
+    próxima reunião.
+
+    Só contam os períodos que valem para o vínculo: os da organização inteira
+    (`link_id` nulo) e os individuais dele. Formulário sem datas não é período.
+    """
+    open_now: list[DatedPeriod] = []
+    scheduled: list[DatedPeriod] = []
+    past: list[DatedPeriod] = []
+
+    for form in periods:
+        if form.opens_at is None or form.closes_at is None:
+            continue
+        if form.link_id is not None and form.link_id != link_id:
+            continue
+
+        status = period_status(form, now)
+        period = DatedPeriod(
+            form=form, opens_at=form.opens_at, closes_at=form.closes_at, status=status
+        )
+        if status is PeriodStatus.OPEN:
+            open_now.append(period)
+        elif status is PeriodStatus.SCHEDULED:
+            scheduled.append(period)
+        else:
+            past.append(period)
+
+    if open_now:
+        individual = [p for p in open_now if p.form.link_id is not None]
+        candidates = individual or open_now
+        return max(candidates, key=_opens_at)
+    if scheduled:
+        return min(scheduled, key=_opens_at)
+    if past:
+        return max(past, key=_closes_at)
+    return None
+
+
+def _opens_at(period: DatedPeriod) -> datetime:
+    return period.opens_at
+
+
+def _closes_at(period: DatedPeriod) -> datetime:
+    return period.closes_at
+
+
 class FormService:
-    def __init__(self, repository: FormRepository) -> None:
+    def __init__(
+        self, repository: FormRepository, organizations: OrganizationService
+    ) -> None:
         self.repository = repository
+        self.organizations = organizations
 
     async def create(
         self, request: FormCreate, *, role: str, organization_id: uuid.UUID
     ) -> Form:
-        """`role` e `organization_id` são de quem pede, não do formulário."""
+        """`role` e `organization_id` são de quem pede, não do formulário.
+
+        A permissão vem antes da existência: um `gestor` que cadastra em
+        organização alheia recebe 403 mesmo se ela não existir, para a resposta não
+        revelar quais organizações existem (a mesma ordem de
+        `OrganizationService.get`). A organização veio no corpo: inexistente é
+        `ValidationError` (422).
+        """
         self.check_organization(
             request.organization_id, role=role, organization_id=organization_id
         )
+
+        if not await self.organizations.organization_exists(request.organization_id):
+            raise ValidationError(f"Organização {request.organization_id} não encontrada")
 
         form = Form(
             name=request.name,
@@ -56,6 +157,90 @@ class FormService:
             form.organization_id, role=role, organization_id=organization_id
         )
         return form
+
+    async def get_current(
+        self, *, link_id: uuid.UUID, organization_id: uuid.UUID
+    ) -> Form:
+        """O formulário aberto agora para o vínculo de quem está logado.
+
+        Vale a organização do vínculo, inclusive para o `admin` (P-031), e o status
+        não é conferido (P-030).
+        """
+        form = await self.repository.get_open_for_link(
+            organization_id, link_id, datetime.now(UTC)
+        )
+
+        if form is None:
+            raise NotFoundError("Nenhum questionário disponível no momento")
+
+        return form
+
+    async def list_periods(
+        self,
+        target_organization_id: uuid.UUID,
+        *,
+        link_id: uuid.UUID | None,
+        role: str,
+        organization_id: uuid.UUID,
+    ) -> list[PeriodRead]:
+        """Os períodos da organização: "para todos", ou os de uma pessoa com `link_id`.
+
+        `role` e `organization_id` são de quem pede. Só na organização do próprio
+        vínculo, sem a exceção da P-033: o vínculo do `admin` é o da organização da
+        CREED (P-048), onde estão os mentorandos. O `gestor` só vê os "para todos".
+        """
+        self.check_same_organization(
+            target_organization_id, organization_id=organization_id
+        )
+
+        if link_id is not None and role != ADMIN:
+            raise ForbiddenError("Só o admin consulta os períodos de uma pessoa")
+
+        forms = await self.repository.list_periods(target_organization_id, link_id)
+        now = datetime.now(UTC)
+
+        return [PeriodRead.de_form(form, period_status(form, now)) for form in forms]
+
+    async def list_individual_form_ids(self, link_id: uuid.UUID) -> list[uuid.UUID]:
+        """Os questionários feitos só para esta pessoa (os períodos individuais).
+
+        Sem regra de acesso: é o que a exclusão de membro (M-3) usa, depois de
+        conferir quem pede.
+        """
+        return await self.repository.list_ids_by_link(link_id)
+
+    async def delete_individual_forms(self, form_ids: list[uuid.UUID]) -> None:
+        """Apaga os questionários individuais da exclusão de membro (M-3).
+
+        Quem chama já apagou as respostas e as perguntas deles: as duas tabelas
+        apontam para `form`, e o banco recusaria a exclusão.
+        """
+        await self.repository.delete_by_ids(form_ids)
+
+    async def check_accepts_answers(
+        self, form_id: uuid.UUID, *, link_id: uuid.UUID
+    ) -> None:
+        """Só o público do questionário escreve, e só dentro do período.
+
+        O público vem antes (403): quem não é o público não precisa saber do
+        período. A janela é a mesma de `get_current`: `opens_at <= agora < closes_at`.
+        Sem período, não aceita: não há exceção para formulário sem datas.
+        """
+        form = await self.get(form_id)
+
+        if form.link_id is not None and form.link_id != link_id:
+            raise ForbiddenError("Este questionário é destinado a outra pessoa")
+
+        now = datetime.now(UTC)
+
+        if form.opens_at is None or form.closes_at is None:
+            raise PeriodClosedError("Este questionário não tem período definido")
+
+        if now < form.opens_at:
+            raise PeriodClosedError("O período deste questionário ainda não começou")
+
+        if now >= form.closes_at:
+            raise PeriodClosedError("O período deste questionário terminou")
 
     def check_organization(
         self,

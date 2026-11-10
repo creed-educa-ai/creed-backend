@@ -175,12 +175,18 @@ class Scenario:
             self.participants,  # type: ignore[arg-type]
             None,  # type: ignore[arg-type]
         )
-        link_service = LinkService(self.links, participant_service)  # type: ignore[arg-type]
+        organization_service = OrganizationService(self.organizations, None)  # type: ignore[arg-type]
+        link_service = LinkService(
+            self.links,  # type: ignore[arg-type]
+            participant_service,
+            organization_service,
+            None,  # type: ignore[arg-type]
+        )
         self.service = MemberService(
             UserService(self.users, link_service),  # type: ignore[arg-type]
             participant_service,
             link_service,
-            OrganizationService(self.organizations, None),  # type: ignore[arg-type]
+            organization_service,
         )
 
     async def invite(
