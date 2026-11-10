@@ -12,8 +12,21 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.domains.forms.schemas import PeriodStatus
 from app.domains.links.models import Link, LinkType, Roles
 from app.shared.enums import DepartmentType
+
+# Reexporta `LinkType`: o filtro `?type=` da lista de membros (router_members.py)
+# precisa do tipo, e a rota não pode importar de models.py.
+__all__ = [
+    "LinkCreate",
+    "LinkResponse",
+    "LinkType",
+    "MemberDepartmentUpdate",
+    "MemberListItem",
+    "MemberPeriod",
+    "MemberResponse",
+]
 
 
 class LinkCreate(BaseModel):
@@ -166,4 +179,78 @@ class MemberResponse(BaseModel):
             type=link.type,
             department=department,
             updated_at=link.updated_at,
+        )
+
+
+class MemberPeriod(BaseModel):
+    """O período que vale para o membro agora, e se ele já respondeu (CREED-697).
+
+    🟡 Premissas P-068 (qual período) e P-069 ("já respondeu" é resposta enviada).
+    """
+
+    form_id: uuid.UUID = Field(description="Questionário do período.")
+    opens_at: datetime = Field(description="Quando o período abre.")
+    closes_at: datetime = Field(description="Quando o período fecha.")
+    period_status: PeriodStatus = Field(
+        description="Situação do período, calculada pelo back no momento da consulta."
+    )
+    has_answered: bool = Field(
+        description=(
+            "Se o membro já enviou a resposta deste período. É o que habilita o "
+            '"Ver resultados" na tabela.'
+        )
+    )
+
+
+class MemberListItem(MemberResponse):
+    """Um membro na lista da organização: o `MemberResponse` mais o período.
+
+    Estende o schema da troca de setor do mesmo jeito que `PeriodRead` estende
+    `FormRead`: o `PATCH` continua devolvendo o membro sem o período.
+    """
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "link_id": "d40b7a55-b9cc-4b78-ae5d-ab325fd655e2",
+                    "name": "Ana Souza",
+                    "email": "ana@empresa.com.br",
+                    "role": "respondente",
+                    "type": "mentoria",
+                    "department": None,
+                    "updated_at": None,
+                    "period": {
+                        "form_id": "5b1f0a7e-4c2d-4f7a-9d3e-2a6b8c0d1e2f",
+                        "opens_at": "2026-11-01T00:00:00Z",
+                        "closes_at": "2026-11-30T23:59:59Z",
+                        "period_status": "open",
+                        "has_answered": False,
+                    },
+                }
+            ]
+        }
+    )
+
+    period: MemberPeriod | None = Field(
+        description="Período atual, o próximo ou o último; `null` se não houver nenhum."
+    )
+
+    @classmethod
+    def from_member(
+        cls,
+        link: Link,
+        *,
+        name: str,
+        email: str | None,
+        department: DepartmentType | None,
+        period: MemberPeriod | None,
+    ) -> "MemberListItem":
+        """Monta o item a partir do vínculo, do que veio das outras tabelas e do
+        período já escolhido pelo service."""
+        return cls(
+            **MemberResponse.from_model(
+                link, name=name, email=email, department=department
+            ).model_dump(),
+            period=period,
         )

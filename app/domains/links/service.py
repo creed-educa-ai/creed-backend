@@ -7,11 +7,13 @@ são de outros domínios: a pergunta "ele existe?" vai ao service dono de cada u
 
 import uuid
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 from app.domains.department.service import DepartmentService
-from app.domains.links.models import Link, Roles
+from app.domains.forms.service import pick_period
+from app.domains.links.models import Link, LinkType, Roles
 from app.domains.links.repository import LinkRepository
-from app.domains.links.schemas import LinkCreate
+from app.domains.links.schemas import LinkCreate, MemberPeriod
 from app.domains.organizacoes.service import OrganizationService
 from app.domains.participants.service import ParticipantService
 from app.shared.enums import DepartmentType
@@ -29,6 +31,14 @@ class Member:
     name: str
     email: str | None
     department: DepartmentType | None
+
+
+@dataclass
+class MemberWithPeriod:
+    """Um membro na lista da organização, com o período que vale para ele."""
+
+    member: Member
+    period: MemberPeriod | None
 
 
 class LinkService:
@@ -140,6 +150,51 @@ class LinkService:
 
         await self.repository.save(link)
         return Member(link=link, name=name, email=email, department=department)
+
+    async def list_members(
+        self,
+        organization_id: uuid.UUID,
+        link_type: LinkType | None,
+        *,
+        role: str,
+        own_organization_id: uuid.UUID,
+    ) -> list[MemberWithPeriod]:
+        """Os membros da organização, cada um com o período dele (CREED-697).
+
+        `role` e `own_organization_id` são de quem pede. Acesso (403) antes de
+        tudo, e organização inexistente é 404: só o `admin` chega a essa conferência.
+
+        Depois de conferir a organização, são três consultas de dados, qualquer que
+        seja o número de membros: os membros, os períodos da organização e as
+        respostas enviadas. O período de cada um é
+        escolhido aqui, por `pick_period` (P-068), e não numa consulta por pessoa.
+        """
+        self._check_can_manage_members(
+            organization_id, role=role, own_organization_id=own_organization_id
+        )
+        if not await self.organizations.organization_exists(organization_id):
+            raise NotFoundError(f"Organização {organization_id} não encontrada")
+
+        rows = await self.repository.list_members(organization_id, link_type)
+        periods = await self.repository.list_organization_periods(organization_id)
+        submitted = await self.repository.list_submitted(organization_id)
+        now = datetime.now(UTC)
+
+        members: list[MemberWithPeriod] = []
+        for link, name, email, department in rows:
+            picked = pick_period(periods, link.id, now)
+            period: MemberPeriod | None = None
+            if picked is not None:
+                period = MemberPeriod(
+                    form_id=picked.form.id,
+                    opens_at=picked.opens_at,
+                    closes_at=picked.closes_at,
+                    period_status=picked.status,
+                    has_answered=(picked.form.id, link.id) in submitted,
+                )
+            member = Member(link=link, name=name, email=email, department=department)
+            members.append(MemberWithPeriod(member=member, period=period))
+        return members
 
     def _check_can_manage_members(
         self, organization_id: uuid.UUID, *, role: str, own_organization_id: uuid.UUID
