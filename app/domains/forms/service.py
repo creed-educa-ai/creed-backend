@@ -30,9 +30,9 @@ ADMIN = "admin"
 
 
 class PeriodLinkService(Protocol):
-    async def get_member_link(
+    async def validate_mentee_link(
         self, organization_id: uuid.UUID, link_id: uuid.UUID
-    ) -> object: ...
+    ) -> None: ...
 
 
 def period_status(form: Form, now: datetime) -> PeriodStatus:
@@ -226,6 +226,9 @@ class FormService:
         A mesma audiência não pode ter períodos sobrepostos; intervalos que apenas
         se encostam também conflitam.
         """
+        if role not in (ADMIN, "gestor"):
+            raise ForbiddenError("Só admin e gestor podem criar períodos")
+
         self.check_same_organization(
             target_organization_id, organization_id=organization_id_user
         )
@@ -246,10 +249,11 @@ class FormService:
             if self.links is None:
                 raise RuntimeError("Serviço de vínculos não foi configurado")
             try:
-                await self.links.get_member_link(target_organization_id, link_id)
+                await self.links.validate_mentee_link(target_organization_id, link_id)
             except NotFoundError as exc:
                 raise ValidationError(exc.message) from exc
 
+        await self.repository.lock_period_audience(target_organization_id, link_id)
         if await self.repository.has_overlapping_period(
             target_organization_id,
             link_id,

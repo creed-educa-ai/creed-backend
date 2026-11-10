@@ -7,7 +7,7 @@ Agregação pesada é empurrada para o Postgres, nunca feita em memória.
 import uuid
 from datetime import datetime
 
-from sqlalchemy import delete, or_, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.forms.models import Form
@@ -63,6 +63,20 @@ class FormRepository:
             .order_by(Form.opens_at.desc())
         )
         return list(result.scalars().all())
+
+    async def lock_period_audience(
+        self, organization_id: uuid.UUID, link_id: uuid.UUID | None
+    ) -> None:
+        """Serializa a criação para o mesmo público até commit/rollback.
+
+        O lock também funciona quando ainda não existe nenhum formulário. Com
+        READ COMMITTED, a consulta seguinte enxerga o período da requisição que
+        acabou de liberar o lock. Todos os criadores de períodos devem usá-lo.
+        """
+        audience = f"forms:period:{organization_id}:{link_id}"
+        await self.db.execute(
+            select(func.pg_advisory_xact_lock(func.hashtextextended(audience, 0)))
+        )
 
     async def has_overlapping_period(
         self,

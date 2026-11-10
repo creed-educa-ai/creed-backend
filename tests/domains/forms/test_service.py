@@ -33,6 +33,11 @@ class FakeFormRepository:
         self.itens.append(form)
         return form
 
+    async def lock_period_audience(
+        self, organization_id: uuid.UUID, link_id: uuid.UUID | None
+    ) -> None:
+        pass
+
     async def has_overlapping_period(
         self,
         organization_id: uuid.UUID,
@@ -89,12 +94,11 @@ class FakePeriodLinkService:
     def __init__(self, *, encontrado: bool = True) -> None:
         self.encontrado = encontrado
 
-    async def get_member_link(
+    async def validate_mentee_link(
         self, organization_id: uuid.UUID, link_id: uuid.UUID
-    ) -> object:
+    ) -> None:
         if not self.encontrado:
             raise NotFoundError(f"Membro {link_id} não encontrado")
-        return object()
 
 
 class TestCriarFormulario:
