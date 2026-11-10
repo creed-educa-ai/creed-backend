@@ -10,7 +10,6 @@ comparação. Se a organização existe, quem responde é o `OrganizationService
 """
 
 import uuid
-from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from app.domains.forms.models import Form, FormStatus
@@ -27,84 +26,13 @@ from app.shared.exceptions import (
 ADMIN = "admin"
 
 
-def period_status(form: Form, now: datetime) -> PeriodStatus:
-    """A mesma janela de `get_current`: `opens_at <= agora < closes_at`.
-
-    Pública porque `links` a usa para o período de cada membro (CREED-697).
-    """
+def _period_status(form: Form, now: datetime) -> PeriodStatus:
+    """A mesma janela de `get_current`: `opens_at <= agora < closes_at`."""
     if now < form.opens_at:  # type: ignore[operator]
         return PeriodStatus.SCHEDULED
     if now >= form.closes_at:  # type: ignore[operator]
         return PeriodStatus.PAST
     return PeriodStatus.OPEN
-
-
-@dataclass
-class DatedPeriod:
-    """Um período com as duas datas garantidas: o `Form` as tem como opcionais.
-
-    É o que `pick_period` devolve, para quem usa o período (o `links`, na lista de
-    membros) ler as datas sem conferir nulo de novo, e a situação já calculada.
-    """
-
-    form: Form
-    opens_at: datetime
-    closes_at: datetime
-    status: PeriodStatus
-
-
-def pick_period(
-    periods: list[Form], link_id: uuid.UUID, now: datetime
-) -> DatedPeriod | None:
-    """O período que vale para um membro agora, ou `None` se não houver nenhum.
-
-    🟡 Premissa P-068: nesta ordem, o período aberto; se não houver, o próximo
-    agendado (o que abre primeiro); se não houver, o último que fechou. Entre dois
-    abertos, o individual vem antes do "para todos" e, depois, o que abriu por
-    último (a mesma ordem do `FormRepository.get_open_for_link`). Confirmar na
-    próxima reunião.
-
-    Só contam os períodos que valem para o vínculo: os da organização inteira
-    (`link_id` nulo) e os individuais dele. Formulário sem datas não é período.
-    """
-    open_now: list[DatedPeriod] = []
-    scheduled: list[DatedPeriod] = []
-    past: list[DatedPeriod] = []
-
-    for form in periods:
-        if form.opens_at is None or form.closes_at is None:
-            continue
-        if form.link_id is not None and form.link_id != link_id:
-            continue
-
-        status = period_status(form, now)
-        period = DatedPeriod(
-            form=form, opens_at=form.opens_at, closes_at=form.closes_at, status=status
-        )
-        if status is PeriodStatus.OPEN:
-            open_now.append(period)
-        elif status is PeriodStatus.SCHEDULED:
-            scheduled.append(period)
-        else:
-            past.append(period)
-
-    if open_now:
-        individual = [p for p in open_now if p.form.link_id is not None]
-        candidates = individual or open_now
-        return max(candidates, key=_opens_at)
-    if scheduled:
-        return min(scheduled, key=_opens_at)
-    if past:
-        return max(past, key=_closes_at)
-    return None
-
-
-def _opens_at(period: DatedPeriod) -> datetime:
-    return period.opens_at
-
-
-def _closes_at(period: DatedPeriod) -> datetime:
-    return period.closes_at
 
 
 class FormService:
@@ -199,7 +127,7 @@ class FormService:
         forms = await self.repository.list_periods(target_organization_id, link_id)
         now = datetime.now(UTC)
 
-        return [PeriodRead.de_form(form, period_status(form, now)) for form in forms]
+        return [PeriodRead.de_form(form, _period_status(form, now)) for form in forms]
 
     async def check_accepts_answers(
         self, form_id: uuid.UUID, *, link_id: uuid.UUID

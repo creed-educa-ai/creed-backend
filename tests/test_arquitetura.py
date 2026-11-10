@@ -30,9 +30,8 @@ NOMES = [caminho.name for caminho in DOMINIOS]
 LEITURA_ENTRE_DOMINIOS: dict[str, str] = {
     "links": (
         "le o membro (vinculo + nome do participante + e-mail do login + tipo do "
-        "setor) numa consulta so, e para a lista de membros tambem os periodos (form) "
-        "e as respostas enviadas (form_responses); grava so em links. Ver docstring "
-        "do repository e o adendo das CREED-6910/697 ao ADR-0004."
+        "setor) numa consulta so; grava so em links. Ver docstring do repository e "
+        "o adendo da CREED-6910 ao ADR-0004."
     ),
 }
 
@@ -42,10 +41,6 @@ LEITURA_ENTRE_DOMINIOS: dict[str, str] = {
 # reexportar é o mesmo desvio de `router.py` importar de `models.py` direto,
 # só que escondido atrás de schemas.py. Formato: nome do domínio -> motivo.
 REEXPORT_DE_TIPO_PERMITIDO: dict[str, str] = {
-    "links": (
-        "LinkType é tipo de valor (Enum), não ORM. schemas.py o reexporta para o "
-        "filtro ?type= de router_members.py usar, sem duplicar os valores."
-    ),
     "questions": (
         "QuestionSection, QuestionType e Prisma são tipos de valor (Enum), não ORM. "
         "schemas.py os reexporta para o filtro ?section= de router.py usar, "
@@ -61,8 +56,7 @@ COMPOE_COM_SERVICE_DE: dict[str, str] = {
     "forms": "confere a organizacao pelo OrganizationService",
     "links": (
         "confere participante, organizacao e setor pelo ParticipantService, "
-        "OrganizationService e DepartmentService; escolhe o periodo do membro com "
-        "pick_period e period_status do forms.service"
+        "OrganizationService e DepartmentService"
     ),
     "organizacoes": "consulta documento pelo DocumentService",
     "participants": "consulta documento pelo DocumentService",
@@ -81,10 +75,6 @@ SUBMODULOS_DE_COMPOSICAO = {"service", "dependencies"}
 SCHEMA_DE_SAIDA_DE_OUTRO_DOMINIO: dict[tuple[str, str], str] = {
     ("responses", "forms"): (
         "GET /forms/current devolve o FormRead junto da resposta, sem duplicar o schema"
-    ),
-    ("links", "forms"): (
-        "o período de cada membro (GET .../members) usa o PeriodStatus de forms, "
-        "sem duplicar os valores num segundo enum"
     ),
 }
 

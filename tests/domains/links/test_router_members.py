@@ -14,12 +14,10 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.domains.forms.schemas import PeriodStatus
 from app.domains.links.dependencies import get_service as get_link_service
 from app.domains.links.models import Link, LinkType, Roles
 from app.domains.links.router_members import router
-from app.domains.links.schemas import MemberPeriod
-from app.domains.links.service import Member, MemberWithPeriod
+from app.domains.links.service import Member
 from app.domains.users.dependencies import get_service as get_user_service
 from app.domains.users.service import UserAccess
 from app.shared.enums import DepartmentType
@@ -95,7 +93,7 @@ def _install_validate_token(monkeypatch: pytest.MonkeyPatch, roles: list[str]) -
 
 def _client(
     monkeypatch: pytest.MonkeyPatch,
-    link_service: object,
+    link_service: _FakeLinkService,
     role: str | None = "gestor",
 ) -> TestClient:
     app = FastAPI()
@@ -235,171 +233,3 @@ def test_link_id_not_uuid_returns_422(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
     assert response.status_code == 422
-
-
-LIST_URL = f"/api/v1/organizations/{ORG_ID}/members"
-
-
-class _FakeListService:
-    """Dublê da lista: guarda o que recebeu e devolve `members`, ou levanta `error`."""
-
-    def __init__(
-        self,
-        members: list[MemberWithPeriod] | None = None,
-        error: Exception | None = None,
-    ) -> None:
-        self.members = list(members or [])
-        self.error = error
-        self.calls: list[dict[str, Any]] = []
-
-    async def list_members(
-        self,
-        organization_id: uuid.UUID,
-        link_type: LinkType | None,
-        *,
-        role: str,
-        own_organization_id: uuid.UUID,
-    ) -> list[MemberWithPeriod]:
-        self.calls.append(
-            {
-                "organization_id": organization_id,
-                "link_type": link_type,
-                "role": role,
-                "own_organization_id": own_organization_id,
-            }
-        )
-        if self.error is not None:
-            raise self.error
-        return self.members
-
-
-def _mentee(period: MemberPeriod | None) -> MemberWithPeriod:
-    link = Link(
-        id=LINK_ID,
-        participant_id=uuid.uuid4(),
-        organization_id=ORG_ID,
-        department_id=None,
-        type=LinkType.MENTORIA,
-        role=Roles.RESPONDENTE,
-        start_at=datetime(2026, 11, 1, tzinfo=UTC),
-        end_at=None,
-        created_at=datetime(2026, 11, 1, tzinfo=UTC),
-        updated_at=None,
-    )
-    member = Member(link=link, name="Ana Souza", email=None, department=None)
-    return MemberWithPeriod(member=member, period=period)
-
-
-def test_list_returns_members_with_their_period(monkeypatch: pytest.MonkeyPatch) -> None:
-    period = MemberPeriod(
-        form_id=uuid.UUID("5b1f0a7e-4c2d-4f7a-9d3e-2a6b8c0d1e2f"),
-        opens_at=datetime(2026, 11, 1, tzinfo=UTC),
-        closes_at=datetime(2026, 11, 30, tzinfo=UTC),
-        period_status=PeriodStatus.OPEN,
-        has_answered=True,
-    )
-    service = _FakeListService([_mentee(period), _mentee(None)])
-
-    response = _client(monkeypatch, service).get(LIST_URL, headers=AUTH)
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body[0] == {
-        "link_id": str(LINK_ID),
-        "name": "Ana Souza",
-        "email": None,
-        "role": "respondente",
-        "type": "mentoria",
-        "department": None,
-        "updated_at": None,
-        "period": {
-            "form_id": "5b1f0a7e-4c2d-4f7a-9d3e-2a6b8c0d1e2f",
-            "opens_at": "2026-11-01T00:00:00Z",
-            "closes_at": "2026-11-30T00:00:00Z",
-            "period_status": "open",
-            "has_answered": True,
-        },
-    }
-    assert body[1]["period"] is None
-    # Sem `?type=`, o service recebe `None`; papel e organização vêm do login.
-    assert service.calls == [
-        {
-            "organization_id": ORG_ID,
-            "link_type": None,
-            "role": "gestor",
-            "own_organization_id": ORG_ID,
-        }
-    ]
-
-
-def test_type_query_reaches_the_service(monkeypatch: pytest.MonkeyPatch) -> None:
-    service = _FakeListService()
-
-    response = _client(monkeypatch, service).get(
-        LIST_URL, params={"type": "mentoria"}, headers=AUTH
-    )
-
-    assert response.status_code == 200
-    assert service.calls[0]["link_type"] is LinkType.MENTORIA
-
-
-def test_empty_organization_returns_empty_list(monkeypatch: pytest.MonkeyPatch) -> None:
-    response = _client(monkeypatch, _FakeListService()).get(LIST_URL, headers=AUTH)
-
-    assert response.status_code == 200
-    assert response.json() == []
-
-
-def test_list_without_authorization_returns_401(monkeypatch: pytest.MonkeyPatch) -> None:
-    service = _FakeListService()
-
-    response = _client(monkeypatch, service, role=None).get(LIST_URL)
-
-    assert response.status_code == 401
-    assert service.calls == []
-
-
-def test_list_as_respondente_returns_403_without_calling_the_service(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    service = _FakeListService()
-
-    response = _client(monkeypatch, service, role="respondente").get(
-        LIST_URL, headers=AUTH
-    )
-
-    assert response.status_code == 403
-    assert service.calls == []
-
-
-def test_list_service_forbidden_becomes_403(monkeypatch: pytest.MonkeyPatch) -> None:
-    service = _FakeListService(
-        error=ForbiddenError("Sem acesso aos membros desta organização")
-    )
-
-    response = _client(monkeypatch, service).get(LIST_URL, headers=AUTH)
-
-    assert response.status_code == 403
-
-
-def test_list_unknown_organization_becomes_404(monkeypatch: pytest.MonkeyPatch) -> None:
-    service = _FakeListService(
-        error=NotFoundError(f"Organização {ORG_ID} não encontrada")
-    )
-
-    response = _client(monkeypatch, service).get(LIST_URL, headers=AUTH)
-
-    assert response.status_code == 404
-
-
-def test_invalid_type_returns_422_without_calling_the_service(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    service = _FakeListService()
-
-    response = _client(monkeypatch, service).get(
-        LIST_URL, params={"type": "vendedor"}, headers=AUTH
-    )
-
-    assert response.status_code == 422
-    assert service.calls == []

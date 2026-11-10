@@ -13,15 +13,10 @@ Nenhuma regra de negócio aqui, e nenhum import de `models`.
 import uuid
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Path, status
 
 from app.domains.links.dependencies import ServiceDep
-from app.domains.links.schemas import (
-    LinkType,
-    MemberDepartmentUpdate,
-    MemberListItem,
-    MemberResponse,
-)
+from app.domains.links.schemas import MemberDepartmentUpdate, MemberResponse
 from app.shared.authorization import AuthenticatedUser, require_role
 from app.shared.exceptions import ForbiddenError, NotFoundError
 from app.shared.schemas import ErrorResponse, ValidationErrorResponse
@@ -75,90 +70,6 @@ _ERRORS: dict[int | str, dict[str, Any]] = {
         ),
     },
 }
-
-
-# A lista usa o 401 e o 403 da troca de setor; o 404 e o 422 têm outro motivo.
-_LIST_ERRORS: dict[int | str, dict[str, Any]] = {
-    **_ERRORS,
-    status.HTTP_404_NOT_FOUND: {
-        "model": ErrorResponse,
-        "description": (
-            "A organização não existe. Só o admin chega aqui: o gestor de outra "
-            "organização recebe 403 antes."
-        ),
-        "content": {
-            "application/json": {
-                "example": {
-                    "detail": (
-                        "Organização 8f14e45f-ceea-467e-adde-3f81905dbc1c não encontrada"
-                    )
-                }
-            }
-        },
-    },
-    status.HTTP_422_UNPROCESSABLE_CONTENT: {
-        "model": ValidationErrorResponse,
-        "description": (
-            "`type` fora dos tipos de vínculo, ou `organization_id` que não é UUID. "
-            "`detail` é uma lista, um item por campo recusado."
-        ),
-    },
-}
-
-
-@router.get(
-    "",
-    response_model=list[MemberListItem],
-    status_code=status.HTTP_200_OK,
-    summary="Listar os membros da organização",
-    description=(
-        "Lista as pessoas da organização, em ordem de nome, com o setor e o período "
-        "de cada uma: o aberto; se não houver, o próximo agendado; se não houver, o "
-        "último que fechou (P-068). `period.has_answered` diz se a pessoa já enviou "
-        'a resposta daquele período, e é o que habilita o "Ver resultados". Com '
-        "`?type=mentoria`, só os mentorandos. O gestor lista a própria organização, "
-        "e o admin, qualquer uma (P-066)."
-    ),
-    response_description="Membros encontrados; lista vazia se não houver nenhum.",
-    operation_id="list_members",
-    responses=_LIST_ERRORS,
-)
-async def list_members(
-    organization_id: Annotated[
-        uuid.UUID,
-        Path(
-            description="Organização dos membros.",
-            examples=["8f14e45f-ceea-467e-adde-3f81905dbc1c"],
-        ),
-    ],
-    service: ServiceDep,
-    user: ManagerDep,
-    link_type: Annotated[
-        LinkType | None,
-        Query(alias="type", description="Só os vínculos deste tipo, como `mentoria`."),
-    ] = None,
-) -> list[MemberListItem]:
-    try:
-        members = await service.list_members(
-            organization_id,
-            link_type,
-            role=user.role,
-            own_organization_id=user.organization_uuid,
-        )
-    except ForbiddenError as exc:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, exc.message) from exc
-    except NotFoundError as exc:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, exc.message) from exc
-    return [
-        MemberListItem.from_member(
-            item.member.link,
-            name=item.member.name,
-            email=item.member.email,
-            department=item.member.department,
-            period=item.period,
-        )
-        for item in members
-    ]
 
 
 @router.patch(
