@@ -12,12 +12,14 @@ comparação. Se a organização existe, quem responde é o `OrganizationService
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Protocol
 
 from app.domains.forms.models import Form, FormStatus
 from app.domains.forms.repository import FormRepository
-from app.domains.forms.schemas import FormCreate, PeriodRead, PeriodStatus
+from app.domains.forms.schemas import FormCreate, PeriodCreate, PeriodRead, PeriodStatus
 from app.domains.organizacoes.service import OrganizationService
 from app.shared.exceptions import (
+    ConflictError,
     ForbiddenError,
     NotFoundError,
     PeriodClosedError,
@@ -25,6 +27,12 @@ from app.shared.exceptions import (
 )
 
 ADMIN = "admin"
+
+
+class PeriodLinkService(Protocol):
+    async def get_member_link(
+        self, organization_id: uuid.UUID, link_id: uuid.UUID
+    ) -> object: ...
 
 
 def period_status(form: Form, now: datetime) -> PeriodStatus:
@@ -109,10 +117,14 @@ def _closes_at(period: DatedPeriod) -> datetime:
 
 class FormService:
     def __init__(
-        self, repository: FormRepository, organizations: OrganizationService
+        self,
+        repository: FormRepository,
+        organizations: OrganizationService,
+        links: PeriodLinkService | None = None,
     ) -> None:
         self.repository = repository
         self.organizations = organizations
+        self.links = links
 
     async def create(
         self, request: FormCreate, *, role: str, organization_id: uuid.UUID
@@ -200,6 +212,63 @@ class FormService:
         now = datetime.now(UTC)
 
         return [PeriodRead.de_form(form, period_status(form, now)) for form in forms]
+
+    async def create_period(
+        self,
+        target_organization_id: uuid.UUID,
+        request: PeriodCreate,
+        *,
+        role: str,
+        organization_id_user: uuid.UUID,
+    ) -> Form:
+        """Cria um formulário com período, para a organização ou um mentorando.
+
+        A mesma audiência não pode ter períodos sobrepostos; intervalos que apenas
+        se encostam também conflitam.
+        """
+        self.check_same_organization(
+            target_organization_id, organization_id=organization_id_user
+        )
+
+        link_id = request.link_id
+        if role == ADMIN and link_id is None:
+            raise ForbiddenError("Admin precisa informar o link_id do mentorando")
+        if role != ADMIN and link_id is not None:
+            raise ForbiddenError("Só o admin pode criar período para um mentorando")
+
+        if not await self.organizations.organization_exists(target_organization_id):
+            raise NotFoundError(f"Organização {target_organization_id} não encontrada")
+
+        if request.opens_at < datetime.now(UTC):
+            raise ValidationError("opens_at não pode estar no passado")
+
+        if link_id is not None:
+            if self.links is None:
+                raise RuntimeError("Serviço de vínculos não foi configurado")
+            try:
+                await self.links.get_member_link(target_organization_id, link_id)
+            except NotFoundError as exc:
+                raise ValidationError(exc.message) from exc
+
+        if await self.repository.has_overlapping_period(
+            target_organization_id,
+            link_id,
+            request.opens_at,
+            request.closes_at,
+        ):
+            raise ConflictError("Já existe período para este público nesse intervalo")
+
+        form = Form(
+            name=(
+                f"Questionário {request.opens_at:%Y-%m-%d} a {request.closes_at:%Y-%m-%d}"
+            ),
+            organization_id=target_organization_id,
+            status=FormStatus.DRAFT,
+            opens_at=request.opens_at,
+            closes_at=request.closes_at,
+            link_id=link_id,
+        )
+        return await self.repository.create(form)
 
     async def list_individual_form_ids(self, link_id: uuid.UUID) -> list[uuid.UUID]:
         """Os questionários feitos só para esta pessoa (os períodos individuais).
