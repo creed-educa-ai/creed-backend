@@ -34,7 +34,7 @@ RELIGIONS_TABLE = cast(sa.Table, DemographicReligion.__table__)
 
 def _foreign_keys(table: sa.Table) -> dict[str, tuple[str, str | None, str | None]]:
     return {
-        fk.parent.name: (fk.target_fullname, fk.name, fk.ondelete)
+        fk.parent.name: (fk.target_fullname, cast(str | None, fk.name), fk.ondelete)
         for fk in table.foreign_keys
     }
 
