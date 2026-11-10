@@ -3,7 +3,8 @@
 from sqlalchemy import Enum
 from sqlalchemy.dialects.postgresql import UUID
 
-from app.domains.department.models import Department, DepartmentType
+from app.domains.department.models import Department
+from app.shared.enums import DepartmentType
 
 
 def test_table_name() -> None:
@@ -45,3 +46,9 @@ def test_foreign_keys() -> None:
 
     assert len(foreign_keys) == 1
     assert next(iter(foreign_keys)).target_fullname == "organizations.id"
+
+
+def test_organization_fk_has_the_name_the_migration_uses() -> None:
+    fk = next(iter(Department.__table__.c.organization_id.foreign_keys))
+
+    assert fk.name == "fk_departments_organization_id_organizations"

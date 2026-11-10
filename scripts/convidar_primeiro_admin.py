@@ -33,6 +33,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models  # noqa: F401  (registra todas as tabelas; ver app/models.py)
 from app.core.database import AsyncSessionLocal
+from app.domains.department.repository import DepartmentRepository
+from app.domains.department.service import DepartmentService
 from app.domains.documents.models import DocType, Document
 from app.domains.documents.repository import DocumentRepository
 from app.domains.documents.service import DocumentService
@@ -198,12 +200,16 @@ async def main(invite: MemberInvite) -> None:
     async with AsyncSessionLocal() as session:
         documents = DocumentService(DocumentRepository(session))
         participants = ParticipantService(ParticipantRepository(session), documents)
-        links = LinkService(LinkRepository(session), participants)
-        users = UserService(UserRepository(session), links)
         organizations = OrganizationRepository(session)
-        members = MemberService(
-            users, participants, links, OrganizationService(organizations, documents)
+        organization_service = OrganizationService(organizations, documents)
+        departments = DepartmentService(
+            DepartmentRepository(session), organization_service
         )
+        links = LinkService(
+            LinkRepository(session), participants, organization_service, departments
+        )
+        users = UserService(UserRepository(session), links)
+        members = MemberService(users, participants, links, organization_service)
 
         await invite_first_admin(session, organizations, users, members, invite)
 

@@ -3,7 +3,7 @@
 A guarda roda de verdade: só o `validate_token` e o `UserService` são dublês, como
 em `tests/domains/participants/test_router.py`. A regra de organização (P-033) é
 provada em `test_service.py`; aqui se prova a guarda de papel e a tradução do
-`ForbiddenError` em 403.
+`ForbiddenError` em 403 e do `ValidationError` em 422.
 """
 
 import uuid
@@ -20,7 +20,7 @@ from app.domains.forms.router import router
 from app.domains.forms.schemas import FormCreate
 from app.domains.users.dependencies import get_service as get_user_service
 from app.domains.users.service import UserAccess
-from app.shared.exceptions import ForbiddenError, NotFoundError
+from app.shared.exceptions import ForbiddenError, NotFoundError, ValidationError
 
 ORGANIZATION_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
@@ -32,7 +32,16 @@ FAKE_FORM = Form(
     created_at=datetime(2026, 9, 13, tzinfo=UTC),
 )
 
-CHAVES_DA_SAIDA = {"id", "name", "organization_id", "status", "created_at"}
+CHAVES_DA_SAIDA = {
+    "id",
+    "name",
+    "organization_id",
+    "status",
+    "opens_at",
+    "closes_at",
+    "link_id",
+    "created_at",
+}
 TOKEN = {"Authorization": "Bearer valido"}
 
 
@@ -40,12 +49,21 @@ class _FakeService:
     """Dublê: devolve o que for configurado, sem reimplementar a regra.
 
     `proibido=True` faz as duas operações levantarem `ForbiddenError`, como o
-    service real faz para outra organização.
+    service real faz para outra organização. `organizacao_inexistente=True` faz
+    o cadastro levantar `ValidationError`, como o service real faz quando a
+    organização do corpo não existe.
     """
 
-    def __init__(self, form: Form | None = FAKE_FORM, *, proibido: bool = False) -> None:
+    def __init__(
+        self,
+        form: Form | None = FAKE_FORM,
+        *,
+        proibido: bool = False,
+        organizacao_inexistente: bool = False,
+    ) -> None:
         self.form = form
         self.proibido = proibido
+        self.organizacao_inexistente = organizacao_inexistente
         self.quem_pediu: tuple[str, uuid.UUID] | None = None
 
     async def create(
@@ -54,6 +72,8 @@ class _FakeService:
         self.quem_pediu = (role, organization_id)
         if self.proibido:
             raise ForbiddenError("Sem acesso a formulário de outra organização")
+        if self.organizacao_inexistente:
+            raise ValidationError(f"Organização {dados.organization_id} não encontrada")
         return Form(
             id=FAKE_FORM.id,
             name=dados.name,
@@ -177,6 +197,19 @@ class TestCriar:
             "Sem acesso a formulário de outra organização"
         )
 
+    def test_organizacao_inexistente_devolve_422_com_detail_texto(
+        self, app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        autenticar_como(app, monkeypatch, "admin")
+        _use_fake_service(app, _FakeService(organizacao_inexistente=True))
+
+        response = client.post("/forms", json=PAYLOAD, headers=TOKEN)
+
+        assert response.status_code == 422
+        assert response.json()["detail"] == (
+            f"Organização {ORGANIZATION_ID} não encontrada"
+        )
+
     @pytest.mark.parametrize(
         "payload",
         [
@@ -214,6 +247,41 @@ class TestConsultar:
         assert response.status_code == 200
         assert set(response.json()) == CHAVES_DA_SAIDA
         assert service.quem_pediu == ("respondente", ORGANIZATION_ID)
+
+    def test_formulario_sem_periodo_devolve_os_tres_campos_nulos(
+        self, app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        autenticar_como(app, monkeypatch, "respondente")
+        _use_fake_service(app, _FakeService(form=FAKE_FORM))
+
+        body = client.get(f"/forms/{FAKE_FORM.id}", headers=TOKEN).json()
+
+        assert body["opens_at"] is None
+        assert body["closes_at"] is None
+        assert body["link_id"] is None
+
+    def test_formulario_com_periodo_e_publico_devolve_os_tres_campos(
+        self, app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        autenticar_como(app, monkeypatch, "respondente")
+        link_id = uuid.uuid4()
+        form = Form(
+            id=FAKE_FORM.id,
+            name=FAKE_FORM.name,
+            organization_id=ORGANIZATION_ID,
+            status=FormStatus.PUBLISHED,
+            opens_at=datetime(2026, 10, 1, tzinfo=UTC),
+            closes_at=datetime(2026, 10, 31, tzinfo=UTC),
+            link_id=link_id,
+            created_at=FAKE_FORM.created_at,
+        )
+        _use_fake_service(app, _FakeService(form=form))
+
+        body = client.get(f"/forms/{FAKE_FORM.id}", headers=TOKEN).json()
+
+        assert body["opens_at"] == "2026-10-01T00:00:00Z"
+        assert body["closes_at"] == "2026-10-31T00:00:00Z"
+        assert body["link_id"] == str(link_id)
 
     def test_organizacao_alheia_devolve_403(
         self, app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
