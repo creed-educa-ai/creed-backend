@@ -5,7 +5,7 @@ Esta camada NÃO contém regra de negócio: só queries e operações de persist
 
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -60,3 +60,28 @@ class InsightPrismaRepository:
         """Remove a associação."""
         await self.db.delete(associacao)
         await self.db.flush()
+
+
+class InsightRepository:
+    def __init__(self, db: AsyncSession) -> None:
+        self.db = db
+
+    async def delete_by_form_responses(self, form_response_ids: list[uuid.UUID]) -> None:
+        """Apaga os insights das respostas e, antes, os prismas associados a eles.
+
+        As duas tabelas são deste domínio, então a ordem mora aqui: a associação
+        aponta para o insight, e o banco recusaria apagar o insight primeiro.
+        """
+        if not form_response_ids:
+            return
+        insights_of_responses = select(Insight.id).where(
+            Insight.form_response_id.in_(form_response_ids)
+        )
+        await self.db.execute(
+            delete(InsightPrisma).where(
+                InsightPrisma.insight_id.in_(insights_of_responses)
+            )
+        )
+        await self.db.execute(
+            delete(Insight).where(Insight.form_response_id.in_(form_response_ids))
+        )

@@ -78,3 +78,26 @@ class DemographicRepository:
             )
         )
         return list(result.scalars().all())
+
+    async def delete_by_participant_id(self, participant_id: uuid.UUID) -> None:
+        """Apaga o perfil e, antes, as etnias e religiões marcadas nele.
+
+        O `ondelete="CASCADE"` das duas tabelas faria isso no banco, mas apagar à
+        mão não depende de a migration ter criado a chave com a cascata.
+        """
+        demographic_of_participant = select(Demographic.id).where(
+            Demographic.participant_id == participant_id
+        )
+        await self.db.execute(
+            delete(DemographicEthnicity).where(
+                DemographicEthnicity.demographic_id.in_(demographic_of_participant)
+            )
+        )
+        await self.db.execute(
+            delete(DemographicReligion).where(
+                DemographicReligion.demographic_id.in_(demographic_of_participant)
+            )
+        )
+        await self.db.execute(
+            delete(Demographic).where(Demographic.participant_id == participant_id)
+        )

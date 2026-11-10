@@ -18,7 +18,7 @@ e-mail do login e o tipo do setor, com JOIN em `participants`, `user` e
 
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.department.models import Department
@@ -132,6 +132,18 @@ class LinkRepository:
             )
         )
         return {row.tuple() for row in result.all()}
+
+    async def delete(self, link: Link) -> None:
+        await self.db.delete(link)
+        await self.db.flush()
+
+    async def count_by_participant(self, participant_id: uuid.UUID) -> int:
+        result = await self.db.execute(
+            select(func.count())
+            .select_from(Link)
+            .where(Link.participant_id == participant_id)
+        )
+        return result.scalar_one()
 
     async def save(self, link: Link) -> Link:
         """Grava as alterações de um vínculo já carregado pela sessão.

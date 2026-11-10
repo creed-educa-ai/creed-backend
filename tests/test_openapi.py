@@ -62,6 +62,7 @@ def test_all_endpoints_have_method_summary_description_and_operation_id() -> Non
         ("/api/v1/forms/{form_id}/questions", "get"),
         ("/api/v1/organizations/{organization_id}/members/{link_id}", "patch"),
         ("/api/v1/organizations/{organization_id}/members", "get"),
+        ("/api/v1/organizations/{organization_id}/members/{link_id}", "delete"),
     }
 
     documented_operations = {

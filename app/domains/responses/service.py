@@ -162,6 +162,25 @@ class FormResponseService:
 
         return form_response
 
+    async def list_ids_for_member_removal(
+        self, link_id: uuid.UUID, individual_form_ids: list[uuid.UUID]
+    ) -> list[uuid.UUID]:
+        """As respostas que a exclusão de membro (M-3) apaga.
+
+        As da pessoa, em qualquer questionário, e as dos questionários feitos só
+        para ela, de quem quer que sejam: o questionário individual sai junto, e
+        resposta apontando para ele impediria a exclusão. Quem chama precisa dos ids
+        antes de apagar, para tirar primeiro os insights e os dashboards delas.
+        """
+        return await self.repository.list_ids_by_link_or_forms(
+            link_id, individual_form_ids
+        )
+
+    async def delete_with_answers(self, form_response_ids: list[uuid.UUID]) -> None:
+        """Apaga as respostas e, antes, o que foi marcado em cada uma (M-3)."""
+        await self.answers.delete_by_form_responses(form_response_ids)
+        await self.repository.delete_by_ids(form_response_ids)
+
 
 class AnswerService:
     def __init__(

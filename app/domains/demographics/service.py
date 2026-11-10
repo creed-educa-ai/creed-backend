@@ -57,6 +57,14 @@ class DemographicService:
             religions=list(request.religions),
         )
 
+    async def delete_for_participant(self, participant_id: uuid.UUID) -> None:
+        """Apaga o perfil da pessoa na exclusão de membro (M-3), se ela tiver um.
+
+        Sem regra de acesso: quem chama já conferiu quem pede e que a pessoa não
+        tem outro vínculo.
+        """
+        await self.repository.delete_by_participant_id(participant_id)
+
     async def _participant_id(self, link_id: uuid.UUID) -> uuid.UUID:
         link = await self.links.get_link_by_id_service(link_id)
         if link is None:

@@ -151,6 +151,34 @@ class LinkService:
         await self.repository.save(link)
         return Member(link=link, name=name, email=email, department=department)
 
+    async def get_member_link(
+        self, organization_id: uuid.UUID, link_id: uuid.UUID
+    ) -> Link:
+        """O vínculo, se for desta organização. Sem regra de acesso: quem chama já
+        conferiu quem pede (a exclusão de membro, M-3).
+
+        Vínculo inexistente e vínculo de outra organização são o mesmo 404, como em
+        `update_member_department`.
+        """
+        link = await self.repository.get_by_id(link_id)
+        if link is None or link.organization_id != organization_id:
+            raise NotFoundError(
+                f"Membro {link_id} não encontrado na organização {organization_id}"
+            )
+        return link
+
+    async def delete_link(self, link: Link) -> None:
+        """Apaga o vínculo na exclusão de membro (M-3).
+
+        Quem chama já apagou o que aponta para ele: o login, as respostas e os
+        questionários individuais.
+        """
+        await self.repository.delete(link)
+
+    async def participant_has_links(self, participant_id: uuid.UUID) -> bool:
+        """Se a pessoa ainda tem vínculo com alguma organização."""
+        return await self.repository.count_by_participant(participant_id) > 0
+
     async def list_members(
         self,
         organization_id: uuid.UUID,

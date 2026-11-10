@@ -201,6 +201,22 @@ class FormService:
 
         return [PeriodRead.de_form(form, period_status(form, now)) for form in forms]
 
+    async def list_individual_form_ids(self, link_id: uuid.UUID) -> list[uuid.UUID]:
+        """Os questionários feitos só para esta pessoa (os períodos individuais).
+
+        Sem regra de acesso: é o que a exclusão de membro (M-3) usa, depois de
+        conferir quem pede.
+        """
+        return await self.repository.list_ids_by_link(link_id)
+
+    async def delete_individual_forms(self, form_ids: list[uuid.UUID]) -> None:
+        """Apaga os questionários individuais da exclusão de membro (M-3).
+
+        Quem chama já apagou as respostas e as perguntas deles: as duas tabelas
+        apontam para `form`, e o banco recusaria a exclusão.
+        """
+        await self.repository.delete_by_ids(form_ids)
+
     async def check_accepts_answers(
         self, form_id: uuid.UUID, *, link_id: uuid.UUID
     ) -> None:
