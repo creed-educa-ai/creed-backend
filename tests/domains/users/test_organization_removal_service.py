@@ -89,13 +89,23 @@ class FakeMemberRemovalService:
 
 
 class FakeOrganizationService:
+    """`get_calls` guarda o papel e a organização com que o service leu a empresa."""
+
     def __init__(self, world: World) -> None:
         self.world = world
+        self.get_calls: list[dict[str, object]] = []
 
     async def get(
         self, organization_id: uuid.UUID, *, role: str, own_organization_id: uuid.UUID
     ) -> Organization:
         self.world.log.append("organizations.get")
+        self.get_calls.append(
+            {
+                "organization_id": organization_id,
+                "role": role,
+                "own_organization_id": own_organization_id,
+            }
+        )
         organization = self.world.organizations.get(organization_id)
         if organization is None:
             raise NotFoundError(f"Organização {organization_id} não encontrada")
@@ -259,14 +269,16 @@ class Setup:
     service: OrganizationRemovalService
     members: FakeMemberRemovalService
     dashboards: FakeDashboardService
+    organizations: FakeOrganizationService
 
 
 def build(world: World) -> Setup:
     members = FakeMemberRemovalService(world)
     dashboards = FakeDashboardService(world)
+    organizations = FakeOrganizationService(world)
     service = OrganizationRemovalService(
         members,  # type: ignore[arg-type]
-        FakeOrganizationService(world),  # type: ignore[arg-type]
+        organizations,  # type: ignore[arg-type]
         FakeLinkService(world),  # type: ignore[arg-type]
         FakeFormService(world),  # type: ignore[arg-type]
         FakeQuestionService(world),  # type: ignore[arg-type]
@@ -277,7 +289,12 @@ def build(world: World) -> Setup:
         FakeParticipantService(world),  # type: ignore[arg-type]
         FakeDocumentService(world),  # type: ignore[arg-type]
     )
-    return Setup(service=service, members=members, dashboards=dashboards)
+    return Setup(
+        service=service,
+        members=members,
+        dashboards=dashboards,
+        organizations=organizations,
+    )
 
 
 CREED = uuid.uuid4()
@@ -472,6 +489,25 @@ class TestRemoveOrganization:
         assert setup.members.deleted == []
         assert setup.members.keycloak_calls == []
         assert CREED in world.organizations
+
+    async def test_reads_the_organization_as_admin(self) -> None:
+        """A guarda da rota só deixa passar o `admin`, e o service lê como ele.
+
+        Lida com outro papel, a organização inexistente viraria 403 em vez de 404.
+        """
+        world = World()
+        company = add_organization(world)
+        setup = build(world)
+
+        await remove(setup, company.id)
+
+        assert setup.organizations.get_calls == [
+            {
+                "organization_id": company.id,
+                "role": "admin",
+                "own_organization_id": CREED,
+            }
+        ]
 
     async def test_unknown_organization_is_not_found_without_deleting(self) -> None:
         world = World()

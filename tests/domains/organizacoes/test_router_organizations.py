@@ -5,6 +5,11 @@ service é um dublê; a regra (documento repetido, status `pending`, e-mail em
 minúsculas) é provada em `test_service.py`. Aqui se prova a validação do corpo, a
 limpeza do documento antes de chegar ao service, a tradução do 409 e o formato da
 saída, com o documento que o `with_documents` junta.
+
+A exclusão tem guarda, que roda de verdade: só o `validate_token` e o `UserService`
+são dublês (`autenticar_como`, como em `test_router.py`). O
+`OrganizationRemovalService` é um dublê; a ordem do que sai é provada em
+`tests/domains/users/test_organization_removal_service.py`.
 """
 
 import uuid
@@ -20,7 +25,15 @@ from app.domains.organizacoes.models import Organization, OrganizationStatus
 from app.domains.organizacoes.router_organizations import router
 from app.domains.organizacoes.schemas import OrganizationSignUp
 from app.domains.organizacoes.service import OrganizationWithDocument
-from app.shared.exceptions import ConflictError
+from app.domains.users.dependencies import get_organization_removal_service
+from app.domains.users.dependencies import get_service as get_user_service
+from app.domains.users.service import UserAccess
+from app.shared.exceptions import (
+    ConflictError,
+    DomainError,
+    NotFoundError,
+    ServiceUnavailableError,
+)
 
 URL = "/organizations/sign-up"
 
@@ -321,3 +334,148 @@ class TestCorpoInvalido:
         assert response.status_code == 422
         assert _campos_recusados(response) == {"email"}
         assert service.pedidos == []
+
+
+# --- Exclusão de empresa (E-6) -----------------------------------------------
+
+# A organização do caminho e a de quem pede são diferentes de propósito: o teste
+# prova que a de quem pede sai do token, e não do endereço.
+TARGET_ID = uuid.UUID("8f14e45f-ceea-467e-adde-3f81905dbc1c")
+OWN_ORGANIZATION_ID = uuid.UUID("3f2b8c1e-7a4d-4e9b-9c0a-5d6e7f8a9b0c")
+URL_DA_EMPRESA = f"/organizations/{TARGET_ID}"
+TOKEN = {"Authorization": "Bearer valido"}
+
+
+class _FakeUserService:
+    def __init__(self, access: UserAccess) -> None:
+        self._access = access
+
+    async def get_active_user_access_by_email(self, email: str) -> UserAccess | None:
+        return self._access
+
+
+def autenticar_como(app: FastAPI, monkeypatch: pytest.MonkeyPatch, role: str) -> None:
+    """Faz o token de teste valer como um usuário ativo com o papel indicado."""
+    email = "dev@creed.example.com"
+
+    async def _fake_validate_token(token: str) -> dict[str, Any]:
+        return {"sub": "sub-dev", "email": email, "realm_access": {"roles": [role]}}
+
+    monkeypatch.setattr("app.shared.authorization.validate_token", _fake_validate_token)
+    access = UserAccess(
+        id=uuid.uuid4(),
+        email=email,
+        role=role,
+        link_id=uuid.uuid4(),
+        organization_id=OWN_ORGANIZATION_ID,
+    )
+    app.dependency_overrides[get_user_service] = lambda: _FakeUserService(access)
+
+
+class _FakeRemovalService:
+    """Dublê do `OrganizationRemovalService`: guarda o que recebeu, ou levanta `erro`."""
+
+    def __init__(self, *, erro: DomainError | None = None) -> None:
+        self.erro = erro
+        self.calls: list[dict[str, uuid.UUID]] = []
+
+    async def remove_organization(
+        self, organization_id: uuid.UUID, *, own_organization_id: uuid.UUID
+    ) -> None:
+        self.calls.append(
+            {
+                "organization_id": organization_id,
+                "own_organization_id": own_organization_id,
+            }
+        )
+        if self.erro is not None:
+            raise self.erro
+
+
+def usar_removal_service(
+    app: FastAPI, service: _FakeRemovalService
+) -> _FakeRemovalService:
+    app.dependency_overrides[get_organization_removal_service] = lambda: service
+    return service
+
+
+class TestExclusao:
+    def test_admin_devolve_204_sem_corpo(
+        self, app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        autenticar_como(app, monkeypatch, "admin")
+        service = usar_removal_service(app, _FakeRemovalService())
+
+        response = client.delete(URL_DA_EMPRESA, headers=TOKEN)
+
+        assert response.status_code == 204
+        assert response.content == b""
+        assert service.calls == [
+            {"organization_id": TARGET_ID, "own_organization_id": OWN_ORGANIZATION_ID}
+        ]
+
+    def test_sem_token_devolve_401(self, app: FastAPI, client: TestClient) -> None:
+        service = usar_removal_service(app, _FakeRemovalService())
+
+        response = client.delete(URL_DA_EMPRESA)
+
+        assert response.status_code == 401
+        assert service.calls == []
+
+    @pytest.mark.parametrize("role", ["gestor", "respondente"])
+    def test_outro_papel_devolve_403_sem_chegar_ao_service(
+        self,
+        app: FastAPI,
+        client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        role: str,
+    ) -> None:
+        """🟡 P-079: o service não confere o papel; quem barra é a guarda."""
+        autenticar_como(app, monkeypatch, role)
+        service = usar_removal_service(app, _FakeRemovalService())
+
+        response = client.delete(URL_DA_EMPRESA, headers=TOKEN)
+
+        assert response.status_code == 403
+        assert service.calls == []
+
+    @pytest.mark.parametrize(
+        ("erro", "status_esperado"),
+        [
+            (NotFoundError(f"Organização {TARGET_ID} não encontrada"), 404),
+            (ConflictError("Não é possível excluir a própria organização"), 409),
+            (
+                ServiceUnavailableError(
+                    "Não foi possível remover o acesso agora. Tente de novo."
+                ),
+                503,
+            ),
+        ],
+        ids=["inexistente", "propria_organizacao", "keycloak_fora"],
+    )
+    def test_traduz_os_erros_do_service(
+        self,
+        app: FastAPI,
+        client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        erro: DomainError,
+        status_esperado: int,
+    ) -> None:
+        autenticar_como(app, monkeypatch, "admin")
+        usar_removal_service(app, _FakeRemovalService(erro=erro))
+
+        response = client.delete(URL_DA_EMPRESA, headers=TOKEN)
+
+        assert response.status_code == status_esperado
+        assert response.json() == {"detail": erro.message}
+
+    def test_id_que_nao_e_uuid_devolve_422_sem_chegar_ao_service(
+        self, app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        autenticar_como(app, monkeypatch, "admin")
+        service = usar_removal_service(app, _FakeRemovalService())
+
+        response = client.delete("/organizations/nao-e-uuid", headers=TOKEN)
+
+        assert response.status_code == 422
+        assert service.calls == []
