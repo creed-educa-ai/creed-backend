@@ -76,6 +76,15 @@ class FormRepository:
         result = await self.db.execute(select(Form.id).where(Form.link_id == link_id))
         return list(result.scalars().all())
 
+    async def list_ids_by_organization(
+        self, organization_id: uuid.UUID
+    ) -> list[uuid.UUID]:
+        """Todos os formulários da organização: os "para todos" e os individuais."""
+        result = await self.db.execute(
+            select(Form.id).where(Form.organization_id == organization_id)
+        )
+        return list(result.scalars().all())
+
     async def delete_by_ids(self, form_ids: list[uuid.UUID]) -> None:
         if not form_ids:
             return

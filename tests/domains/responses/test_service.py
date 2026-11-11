@@ -53,6 +53,9 @@ class FakeFormResponseRepository:
         self.itens.append(form_response)
         return form_response
 
+    async def list_ids_by_forms(self, form_ids: list[uuid.UUID]) -> list[uuid.UUID]:
+        return [fr.id for fr in self.itens if fr.form_id in form_ids]
+
 
 def um_form_response(**campos: object) -> FormResponse:
     """FormResponse montado à mão.
@@ -216,6 +219,21 @@ def servico(
         questions or FakeQuestionService(),  # type: ignore[arg-type]
         answers or FakeAnswerRepository(),  # type: ignore[arg-type]
     )
+
+
+class TestListIdsForForms:
+    """As respostas que a exclusão de empresa (E-6) apaga antes dos questionários."""
+
+    async def test_de_qualquer_vinculo_so_nos_questionarios_pedidos(self) -> None:
+        form_id = uuid.uuid4()
+        de_um = um_form_response(form_id=form_id)
+        de_outro = um_form_response(form_id=form_id)
+        de_outro_questionario = um_form_response()
+        repository = FakeFormResponseRepository([de_um, de_outro_questionario, de_outro])
+
+        ids = await servico(repository).list_ids_for_forms([form_id])
+
+        assert ids == [de_um.id, de_outro.id]
 
 
 class TestSubmitFormResponse:

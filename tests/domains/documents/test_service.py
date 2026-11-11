@@ -2,8 +2,8 @@
 
 O repository é um dublê em memória: o que se prova é a resposta de
 `document_exists`, que é o que `participants` consulta, o repasse de
-`list_by_ids`, que é o que `organizacoes` lê, e a criação do CPF ou CNPJ do
-cadastro público, com o 409 do documento repetido.
+`list_by_ids`, que é o que `organizacoes` lê, a criação do CPF ou CNPJ do
+cadastro público, com o 409 do documento repetido, e o repasse da exclusão.
 
 ⚠️ O `IN` da consulta só roda com banco: aqui não se prova que o repository filtra.
 """
@@ -49,6 +49,9 @@ class FakeDocumentRepository:
         self.itens.append(document)
         return document
 
+    async def delete_by_id(self, document_id: uuid.UUID) -> None:
+        self.itens = [d for d in self.itens if d.id != document_id]
+
 
 def servico(repository: FakeDocumentRepository) -> DocumentService:
     return DocumentService(repository)  # type: ignore[arg-type]
@@ -75,6 +78,17 @@ async def test_lista_so_os_documentos_pedidos() -> None:
     )
 
     assert lidos == [pedido]
+
+
+async def test_apaga_so_o_documento_pedido() -> None:
+    """O documento da empresa excluída (E-6)."""
+    apagado = Document(id=uuid.uuid4(), type=DocType.CNPJ, value="12345678000190")
+    mantido = Document(id=uuid.uuid4(), type=DocType.CPF, value="12345678909")
+    repository = FakeDocumentRepository([apagado, mantido])
+
+    await servico(repository).delete_document(apagado.id)
+
+    assert repository.itens == [mantido]
 
 
 class TestCriarDocumentoBrasileiro:

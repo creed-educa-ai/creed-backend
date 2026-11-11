@@ -218,3 +218,12 @@ class OrganizationService:
             setattr(organization, campo, valor)
 
         return await self.repository.save(organization)
+
+    async def delete_organization(self, organization: Organization) -> None:
+        """Apaga a organização na exclusão de empresa (E-6).
+
+        Sem regra de acesso: quem chama já conferiu quem pede, e já apagou os
+        vínculos, os questionários e os setores, que apontam para ela. O documento
+        fica para quem chama, porque é ela que aponta para ele.
+        """
+        await self.repository.delete(organization)

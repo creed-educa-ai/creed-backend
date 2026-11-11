@@ -193,6 +193,16 @@ class LinkService:
         """
         await self.repository.delete(link)
 
+    async def list_organization_link_ids(
+        self, organization_id: uuid.UUID
+    ) -> list[uuid.UUID]:
+        """Os vínculos da organização, de qualquer tipo e papel.
+
+        Sem regra de acesso: é o que a exclusão de empresa (E-6) usa, depois de
+        conferir quem pede, para apagar cada membro como a M-3.
+        """
+        return await self.repository.list_ids_by_organization(organization_id)
+
     async def participant_has_links(self, participant_id: uuid.UUID) -> bool:
         """Se a pessoa ainda tem vínculo com alguma organização."""
         return await self.repository.count_by_participant(participant_id) > 0

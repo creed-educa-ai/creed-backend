@@ -76,3 +76,11 @@ class DepartmentService:
             type=dados.type,
         )
         return await self.repository.create(department)
+
+    async def delete_for_organization(self, organization_id: uuid.UUID) -> None:
+        """Apaga os setores da organização na exclusão de empresa (E-6).
+
+        Sem regra de acesso: quem chama já conferiu quem pede, e já apagou os
+        vínculos, que apontam para o setor (`links.department_id`).
+        """
+        await self.repository.delete_by_organization(organization_id)

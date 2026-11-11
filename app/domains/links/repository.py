@@ -137,6 +137,14 @@ class LinkRepository:
         await self.db.delete(link)
         await self.db.flush()
 
+    async def list_ids_by_organization(
+        self, organization_id: uuid.UUID
+    ) -> list[uuid.UUID]:
+        result = await self.db.execute(
+            select(Link.id).where(Link.organization_id == organization_id)
+        )
+        return list(result.scalars().all())
+
     async def count_by_participant(self, participant_id: uuid.UUID) -> int:
         result = await self.db.execute(
             select(func.count())

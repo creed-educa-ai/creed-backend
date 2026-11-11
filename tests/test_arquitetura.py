@@ -79,7 +79,9 @@ COMPOE_COM_SERVICE_DE: dict[str, str] = {
         "exclusao de membro "
         "(M-3, MemberRemovalService) apaga pelo service de cada dono: forms, "
         "questions, responses, insights, dashboards, links, demographics e "
-        "participants"
+        "participants; a exclusao de empresa (E-6, OrganizationRemovalService) "
+        "apaga cada membro pelo MemberRemovalService e o resto pelo service de "
+        "cada dono, inclusive organizacoes, department e documents"
     ),
 }
 

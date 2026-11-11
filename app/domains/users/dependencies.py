@@ -11,6 +11,8 @@ from fastapi import Depends
 from app.core.database import SessionDep
 from app.domains.dashboards.dependencies import ServiceDep as DashboardServiceDep
 from app.domains.demographics.dependencies import ServiceDep as DemographicServiceDep
+from app.domains.department.dependencies import ServiceDep as DepartmentServiceDep
+from app.domains.documents.dependencies import ServiceDep as DocumentServiceDep
 from app.domains.forms.dependencies import ServiceDep as FormServiceDep
 from app.domains.insights.dependencies import ServiceDep as InsightServiceDep
 from app.domains.links.dependencies import ServiceDep as LinkServiceDep
@@ -21,7 +23,12 @@ from app.domains.participants.dependencies import ServiceDep as ParticipantServi
 from app.domains.questions.dependencies import ServiceDep as QuestionServiceDep
 from app.domains.responses.dependencies import ServiceDep as FormResponseServiceDep
 from app.domains.users.repository import UserRepository
-from app.domains.users.service import MemberRemovalService, MemberService, UserService
+from app.domains.users.service import (
+    MemberRemovalService,
+    MemberService,
+    OrganizationRemovalService,
+    UserService,
+)
 
 
 def get_repository(
@@ -66,6 +73,39 @@ def get_member_removal_service(
 
 MemberRemovalServiceDep = Annotated[
     MemberRemovalService, Depends(get_member_removal_service)
+]
+
+
+def get_organization_removal_service(
+    members: MemberRemovalServiceDep,
+    organizations: OrganizationServiceDep,
+    links: LinkServiceDep,
+    forms: FormServiceDep,
+    questions: QuestionServiceDep,
+    responses: FormResponseServiceDep,
+    insights: InsightServiceDep,
+    dashboards: DashboardServiceDep,
+    departments: DepartmentServiceDep,
+    participants: ParticipantServiceDep,
+    documents: DocumentServiceDep,
+) -> OrganizationRemovalService:
+    return OrganizationRemovalService(
+        members,
+        organizations,
+        links,
+        forms,
+        questions,
+        responses,
+        insights,
+        dashboards,
+        departments,
+        participants,
+        documents,
+    )
+
+
+OrganizationRemovalServiceDep = Annotated[
+    OrganizationRemovalService, Depends(get_organization_removal_service)
 ]
 
 

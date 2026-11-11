@@ -217,6 +217,25 @@ class FormService:
         """
         await self.repository.delete_by_ids(form_ids)
 
+    async def list_organization_form_ids(
+        self, organization_id: uuid.UUID
+    ) -> list[uuid.UUID]:
+        """Os questionários da organização, pela coluna `organization_id`.
+
+        Sem regra de acesso: é o que a exclusão de empresa (E-6) usa, depois de
+        apagar os membros. A essa altura os individuais já saíram com cada membro, e
+        sobram os "para todos"; um individual que tivesse sobrado sairia aqui também.
+        """
+        return await self.repository.list_ids_by_organization(organization_id)
+
+    async def delete_organization_forms(self, form_ids: list[uuid.UUID]) -> None:
+        """Apaga os questionários da exclusão de empresa (E-6).
+
+        Quem chama já apagou as respostas e as perguntas deles, como em
+        `delete_individual_forms`.
+        """
+        await self.repository.delete_by_ids(form_ids)
+
     async def check_accepts_answers(
         self, form_id: uuid.UUID, *, link_id: uuid.UUID
     ) -> None:

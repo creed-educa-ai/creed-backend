@@ -176,6 +176,15 @@ class FormResponseService:
             link_id, individual_form_ids
         )
 
+    async def list_ids_for_forms(self, form_ids: list[uuid.UUID]) -> list[uuid.UUID]:
+        """As respostas que ainda apontam para estes questionários (E-6).
+
+        Na exclusão de empresa, os questionários da organização só saem depois das
+        respostas deles, e quem chama precisa dos ids antes, para tirar primeiro os
+        insights e os dashboards delas.
+        """
+        return await self.repository.list_ids_by_forms(form_ids)
+
     async def delete_with_answers(self, form_response_ids: list[uuid.UUID]) -> None:
         """Apaga as respostas e, antes, o que foi marcado em cada uma (M-3)."""
         await self.answers.delete_by_form_responses(form_response_ids)

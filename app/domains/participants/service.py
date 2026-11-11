@@ -69,6 +69,14 @@ class ParticipantService:
 
         return participant
 
+    async def document_in_use(self, document_id: uuid.UUID) -> bool:
+        """Se algum participante aponta para o documento.
+
+        É o que a exclusão de empresa (E-6) pergunta antes de apagar o documento da
+        organização: com participante apontando, o banco recusaria.
+        """
+        return await self.repository.get_by_document_id(document_id) is not None
+
     async def delete_participant(self, participant_id: uuid.UUID) -> None:
         """Apaga a pessoa na exclusão de membro (M-3).
 

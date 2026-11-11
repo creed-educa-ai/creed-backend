@@ -32,6 +32,14 @@ class FakeFormRepository:
         self.itens.append(form)
         return form
 
+    async def list_ids_by_organization(
+        self, organization_id: uuid.UUID
+    ) -> list[uuid.UUID]:
+        return [f.id for f in self.itens if f.organization_id == organization_id]
+
+    async def delete_by_ids(self, form_ids: list[uuid.UUID]) -> None:
+        self.itens = [f for f in self.itens if f.id not in form_ids]
+
 
 def um_form(**campos: object) -> Form:
     """Form montado à mão."""
@@ -167,6 +175,32 @@ class TestBuscarFormulario:
 
         with pytest.raises(NotFoundError):
             await servico(repository).get(uuid.uuid4())
+
+
+class TestQuestionariosDaOrganizacao:
+    """O que a exclusão de empresa (E-6) lê e apaga."""
+
+    async def test_lista_os_para_todos_e_os_individuais_so_da_organizacao(
+        self,
+    ) -> None:
+        organization_id = uuid.uuid4()
+        para_todos = um_form(organization_id=organization_id, link_id=None)
+        individual = um_form(organization_id=organization_id, link_id=uuid.uuid4())
+        de_outra = um_form()
+        repository = FakeFormRepository([para_todos, de_outra, individual])
+
+        ids = await servico(repository).list_organization_form_ids(organization_id)
+
+        assert ids == [para_todos.id, individual.id]
+
+    async def test_apaga_so_os_questionarios_pedidos(self) -> None:
+        apagado = um_form()
+        mantido = um_form()
+        repository = FakeFormRepository([apagado, mantido])
+
+        await servico(repository).delete_organization_forms([apagado.id])
+
+        assert repository.itens == [mantido]
 
 
 class TestBuscarFormularioParaQuemPede:
