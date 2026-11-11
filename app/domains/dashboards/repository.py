@@ -5,10 +5,14 @@ Esta camada NÃO contém regra de negócio: só queries e operações de persist
 
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.dashboards.models import Dashboard
+from app.domains.forms.models import Form
+from app.domains.links.models import Link
+from app.domains.organizacoes.models import Organization
+from app.domains.responses.models import FormResponse, FormResponseStatus
 
 
 class DashboardRepository:
@@ -28,3 +32,34 @@ class DashboardRepository:
         await self.db.flush()
         await self.db.refresh(dashboard)
         return dashboard
+
+    async def get_form(self, form_id: uuid.UUID) -> Form | None:
+        """Busca o formulário por ID."""
+        result = await self.db.execute(select(Form).where(Form.id == form_id))
+        return result.scalar_one_or_none()
+
+    async def get_organization_name(self, organization_id: uuid.UUID) -> str | None:
+        """Busca o nome da organização."""
+        result = await self.db.execute(
+            select(Organization.name).where(Organization.id == organization_id)
+        )
+        return result.scalar_one_or_none()
+
+    async def count_organization_members(self, organization_id: uuid.UUID) -> int:
+        """Conta o total de membros vinculados à organização."""
+        result = await self.db.execute(
+            select(func.count(Link.id)).where(Link.organization_id == organization_id)
+        )
+        return result.scalar() or 0
+
+    async def get_submitted_form_response_ids(
+        self, form_id: uuid.UUID
+    ) -> list[uuid.UUID]:
+        """Busca todos os IDs de FormResponse finalizados para um formulário."""
+        result = await self.db.execute(
+            select(FormResponse.id).where(
+                FormResponse.form_id == form_id,
+                FormResponse.status == FormResponseStatus.SUBMITTED,
+            )
+        )
+        return list(result.scalars().all())

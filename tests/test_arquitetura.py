@@ -27,7 +27,16 @@ NOMES = [caminho.name for caminho in DOMINIOS]
 # outro domínio por JOIN, no repository — escrever fora do próprio domínio, nunca.
 # Formato: nome do domínio -> motivo. Exemplo de como preencher:
 #     "dashboards": "agrega respondentes e prismas; ver docstring do repository"
-LEITURA_ENTRE_DOMINIOS: dict[str, str] = {}
+LEITURA_ENTRE_DOMINIOS: dict[str, str] = {
+    "dashboards": (
+        "agrega form_responses, answers, organizations e links; ver docstring do"
+        " repository"
+    ),
+    "prismas": (
+        "le answers, questions e options por join para calculo dos prismas; ver"
+        " docstring do repository"
+    ),
+}
 
 # Exceção declarada: schemas.py pode reexportar um tipo de VALOR de
 # models.py (Enum — nunca model de tabela) para o router usar, em vez de
@@ -45,6 +54,7 @@ REEXPORT_DE_TIPO_PERMITIDO: dict[str, str] = {
 
 COMPOE_COM_SERVICE_DE: dict[str, str] = {
     "authentication": "le o usuario pelo UserService",
+    "dashboards": "consulta cálculos pelo PrismaService",
     "department": "confere a organizacao pelo OrganizationService",
     "forms": "confere a organizacao pelo OrganizationService",
     "links": (
