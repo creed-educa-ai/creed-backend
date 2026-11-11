@@ -33,7 +33,7 @@ from app.domains.forms.models import Form, FormStatus
 from app.domains.forms.repository import FormRepository
 from app.domains.links.models import Link
 from app.domains.links.repository import LinkRepository
-from app.domains.organizacoes.models import Organization
+from app.domains.organizacoes.models import Organization, OrganizationStatus
 from app.domains.organizacoes.repository import OrganizationRepository
 from app.domains.participants.models import Participant
 from app.domains.participants.repository import ParticipantRepository
@@ -304,7 +304,7 @@ async def _ensure_organization(
                 name=ORGANIZATION_NAME,
                 address=ORGANIZATION_ADDRESS,
                 document_id=ORGANIZATION_DOCUMENT_ID,
-                status=RecordStatus.ACTIVE,
+                status=OrganizationStatus.ACTIVE,
             )
         )
         criou = True

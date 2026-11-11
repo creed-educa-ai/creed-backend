@@ -2,7 +2,8 @@
 
 Sem banco e sem HTTP: o repository e o `DocumentService` são dublês em memória.
 O que se prova aqui é a regra de negócio — documento inexistente ou já usado,
-o 403 do gestor em organização alheia e o PATCH parcial.
+o 403 do gestor em organização alheia, o PATCH parcial, a empresa pendente que o
+PATCH não tira desse estado e a leitura dos documentos numa chamada só.
 
 ⚠️ Paginação e ordenação estão na consulta ao banco, e o dublê não roda consulta:
 aqui só se prova que o service calcula o deslocamento e repassa o total.
@@ -14,7 +15,8 @@ from datetime import UTC, datetime
 
 import pytest
 
-from app.domains.organizacoes.models import Organization
+from app.domains.documents.models import DocType, Document
+from app.domains.organizacoes.models import Organization, OrganizationStatus
 from app.domains.organizacoes.schemas import OrganizationCreate, OrganizationUpdate
 from app.domains.organizacoes.service import OrganizationService
 from app.shared.enums import RecordStatus
@@ -66,13 +68,27 @@ class FakeOrganizationRepository:
 
 
 class FakeDocumentService:
-    """Dublê do DocumentService: conhece só os ids que recebeu."""
+    """Dublê do DocumentService: conhece só os ids e os documentos que recebeu.
 
-    def __init__(self, existentes: list[uuid.UUID] | None = None) -> None:
+    `chamadas_de_lista` guarda os ids de cada `list_by_ids`, para contar quantas
+    consultas de documento o service faria.
+    """
+
+    def __init__(
+        self,
+        existentes: list[uuid.UUID] | None = None,
+        documentos: list[Document] | None = None,
+    ) -> None:
         self.existentes = list(existentes or [])
+        self.documentos = list(documentos or [])
+        self.chamadas_de_lista: list[list[uuid.UUID]] = []
 
     async def document_exists(self, document_id: uuid.UUID) -> bool:
         return document_id in self.existentes
+
+    async def list_by_ids(self, document_ids: list[uuid.UUID]) -> list[Document]:
+        self.chamadas_de_lista.append(list(document_ids))
+        return [d for d in self.documentos if d.id in document_ids]
 
 
 def uma_organization(**campos: object) -> Organization:
@@ -86,7 +102,10 @@ def uma_organization(**campos: object) -> Organization:
         "name": "Organização Exemplo",
         "address": "Av. Ipiranga, 6681, Porto Alegre",
         "document_id": uuid.uuid4(),
-        "status": RecordStatus.ACTIVE,
+        "status": OrganizationStatus.ACTIVE,
+        "email": None,
+        "contact_name": None,
+        "phone": None,
         "created_at": datetime(2026, 10, 15, tzinfo=UTC),
         "updated_at": None,
     }
@@ -122,7 +141,7 @@ class TestCriarOrganization:
 
         assert criada.name == "Organização Exemplo"
         assert criada.document_id == documento
-        assert criada.status is RecordStatus.ACTIVE
+        assert criada.status is OrganizationStatus.ACTIVE
         assert repository.itens == [criada]
 
     async def test_documento_inexistente_vira_validation_error(self) -> None:
@@ -223,6 +242,48 @@ class TestOrganizacaoExiste:
         assert await servico(repository).organization_exists(uuid.uuid4()) is False
 
 
+class TestComDocumentos:
+    """O documento de cada organização, para a resposta da API."""
+
+    async def test_uma_chamada_para_a_pagina_inteira_na_ordem_recebida(self) -> None:
+        organizacoes = [uma_organization() for _ in range(3)]
+        documentos = [
+            Document(id=o.document_id, type=DocType.CNPJ, value=f"0000000000000{i}")
+            for i, o in enumerate(organizacoes)
+        ]
+        # Fora de ordem de propósito: o banco não promete ordem no `IN`.
+        documentos_service = FakeDocumentService(documentos=list(reversed(documentos)))
+
+        com_documentos = await servico(
+            FakeOrganizationRepository(organizacoes), documentos_service
+        ).with_documents(organizacoes)
+
+        assert documentos_service.chamadas_de_lista == [
+            [o.document_id for o in organizacoes]
+        ]
+        assert [item.organization for item in com_documentos] == organizacoes
+        assert [item.document_value for item in com_documentos] == [
+            "00000000000000",
+            "00000000000001",
+            "00000000000002",
+        ]
+        assert {item.document_type for item in com_documentos} == {"cnpj"}
+
+    async def test_lista_vazia_devolve_lista_vazia(self) -> None:
+        com_documentos = await servico(FakeOrganizationRepository()).with_documents([])
+
+        assert com_documentos == []
+
+    async def test_documento_ausente_levanta_em_vez_de_esconder(self) -> None:
+        """Só acontece com o banco inconsistente: a FK é NOT NULL."""
+        organizacao = uma_organization()
+
+        with pytest.raises(RuntimeError, match=str(organizacao.document_id)):
+            await servico(FakeOrganizationRepository([organizacao])).with_documents(
+                [organizacao]
+            )
+
+
 class TestListarOrganizations:
     async def test_calcula_o_deslocamento_e_devolve_o_total(self) -> None:
         repository = FakeOrganizationRepository([uma_organization() for _ in range(5)])
@@ -263,7 +324,50 @@ class TestAlterarOrganization:
             organizacao.id, OrganizationUpdate(status=RecordStatus.INACTIVE)
         )
 
-        assert alterada.status is RecordStatus.INACTIVE
+        assert alterada.status is OrganizationStatus.INACTIVE
+
+    async def test_reativa_pela_alteracao_de_status(self) -> None:
+        organizacao = uma_organization(status=OrganizationStatus.INACTIVE)
+        repository = FakeOrganizationRepository([organizacao])
+
+        alterada = await servico(repository).update(
+            organizacao.id, OrganizationUpdate(status=RecordStatus.ACTIVE)
+        )
+
+        assert alterada.status is OrganizationStatus.ACTIVE
+
+    @pytest.mark.parametrize("novo_status", [RecordStatus.ACTIVE, RecordStatus.INACTIVE])
+    async def test_status_numa_pendente_vira_conflito_e_nada_muda(
+        self, novo_status: RecordStatus
+    ) -> None:
+        """Ela só sai de `pending` aprovada ou rejeitada; o nome do mesmo corpo
+        também não muda."""
+        organizacao = uma_organization(name="Antigo", status=OrganizationStatus.PENDING)
+        repository = FakeOrganizationRepository([organizacao])
+
+        with pytest.raises(ConflictError, match="pendente"):
+            await servico(repository).update(
+                organizacao.id, OrganizationUpdate(name="Novo", status=novo_status)
+            )
+
+        assert organizacao.status is OrganizationStatus.PENDING
+        assert organizacao.name == "Antigo"
+        assert repository.salvos == []
+
+    async def test_nome_e_endereco_de_uma_pendente_mudam_e_ela_continua_pendente(
+        self,
+    ) -> None:
+        """🟡 P-075: é assim que a administradora corrige o endereço."""
+        organizacao = uma_organization(status=OrganizationStatus.PENDING)
+        repository = FakeOrganizationRepository([organizacao])
+
+        alterada = await servico(repository).update(
+            organizacao.id, OrganizationUpdate(name="Novo", address="Rua B, 2")
+        )
+
+        assert (alterada.name, alterada.address) == ("Novo", "Rua B, 2")
+        assert alterada.status is OrganizationStatus.PENDING
+        assert repository.salvos == [organizacao]
 
     async def test_organizacao_inexistente_vira_not_found(self) -> None:
         repository = FakeOrganizationRepository()
