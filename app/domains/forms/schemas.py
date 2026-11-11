@@ -4,7 +4,7 @@ import enum
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
 from app.domains.forms.models import Form, FormStatus
 
@@ -101,3 +101,20 @@ class PeriodRead(FormRead):
         return cls(
             **FormRead.model_validate(form).model_dump(), period_status=period_status
         )
+
+
+class PeriodCreate(BaseModel):
+    """Dados para abrir um período para a organização ou um mentorando."""
+
+    opens_at: AwareDatetime = Field(description="Quando o período abre.")
+    closes_at: AwareDatetime = Field(description="Quando o período fecha.")
+    link_id: uuid.UUID | None = Field(
+        default=None,
+        description="Vínculo do mentorando; nulo para o período da organização.",
+    )
+
+    @model_validator(mode="after")
+    def validate_period(self) -> "PeriodCreate":
+        if self.closes_at <= self.opens_at:
+            raise ValueError("closes_at deve ser posterior a opens_at")
+        return self

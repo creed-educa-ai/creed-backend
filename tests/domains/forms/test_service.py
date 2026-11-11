@@ -11,9 +11,10 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from app.domains.forms.models import Form, FormStatus
-from app.domains.forms.schemas import FormCreate, FormRead, PeriodStatus
+from app.domains.forms.schemas import FormCreate, FormRead, PeriodCreate, PeriodStatus
 from app.domains.forms.service import FormService
 from app.shared.exceptions import (
+    ConflictError,
     ForbiddenError,
     NotFoundError,
     PeriodClosedError,
@@ -39,6 +40,28 @@ class FakeFormRepository:
 
     async def delete_by_ids(self, form_ids: list[uuid.UUID]) -> None:
         self.itens = [f for f in self.itens if f.id not in form_ids]
+
+    async def lock_period_audience(
+        self, organization_id: uuid.UUID, link_id: uuid.UUID | None
+    ) -> None:
+        pass
+
+    async def has_overlapping_period(
+        self,
+        organization_id: uuid.UUID,
+        link_id: uuid.UUID | None,
+        opens_at: datetime,
+        closes_at: datetime,
+    ) -> bool:
+        return any(
+            form.organization_id == organization_id
+            and form.link_id == link_id
+            and form.opens_at is not None
+            and form.closes_at is not None
+            and form.opens_at <= closes_at
+            and form.closes_at >= opens_at
+            for form in self.itens
+        )
 
 
 def um_form(**campos: object) -> Form:
@@ -66,11 +89,24 @@ class FakeOrganizationService:
 def servico(
     repository: FakeFormRepository,
     organizations: FakeOrganizationService | None = None,
+    links: object | None = None,
 ) -> FormService:
     return FormService(
         repository,  # type: ignore[arg-type]
         organizations or FakeOrganizationService(),  # type: ignore[arg-type]
+        links,  # type: ignore[arg-type]
     )
+
+
+class FakePeriodLinkService:
+    def __init__(self, *, encontrado: bool = True) -> None:
+        self.encontrado = encontrado
+
+    async def validate_mentee_link(
+        self, organization_id: uuid.UUID, link_id: uuid.UUID
+    ) -> None:
+        if not self.encontrado:
+            raise NotFoundError(f"Membro {link_id} não encontrado")
 
 
 class TestCriarFormulario:
@@ -467,3 +503,170 @@ class TestListPeriods:
             == []
         )
         assert type(repository).pedido == (self.ORG, link_id)  # type: ignore[attr-defined]
+
+
+class TestCreatePeriod:
+    ORG = uuid.UUID("00000000-0000-0000-0000-00000000000a")
+    OTHER_ORG = uuid.UUID("00000000-0000-0000-0000-00000000000b")
+
+    def request(
+        self, *, link_id: uuid.UUID | None = None, opens_at: datetime | None = None
+    ) -> PeriodCreate:
+        opens = opens_at or datetime.now(UTC) + timedelta(days=3)
+        return PeriodCreate(
+            opens_at=opens,
+            closes_at=opens + timedelta(days=5),
+            link_id=link_id,
+        )
+
+    async def test_gestor_cria_periodo_para_toda_a_organizacao(self) -> None:
+        repository = FakeFormRepository()
+        request = self.request()
+
+        form = await servico(repository).create_period(
+            self.ORG,
+            request,
+            role="gestor",
+            organization_id_user=self.ORG,
+        )
+
+        assert form.link_id is None
+        assert form.opens_at == request.opens_at
+        assert form.closes_at == request.closes_at
+        assert form.name == (
+            f"Questionário {request.opens_at:%Y-%m-%d} a {request.closes_at:%Y-%m-%d}"
+        )
+
+    async def test_admin_cria_periodo_para_vinculo_da_organizacao(self) -> None:
+        link_id = uuid.uuid4()
+        request = self.request(link_id=link_id)
+        links = FakePeriodLinkService()
+
+        form = await servico(FakeFormRepository(), links=links).create_period(
+            self.ORG,
+            request,
+            role="admin",
+            organization_id_user=self.ORG,
+        )
+
+        assert form.link_id == link_id
+
+    async def test_admin_sem_link_id_devolve_forbidden(self) -> None:
+        repository = FakeFormRepository()
+
+        with pytest.raises(ForbiddenError):
+            await servico(repository).create_period(
+                self.ORG,
+                self.request(),
+                role="admin",
+                organization_id_user=self.ORG,
+            )
+
+        assert repository.itens == []
+
+    async def test_gestor_com_link_id_devolve_forbidden(self) -> None:
+        with pytest.raises(ForbiddenError):
+            await servico(FakeFormRepository()).create_period(
+                self.ORG,
+                self.request(link_id=uuid.uuid4()),
+                role="gestor",
+                organization_id_user=self.ORG,
+            )
+
+    @pytest.mark.parametrize("role", ["gestor", "admin"])
+    async def test_fora_da_organizacao_permitida_devolve_forbidden(
+        self, role: str
+    ) -> None:
+        with pytest.raises(ForbiddenError):
+            await servico(FakeFormRepository()).create_period(
+                self.OTHER_ORG,
+                self.request(link_id=uuid.uuid4() if role == "admin" else None),
+                role=role,
+                organization_id_user=self.ORG,
+            )
+
+    async def test_organizacao_inexistente_devolve_not_found(self) -> None:
+        with pytest.raises(NotFoundError):
+            await servico(
+                FakeFormRepository(), FakeOrganizationService(existe=False)
+            ).create_period(
+                self.ORG,
+                self.request(),
+                role="gestor",
+                organization_id_user=self.ORG,
+            )
+
+    async def test_abertura_no_passado_devolve_validation_error(self) -> None:
+        with pytest.raises(ValidationError, match="passado"):
+            await servico(FakeFormRepository()).create_period(
+                self.ORG,
+                self.request(opens_at=datetime.now(UTC) - timedelta(days=1)),
+                role="gestor",
+                organization_id_user=self.ORG,
+            )
+
+    async def test_link_de_outra_organizacao_devolve_validation_error(self) -> None:
+        with pytest.raises(ValidationError, match="não encontrado"):
+            await servico(
+                FakeFormRepository(), links=FakePeriodLinkService(encontrado=False)
+            ).create_period(
+                self.ORG,
+                self.request(link_id=uuid.uuid4()),
+                role="admin",
+                organization_id_user=self.ORG,
+            )
+
+    async def test_periodos_para_todos_e_individual_coexistem(self) -> None:
+        opens = datetime.now(UTC) + timedelta(days=4)
+        repository = FakeFormRepository(
+            [
+                um_form(
+                    organization_id=self.ORG,
+                    link_id=None,
+                    opens_at=opens,
+                    closes_at=opens + timedelta(days=4),
+                )
+            ]
+        )
+
+        individual = await servico(
+            repository, links=FakePeriodLinkService()
+        ).create_period(
+            self.ORG,
+            self.request(link_id=uuid.uuid4(), opens_at=opens),
+            role="admin",
+            organization_id_user=self.ORG,
+        )
+
+        assert individual.link_id is not None
+
+    async def test_periodos_do_mesmo_publico_que_se_encostam_conflitam(self) -> None:
+        opens = datetime.now(UTC) + timedelta(days=4)
+        closes = opens + timedelta(days=4)
+        repository = FakeFormRepository(
+            [
+                um_form(
+                    organization_id=self.ORG,
+                    link_id=None,
+                    opens_at=opens,
+                    closes_at=closes,
+                )
+            ]
+        )
+
+        with pytest.raises(ConflictError):
+            await servico(repository).create_period(
+                self.ORG,
+                self.request(opens_at=closes),
+                role="gestor",
+                organization_id_user=self.ORG,
+            )
+
+    def test_fechamento_antes_da_abertura_devolve_validation_error(self) -> None:
+        opens = datetime.now(UTC) + timedelta(days=4)
+
+        with pytest.raises(ValueError, match="posterior"):
+            PeriodCreate(
+                opens_at=opens,
+                closes_at=opens - timedelta(seconds=1),
+            )
