@@ -68,6 +68,7 @@ def test_all_endpoints_have_method_summary_description_and_operation_id() -> Non
         ("/api/v1/organizations/{organization_id}/members/{link_id}", "delete"),
         ("/api/v1/organizations/sign-up", "post"),
         ("/api/v1/organizations/{organization_id}", "delete"),
+        ("/api/v1/organizations/{organization_id}/approval", "post"),
     }
 
     documented_operations = {
@@ -209,6 +210,15 @@ def test_success_error_and_bearer_authentication_responses_are_documented() -> N
             "responses"
         ]
     ) >= {"204", "401", "403", "404", "409", "503"}
+    # Aprovar empresa: só admin, sem corpo, 200 com a empresa ativa; a que não está
+    # pendente e o e-mail com acesso são 409, e o convite que falha é 503, com a
+    # empresa ainda pendente (CREED-69, E-3, P-077, P-079).
+    approval = _operation(
+        schema, "/api/v1/organizations/{organization_id}/approval", "post"
+    )
+    assert set(approval["responses"]) >= {"200", "401", "403", "404", "409", "503"}
+    assert "201" not in approval["responses"]
+    assert "requestBody" not in approval
     # Convite de membro: o recorte do gestor é 403, a organização inexistente é 404,
     # e o Keycloak ou o SMTP fora do ar é 503, como no cadastro (D7, D8).
     assert set(

@@ -15,6 +15,10 @@ Quem pode o quê (CREED-38):
 - Só `admin` exclui (ou rejeita) uma organização, pela rota
   `DELETE /organizations/{organization_id}` e pelo `OrganizationRemovalService` de
   `users`, e nunca a do próprio vínculo (P-079). Aqui fica só `delete_organization`.
+- Só `admin` aprova uma organização `pending`, pela rota
+  `POST /organizations/{organization_id}/approval` e pelo
+  `OrganizationApprovalService` de `users`, que também convida quem a cadastrou
+  (P-079). Aqui fica só `activate_pending`.
 
 Uma organização `pending` (empresa que se cadastrou e ainda não foi aprovada) só
 sai desse estado pela aprovação ou pela rejeição: o PATCH não troca o status dela.
@@ -220,6 +224,26 @@ class OrganizationService:
         for campo, valor in changes.items():
             setattr(organization, campo, valor)
 
+        return await self.repository.save(organization)
+
+    async def activate_pending(self, organization_id: uuid.UUID) -> Organization:
+        """Troca o status da empresa de `pending` para `active` na aprovação (E-3).
+
+        Só o passo do banco. Quem chama (o `OrganizationApprovalService`, de `users`)
+        já passou pela guarda `admin` da rota e convida quem cadastrou logo depois,
+        na mesma transação: se o convite falha, o `get_db` desfaz esta troca.
+
+        Empresa ativa ou inativa é `ConflictError`, e nada muda: aprovar de novo não
+        manda um segundo convite.
+        """
+        organization = await self.repository.get_by_id(organization_id)
+        if organization is None:
+            raise NotFoundError(f"Organização {organization_id} não encontrada")
+
+        if organization.status is not OrganizationStatus.PENDING:
+            raise ConflictError(f"A empresa {organization_id} não está pendente")
+
+        organization.status = OrganizationStatus.ACTIVE
         return await self.repository.save(organization)
 
     async def delete_organization(self, organization: Organization) -> None:

@@ -66,9 +66,9 @@ COMPOE_COM_SERVICE_DE: dict[str, str] = {
         "(router_members.py) delega ao MemberRemovalService de users.dependencies"
     ),
     "organizacoes": (
-        "cria e le documentos pelo DocumentService; a exclusao de empresa "
-        "(router_organizations.py) delega ao OrganizationRemovalService de "
-        "users.dependencies"
+        "cria e le documentos pelo DocumentService; a exclusao e a aprovacao de "
+        "empresa (router_organizations.py) delegam ao OrganizationRemovalService e "
+        "ao OrganizationApprovalService de users.dependencies"
     ),
     "participants": "consulta documento pelo DocumentService",
     "questions": "confere o formulario pelo FormService",
@@ -85,7 +85,10 @@ COMPOE_COM_SERVICE_DE: dict[str, str] = {
         "questions, responses, insights, dashboards, links, demographics e "
         "participants; a exclusao de empresa (E-6, OrganizationRemovalService) "
         "apaga cada membro pelo MemberRemovalService e o resto pelo service de "
-        "cada dono, inclusive organizacoes, department e documents"
+        "cada dono, inclusive organizacoes, department e documents; a aprovacao "
+        "de empresa (E-3, OrganizationApprovalService) ativa a pendente e junta o "
+        "documento pelo OrganizationService e convida o responsavel pelo "
+        "MemberService"
     ),
 }
 

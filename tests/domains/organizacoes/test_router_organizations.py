@@ -10,6 +10,10 @@ A exclusão tem guarda, que roda de verdade: só o `validate_token` e o `UserSer
 são dublês (`autenticar_como`, como em `test_router.py`). O
 `OrganizationRemovalService` é um dublê; a ordem do que sai é provada em
 `tests/domains/users/test_organization_removal_service.py`.
+
+A aprovação tem a mesma guarda e o mesmo `autenticar_como`. O
+`OrganizationApprovalService` é um dublê; o status e o convite são provados em
+`tests/domains/users/test_organization_approval_service.py`.
 """
 
 import uuid
@@ -25,7 +29,10 @@ from app.domains.organizacoes.models import Organization, OrganizationStatus
 from app.domains.organizacoes.router_organizations import router
 from app.domains.organizacoes.schemas import OrganizationSignUp
 from app.domains.organizacoes.service import OrganizationWithDocument
-from app.domains.users.dependencies import get_organization_removal_service
+from app.domains.users.dependencies import (
+    get_organization_approval_service,
+    get_organization_removal_service,
+)
 from app.domains.users.dependencies import get_service as get_user_service
 from app.domains.users.service import UserAccess
 from app.shared.exceptions import (
@@ -476,6 +483,146 @@ class TestExclusao:
         service = usar_removal_service(app, _FakeRemovalService())
 
         response = client.delete("/organizations/nao-e-uuid", headers=TOKEN)
+
+        assert response.status_code == 422
+        assert service.calls == []
+
+
+# --- Aprovação de empresa (E-3) ----------------------------------------------
+
+URL_DA_APROVACAO = f"/organizations/{TARGET_ID}/approval"
+
+APPROVED_ORGANIZATION = Organization(
+    id=TARGET_ID,
+    name="Empresa Teste",
+    address="[A informar]",
+    document_id=uuid.UUID("00000000-0000-0000-0000-000000000004"),
+    status=OrganizationStatus.ACTIVE,
+    email="gestora@empresa.com.br",
+    contact_name="Gestora Teste",
+    phone="51 99999-0000",
+    created_at=datetime(2026, 11, 10, tzinfo=UTC),
+    updated_at=None,
+)
+
+
+class _FakeApprovalService:
+    """Dublê do `OrganizationApprovalService`: guarda o que recebeu, ou levanta `erro`."""
+
+    def __init__(self, *, erro: DomainError | None = None) -> None:
+        self.erro = erro
+        self.calls: list[dict[str, uuid.UUID]] = []
+
+    async def approve(
+        self, organization_id: uuid.UUID, *, own_organization_id: uuid.UUID
+    ) -> OrganizationWithDocument:
+        self.calls.append(
+            {
+                "organization_id": organization_id,
+                "own_organization_id": own_organization_id,
+            }
+        )
+        if self.erro is not None:
+            raise self.erro
+        return OrganizationWithDocument(
+            organization=APPROVED_ORGANIZATION,
+            document_type="cnpj",
+            document_value="12345678000190",
+        )
+
+
+def usar_approval_service(
+    app: FastAPI, service: _FakeApprovalService
+) -> _FakeApprovalService:
+    app.dependency_overrides[get_organization_approval_service] = lambda: service
+    return service
+
+
+class TestAprovacao:
+    def test_admin_devolve_200_com_a_empresa_ativa(
+        self, app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        autenticar_como(app, monkeypatch, "admin")
+        service = usar_approval_service(app, _FakeApprovalService())
+
+        response = client.post(URL_DA_APROVACAO, headers=TOKEN)
+
+        assert response.status_code == 200
+        body = response.json()
+        assert set(body) == CHAVES_DA_SAIDA
+        assert body["id"] == str(TARGET_ID)
+        assert body["status"] == "active"
+        assert body["document"] == {"type": "cnpj", "value": "12345678000190"}
+        assert service.calls == [
+            {"organization_id": TARGET_ID, "own_organization_id": OWN_ORGANIZATION_ID}
+        ]
+
+    def test_sem_token_devolve_401(self, app: FastAPI, client: TestClient) -> None:
+        service = usar_approval_service(app, _FakeApprovalService())
+
+        response = client.post(URL_DA_APROVACAO)
+
+        assert response.status_code == 401
+        assert service.calls == []
+
+    @pytest.mark.parametrize("role", ["gestor", "respondente"])
+    def test_outro_papel_devolve_403_sem_chegar_ao_service(
+        self,
+        app: FastAPI,
+        client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        role: str,
+    ) -> None:
+        """🟡 P-079: o service não confere o papel; quem barra é a guarda."""
+        autenticar_como(app, monkeypatch, role)
+        service = usar_approval_service(app, _FakeApprovalService())
+
+        response = client.post(URL_DA_APROVACAO, headers=TOKEN)
+
+        assert response.status_code == 403
+        assert service.calls == []
+
+    @pytest.mark.parametrize(
+        ("erro", "status_esperado"),
+        [
+            (NotFoundError(f"Organização {TARGET_ID} não encontrada"), 404),
+            (ConflictError(f"A empresa {TARGET_ID} não está pendente"), 409),
+            (
+                ConflictError("Já existe usuário com o e-mail gestora@empresa.com.br"),
+                409,
+            ),
+            (
+                ServiceUnavailableError(
+                    "Não foi possível criar o acesso agora. Tente de novo."
+                ),
+                503,
+            ),
+        ],
+        ids=["inexistente", "nao_pendente", "email_com_acesso", "convite_fora"],
+    )
+    def test_traduz_os_erros_do_service(
+        self,
+        app: FastAPI,
+        client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        erro: DomainError,
+        status_esperado: int,
+    ) -> None:
+        autenticar_como(app, monkeypatch, "admin")
+        usar_approval_service(app, _FakeApprovalService(erro=erro))
+
+        response = client.post(URL_DA_APROVACAO, headers=TOKEN)
+
+        assert response.status_code == status_esperado
+        assert response.json() == {"detail": erro.message}
+
+    def test_id_que_nao_e_uuid_devolve_422_sem_chegar_ao_service(
+        self, app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        autenticar_como(app, monkeypatch, "admin")
+        service = usar_approval_service(app, _FakeApprovalService())
+
+        response = client.post("/organizations/nao-e-uuid/approval", headers=TOKEN)
 
         assert response.status_code == 422
         assert service.calls == []
