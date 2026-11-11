@@ -12,6 +12,9 @@ Quem pode o quê (CREED-38):
   recurso com quem pede (P-033, a mesma regra de `forms`).
 - Qualquer pessoa, sem login, cadastra a própria empresa (`sign_up`), que nasce
   `pending`.
+- Só `admin` exclui (ou rejeita) uma organização, pela rota
+  `DELETE /organizations/{organization_id}` e pelo `OrganizationRemovalService` de
+  `users`, e nunca a do próprio vínculo (P-079). Aqui fica só `delete_organization`.
 
 Uma organização `pending` (empresa que se cadastrou e ainda não foi aprovada) só
 sai desse estado pela aprovação ou pela rejeição: o PATCH não troca o status dela.
@@ -218,3 +221,12 @@ class OrganizationService:
             setattr(organization, campo, valor)
 
         return await self.repository.save(organization)
+
+    async def delete_organization(self, organization: Organization) -> None:
+        """Apaga a organização na exclusão de empresa (E-6).
+
+        Sem regra de acesso: quem chama já conferiu quem pede, e já apagou os
+        vínculos, os questionários e os setores, que apontam para ela. O documento
+        fica para quem chama, porque é ela que aponta para ele.
+        """
+        await self.repository.delete(organization)

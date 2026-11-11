@@ -67,6 +67,7 @@ def test_all_endpoints_have_method_summary_description_and_operation_id() -> Non
         ("/api/v1/organizations/{organization_id}/members", "get"),
         ("/api/v1/organizations/{organization_id}/members/{link_id}", "delete"),
         ("/api/v1/organizations/sign-up", "post"),
+        ("/api/v1/organizations/{organization_id}", "delete"),
     }
 
     documented_operations = {
@@ -201,6 +202,13 @@ def test_success_error_and_bearer_authentication_responses_are_documented() -> N
     assert set(sign_up["responses"]) >= {"201", "409", "422"}
     assert not {"401", "403"} & set(sign_up["responses"])
     assert "security" not in sign_up
+    # Excluir (e rejeitar) empresa: só admin; a própria organização é 409 e o
+    # Keycloak fora do ar é 503, sem nada apagado (CREED-69, E-6, P-079, P-073).
+    assert set(
+        _operation(schema, "/api/v1/organizations/{organization_id}", "delete")[
+            "responses"
+        ]
+    ) >= {"204", "401", "403", "404", "409", "503"}
     # Convite de membro: o recorte do gestor é 403, a organização inexistente é 404,
     # e o Keycloak ou o SMTP fora do ar é 503, como no cadastro (D7, D8).
     assert set(

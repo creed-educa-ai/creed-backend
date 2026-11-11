@@ -17,6 +17,10 @@ A exclusão de membro (M-3, `MemberRemovalService`) também mora aqui, e não em
 `links`, dono do vínculo: ela apaga o login, e `users` já depende de `links`. Em
 `links`, o `LinkService` precisaria do `UserService`, e os dois services se
 importariam um ao outro.
+
+A exclusão de empresa (E-6, `OrganizationRemovalService`) mora aqui pelo mesmo
+motivo: ela apaga cada membro pelo `MemberRemovalService`, e `users` já depende de
+`organizacoes`. Em `organizacoes`, os dois domínios se importariam um ao outro.
 """
 
 import logging
@@ -25,6 +29,8 @@ from dataclasses import dataclass
 
 from app.domains.dashboards.service import DashboardService
 from app.domains.demographics.service import DemographicService
+from app.domains.department.service import DepartmentService
+from app.domains.documents.service import DocumentService
 from app.domains.forms.service import FormService
 from app.domains.insights.service import InsightService
 from app.domains.links.service import LinkService
@@ -434,6 +440,111 @@ class MemberRemovalService:
                 )
                 raise
             removed.append(keycloak_id)
+
+
+class OrganizationRemovalService:
+    """Exclui uma empresa de vez, com todos os membros e tudo o que pende dela (E-6).
+
+    É o `MemberRemovalService` um nível acima: cada tabela é apagada pelo service do
+    dono (ADR-0004, item 4), e este service só decide quem pode e a ordem.
+    """
+
+    def __init__(
+        self,
+        members: MemberRemovalService,
+        organizations: OrganizationService,
+        links: LinkService,
+        forms: FormService,
+        questions: QuestionService,
+        responses: FormResponseService,
+        insights: InsightService,
+        dashboards: DashboardService,
+        departments: DepartmentService,
+        participants: ParticipantService,
+        documents: DocumentService,
+    ) -> None:
+        self.members = members
+        self.organizations = organizations
+        self.links = links
+        self.forms = forms
+        self.questions = questions
+        self.responses = responses
+        self.insights = insights
+        self.dashboards = dashboards
+        self.departments = departments
+        self.participants = participants
+        self.documents = documents
+
+    async def remove_organization(
+        self, organization_id: uuid.UUID, *, own_organization_id: uuid.UUID
+    ) -> None:
+        """Apaga a organização no banco e, por último, os logins dos membros no realm.
+
+        `own_organization_id` é a organização de quem pede. O papel `admin` já foi
+        conferido pela guarda da rota.
+
+        A ordem é a das chaves estrangeiras, de quem aponta para quem é apontado,
+        porque o banco recusa apagar uma linha que outra ainda referencia:
+
+        1. cada membro, pelo `delete_member_data` da M-3, que devolve o login;
+        2. os questionários que sobraram (os "para todos"): antes, as respostas que
+           ainda apontam para eles, com os insights e os dashboards delas; depois,
+           as perguntas e as alternativas;
+        3. os setores, para onde os vínculos apontavam;
+        4. a organização;
+        5. o documento dela, que é apontado pela organização e só sai depois dela;
+        6. os logins no Keycloak, numa chamada só.
+
+        🟡 Premissa P-079 — ninguém exclui a organização do próprio vínculo (409),
+        conferido antes de qualquer consulta.
+
+        🟡 Premissa P-080 — sai tudo o que pende da empresa e, no fim, o documento,
+        se nenhum participante apontar para ele.
+
+        🟡 Premissa P-078 — empresa pendente não tem membro nem questionário: para
+        ela, isto apaga só a organização e o documento. É a rejeição do cadastro, e o
+        mesmo documento pode se cadastrar de novo.
+
+        O Keycloak é chamado sempre, mesmo com a lista vazia, e antes do commit,
+        como na M-3 (P-073): se ele falhar, o 503 faz o `get_db` desfazer o banco
+        inteiro, e repetir a exclusão resolve. Fica a mesma janela da M-3: o realm
+        apaga e o commit falha depois, ou a resposta se perde. O log de
+        `remove_logins_from_keycloak` diz quem já saiu do realm.
+        """
+        if organization_id == own_organization_id:
+            raise ConflictError("Não é possível excluir a própria organização")
+
+        # A guarda da rota só deixa passar o `admin`, que lê qualquer organização.
+        organization = await self.organizations.get(
+            organization_id,
+            role=Roles.ADMIN.value,
+            own_organization_id=own_organization_id,
+        )
+
+        keycloak_ids: list[uuid.UUID] = []
+        for link_id in await self.links.list_organization_link_ids(organization_id):
+            keycloak_id = await self.members.delete_member_data(organization_id, link_id)
+            if keycloak_id is not None:
+                keycloak_ids.append(keycloak_id)
+
+        form_ids = await self.forms.list_organization_form_ids(organization_id)
+        response_ids = await self.responses.list_ids_for_forms(form_ids)
+        await self.insights.delete_for_form_responses(response_ids)
+        # Sem login: os logins dos membros já saíram, com os dashboards deles.
+        await self.dashboards.delete_for_member_removal(response_ids, None)
+        await self.responses.delete_with_answers(response_ids)
+        await self.questions.delete_for_forms(form_ids)
+        await self.forms.delete_organization_forms(form_ids)
+
+        await self.departments.delete_for_organization(organization_id)
+
+        document_id = organization.document_id
+        await self.organizations.delete_organization(organization)
+
+        if not await self.participants.document_in_use(document_id):
+            await self.documents.delete_document(document_id)
+
+        await self.members.remove_logins_from_keycloak(keycloak_ids)
 
 
 class MemberService:

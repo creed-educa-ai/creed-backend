@@ -5,7 +5,7 @@ Esta camada NÃO contém regra de negócio: só queries e persistência.
 
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -62,3 +62,8 @@ class DepartmentRepository:
         await self.db.flush()
         await self.db.refresh(department)
         return department
+
+    async def delete_by_organization(self, organization_id: uuid.UUID) -> None:
+        await self.db.execute(
+            delete(Department).where(Department.organization_id == organization_id)
+        )

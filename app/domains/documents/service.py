@@ -3,7 +3,8 @@
 Responde se um documento existe, que é o que `participants` e `organizacoes`
 precisam para aceitar um `document_id` (P-021), lê documentos por lista de ids,
 para `organizacoes` mostrar o número de cada um, e cria o CPF ou CNPJ do cadastro
-público de empresa (`OrganizationService.sign_up`). Editar documento não tem rota.
+público de empresa (`OrganizationService.sign_up`). Apaga o documento da empresa
+excluída (E-6). Editar documento não tem rota.
 """
 
 import uuid
@@ -58,3 +59,11 @@ class DocumentService:
             raise ConflictError(DOCUMENT_ALREADY_REGISTERED)
 
         return created
+
+    async def delete_document(self, document_id: uuid.UUID) -> None:
+        """Apaga o documento na exclusão de empresa (E-6).
+
+        Sem regra: quem chama já apagou a organização e conferiu que nenhum
+        participante aponta para ele (`ParticipantService.document_in_use`).
+        """
+        await self.repository.delete_by_id(document_id)

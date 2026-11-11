@@ -71,6 +71,9 @@ class FakeOrganizationRepository:
     async def count(self) -> int:
         return len(self.itens)
 
+    async def delete(self, organization: Organization) -> None:
+        self.itens.remove(organization)
+
 
 class FakeDocumentService:
     """Dublê do DocumentService: conhece só os ids e os documentos que recebeu.
@@ -375,6 +378,18 @@ class TestComDocumentos:
             await servico(FakeOrganizationRepository([organizacao])).with_documents(
                 [organizacao]
             )
+
+
+class TestApagarOrganization:
+    async def test_apaga_so_a_organizacao_pedida(self) -> None:
+        """A exclusão de empresa (E-6): sem regra aqui, quem chama já conferiu."""
+        apagada = uma_organization()
+        mantida = uma_organization()
+        repository = FakeOrganizationRepository([apagada, mantida])
+
+        await servico(repository).delete_organization(apagada)
+
+        assert repository.itens == [mantida]
 
 
 class TestListarOrganizations:

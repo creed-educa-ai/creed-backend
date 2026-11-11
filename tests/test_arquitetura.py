@@ -65,7 +65,11 @@ COMPOE_COM_SERVICE_DE: dict[str, str] = {
         "pick_period e period_status do forms.service; a exclusao de membro "
         "(router_members.py) delega ao MemberRemovalService de users.dependencies"
     ),
-    "organizacoes": "cria e le documentos pelo DocumentService",
+    "organizacoes": (
+        "cria e le documentos pelo DocumentService; a exclusao de empresa "
+        "(router_organizations.py) delega ao OrganizationRemovalService de "
+        "users.dependencies"
+    ),
     "participants": "consulta documento pelo DocumentService",
     "questions": "confere o formulario pelo FormService",
     "responses": (
@@ -79,7 +83,9 @@ COMPOE_COM_SERVICE_DE: dict[str, str] = {
         "exclusao de membro "
         "(M-3, MemberRemovalService) apaga pelo service de cada dono: forms, "
         "questions, responses, insights, dashboards, links, demographics e "
-        "participants"
+        "participants; a exclusao de empresa (E-6, OrganizationRemovalService) "
+        "apaga cada membro pelo MemberRemovalService e o resto pelo service de "
+        "cada dono, inclusive organizacoes, department e documents"
     ),
 }
 

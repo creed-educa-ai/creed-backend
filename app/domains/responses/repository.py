@@ -56,6 +56,15 @@ class FormResponseRepository:
         )
         return list(result.scalars().all())
 
+    async def list_ids_by_forms(self, form_ids: list[uuid.UUID]) -> list[uuid.UUID]:
+        """As respostas destes formulários, de qualquer vínculo."""
+        if not form_ids:
+            return []
+        result = await self.db.execute(
+            select(FormResponse.id).where(FormResponse.form_id.in_(form_ids))
+        )
+        return list(result.scalars().all())
+
     async def delete_by_ids(self, form_response_ids: list[uuid.UUID]) -> None:
         if not form_response_ids:
             return
