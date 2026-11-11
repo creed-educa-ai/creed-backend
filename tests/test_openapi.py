@@ -66,6 +66,7 @@ def test_all_endpoints_have_method_summary_description_and_operation_id() -> Non
         ("/api/v1/organizations/{organization_id}/members/{link_id}", "patch"),
         ("/api/v1/organizations/{organization_id}/members", "get"),
         ("/api/v1/organizations/{organization_id}/members/{link_id}", "delete"),
+        ("/api/v1/organizations/sign-up", "post"),
     }
 
     documented_operations = {
@@ -104,6 +105,7 @@ def test_request_fields_path_parameters_and_examples_are_documented() -> None:
     assert components["PasswordResetRequest"]["examples"]
     assert components["UserCreate"]["examples"]
     assert components["MemberInvite"]["examples"]
+    assert components["OrganizationSignUp"]["examples"]
     assert components["FormResponseCreate"]["examples"]
     assert components["SessionResponse"]["examples"]
     assert components["UserResponse"]["examples"]
@@ -120,6 +122,7 @@ def test_request_fields_path_parameters_and_examples_are_documented() -> None:
         "PasswordResetRequest",
         "UserCreate",
         "MemberInvite",
+        "OrganizationSignUp",
         "FormResponseCreate",
         "ParticipantCreate",
         "QuestionCreate",
@@ -192,6 +195,12 @@ def test_success_error_and_bearer_authentication_responses_are_documented() -> N
     assert set(password_reset["responses"]) >= {"204", "422", "503"}
     assert not {"401", "404"} & set(password_reset["responses"])
     assert "security" not in password_reset
+    # Cadastro público de empresa: sem login, então sem 401 nem 403; documento
+    # repetido é 409, e o 422 é só o do Pydantic (CREED-69, E-2).
+    sign_up = _operation(schema, "/api/v1/organizations/sign-up", "post")
+    assert set(sign_up["responses"]) >= {"201", "409", "422"}
+    assert not {"401", "403"} & set(sign_up["responses"])
+    assert "security" not in sign_up
     # Convite de membro: o recorte do gestor é 403, a organização inexistente é 404,
     # e o Keycloak ou o SMTP fora do ar é 503, como no cadastro (D7, D8).
     assert set(

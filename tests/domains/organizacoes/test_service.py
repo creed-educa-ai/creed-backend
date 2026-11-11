@@ -3,7 +3,8 @@
 Sem banco e sem HTTP: o repository e o `DocumentService` são dublês em memória.
 O que se prova aqui é a regra de negócio — documento inexistente ou já usado,
 o 403 do gestor em organização alheia, o PATCH parcial, a empresa pendente que o
-PATCH não tira desse estado e a leitura dos documentos numa chamada só.
+PATCH não tira desse estado, a leitura dos documentos numa chamada só e o cadastro
+público, que cria o documento e a organização pendente.
 
 ⚠️ Paginação e ordenação estão na consulta ao banco, e o dublê não roda consulta:
 aqui só se prova que o service calcula o deslocamento e repassa o total.
@@ -17,8 +18,12 @@ import pytest
 
 from app.domains.documents.models import DocType, Document
 from app.domains.organizacoes.models import Organization, OrganizationStatus
-from app.domains.organizacoes.schemas import OrganizationCreate, OrganizationUpdate
-from app.domains.organizacoes.service import OrganizationService
+from app.domains.organizacoes.schemas import (
+    OrganizationCreate,
+    OrganizationSignUp,
+    OrganizationUpdate,
+)
+from app.domains.organizacoes.service import ADDRESS_TO_BE_INFORMED, OrganizationService
 from app.shared.enums import RecordStatus
 from app.shared.exceptions import (
     ConflictError,
@@ -71,17 +76,21 @@ class FakeDocumentService:
     """Dublê do DocumentService: conhece só os ids e os documentos que recebeu.
 
     `chamadas_de_lista` guarda os ids de cada `list_by_ids`, para contar quantas
-    consultas de documento o service faria.
+    consultas de documento o service faria. `erro_ao_criar` faz o
+    `create_brazilian_document` levantar, como o service real no documento repetido.
     """
 
     def __init__(
         self,
         existentes: list[uuid.UUID] | None = None,
         documentos: list[Document] | None = None,
+        erro_ao_criar: ConflictError | None = None,
     ) -> None:
         self.existentes = list(existentes or [])
         self.documentos = list(documentos or [])
         self.chamadas_de_lista: list[list[uuid.UUID]] = []
+        self.erro_ao_criar = erro_ao_criar
+        self.criados: list[Document] = []
 
     async def document_exists(self, document_id: uuid.UUID) -> bool:
         return document_id in self.existentes
@@ -89,6 +98,16 @@ class FakeDocumentService:
     async def list_by_ids(self, document_ids: list[uuid.UUID]) -> list[Document]:
         self.chamadas_de_lista.append(list(document_ids))
         return [d for d in self.documentos if d.id in document_ids]
+
+    async def create_brazilian_document(self, number: str) -> Document:
+        if self.erro_ao_criar is not None:
+            raise self.erro_ao_criar
+        # O `default=uuid.uuid4` do model só vale no flush; o dublê faz o papel dele.
+        tipo = DocType.CPF if len(number) == 11 else DocType.CNPJ
+        documento = Document(id=uuid.uuid4(), type=tipo, value=number)
+        self.criados.append(documento)
+        self.documentos.append(documento)
+        return documento
 
 
 def uma_organization(**campos: object) -> Organization:
@@ -173,6 +192,80 @@ class TestCriarOrganization:
             await servico(repository, FakeDocumentService([documento])).create(
                 um_cadastro(documento)
             )
+
+        assert repository.itens == []
+
+
+def um_cadastro_publico(**campos: str) -> OrganizationSignUp:
+    padrao = {
+        "name": "Empresa Teste",
+        "document": "12.345.678/0001-90",
+        "email": "Gestora@Empresa.com.br",
+        "contact_name": "Gestora Teste",
+        "phone": "51 99999-0000",
+    }
+    return OrganizationSignUp(**{**padrao, **campos})
+
+
+class TestCadastroPublico:
+    async def test_cria_o_documento_e_a_organizacao_pendente(self) -> None:
+        repository = FakeOrganizationRepository()
+        documentos = FakeDocumentService()
+
+        criada = await servico(repository, documentos).sign_up(um_cadastro_publico())
+
+        [documento] = documentos.criados
+        assert (documento.type, documento.value) == (DocType.CNPJ, "12345678000190")
+        assert criada.document_id == documento.id
+        assert criada.status is OrganizationStatus.PENDING
+        assert criada.address == ADDRESS_TO_BE_INFORMED == "[A informar]"
+        assert (criada.name, criada.contact_name, criada.phone) == (
+            "Empresa Teste",
+            "Gestora Teste",
+            "51 99999-0000",
+        )
+        assert repository.itens == [criada]
+
+    async def test_grava_o_email_em_minusculas(self) -> None:
+        """O `EmailStr` só baixa o domínio; a parte antes do @ fica como veio."""
+        criada = await servico(FakeOrganizationRepository()).sign_up(
+            um_cadastro_publico(email="Gestora@Empresa.COM.br")
+        )
+
+        assert criada.email == "gestora@empresa.com.br"
+
+    async def test_cpf_vai_ao_documento_so_com_os_digitos(self) -> None:
+        documentos = FakeDocumentService()
+
+        await servico(FakeOrganizationRepository(), documentos).sign_up(
+            um_cadastro_publico(document="123.456.789-09")
+        )
+
+        assert [(d.type, d.value) for d in documentos.criados] == [
+            (DocType.CPF, "12345678909")
+        ]
+
+    async def test_documento_repetido_sobe_o_conflito_sem_criar_organizacao(
+        self,
+    ) -> None:
+        """🟡 P-076: o 409 vem do `DocumentService`, antes da organização."""
+        repository = FakeOrganizationRepository()
+        erro = ConflictError("Já existe um cadastro com este documento")
+
+        with pytest.raises(ConflictError) as levantado:
+            await servico(repository, FakeDocumentService(erro_ao_criar=erro)).sign_up(
+                um_cadastro_publico()
+            )
+
+        assert levantado.value is erro
+        assert repository.itens == []
+
+    async def test_constraint_da_organizacao_vira_o_mesmo_conflito(self) -> None:
+        """Não acontece com o documento recém-criado, mas o `None` não vira 500."""
+        repository = FakeOrganizationRepository(constraint_recusa=True)
+
+        with pytest.raises(ConflictError, match="Já existe um cadastro"):
+            await servico(repository).sign_up(um_cadastro_publico())
 
         assert repository.itens == []
 
