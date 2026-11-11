@@ -1,4 +1,4 @@
-"""Testes de contrato de GET /organizations/{organization_id}/periods.
+"""Testes de contrato de /organizations/{organization_id}/periods.
 
 A guarda de papel roda de verdade; a regra de organização e de filtro é provada em
 `test_service.py`. Aqui se prova o que chega ao service, o formato da saída e os
@@ -7,7 +7,7 @@ status.
 
 import uuid
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 from fastapi import FastAPI
@@ -16,10 +16,15 @@ from fastapi.testclient import TestClient
 from app.domains.forms.dependencies import get_service
 from app.domains.forms.models import Form, FormStatus
 from app.domains.forms.router_periods import router
-from app.domains.forms.schemas import PeriodRead, PeriodStatus
+from app.domains.forms.schemas import PeriodCreate, PeriodRead, PeriodStatus
 from app.domains.users.dependencies import get_service as get_user_service
 from app.domains.users.service import UserAccess
-from app.shared.exceptions import ForbiddenError
+from app.shared.exceptions import (
+    ConflictError,
+    ForbiddenError,
+    NotFoundError,
+    ValidationError,
+)
 
 ORGANIZATION_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 TOKEN = {"Authorization": "Bearer valido"}
@@ -44,6 +49,37 @@ class _FakeService:
     def __init__(self, *, recusar: Exception | None = None) -> None:
         self.recusar = recusar
         self.pedido: dict[str, Any] | None = None
+        self.form_criado: Form | None = None
+
+    async def create_period(
+        self,
+        target_organization_id: uuid.UUID,
+        request: PeriodCreate,
+        *,
+        role: str,
+        organization_id_user: uuid.UUID,
+    ) -> Form:
+        self.pedido = {
+            "alvo": target_organization_id,
+            "request": request,
+            "role": role,
+            "organization_id_user": organization_id_user,
+        }
+        if self.recusar is not None:
+            raise self.recusar
+        self.form_criado = Form(
+            id=uuid.uuid4(),
+            name=(
+                f"Questionário {request.opens_at:%Y-%m-%d} a {request.closes_at:%Y-%m-%d}"
+            ),
+            organization_id=target_organization_id,
+            status=FormStatus.DRAFT,
+            opens_at=request.opens_at,
+            closes_at=request.closes_at,
+            link_id=request.link_id,
+            created_at=datetime(2026, 10, 30, tzinfo=UTC),
+        )
+        return self.form_criado
 
     async def list_periods(
         self,
@@ -143,3 +179,89 @@ def test_recusa_do_service_devolve_403(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert resposta.status_code == 403
     assert resposta.json() == {"detail": "Sem acesso"}
+
+
+class TestCriarPeriodo:
+    payload: ClassVar[dict[str, str]] = {
+        "opens_at": "2030-01-01T00:00:00Z",
+        "closes_at": "2030-02-01T00:00:00Z",
+    }
+
+    def test_gestor_cria_periodo_e_recebe_formread(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        fake = _FakeService()
+        client = montar(monkeypatch, "gestor", fake)
+
+        response = client.post(URL, json=self.payload, headers=TOKEN)
+
+        assert response.status_code == 201
+        body = response.json()
+        assert body["name"] == "Questionário 2030-01-01 a 2030-02-01"
+        assert body["link_id"] is None
+        assert fake.pedido is not None
+        assert fake.pedido["alvo"] == ORGANIZATION_ID
+
+    def test_admin_envia_link_id_no_corpo(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        fake = _FakeService()
+        client = montar(monkeypatch, "admin", fake)
+        link_id = uuid.uuid4()
+
+        response = client.post(
+            URL,
+            json={**self.payload, "link_id": str(link_id)},
+            headers=TOKEN,
+        )
+
+        assert response.status_code == 201
+        assert fake.pedido is not None
+        assert fake.pedido["request"].link_id == link_id
+
+    def test_respondente_devolve_403_sem_chamar_service(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        fake = _FakeService()
+
+        response = montar(monkeypatch, "respondente", fake).post(
+            URL, json=self.payload, headers=TOKEN
+        )
+
+        assert response.status_code == 403
+        assert fake.pedido is None
+
+    @pytest.mark.parametrize(
+        ("erro", "status_esperado"),
+        [
+            (ForbiddenError("Sem acesso"), 403),
+            (NotFoundError("Organização não encontrada"), 404),
+            (ConflictError("Período sobreposto"), 409),
+            (ValidationError("opens_at não pode estar no passado"), 422),
+        ],
+    )
+    def test_traduz_erros_do_service(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        erro: Exception,
+        status_esperado: int,
+    ) -> None:
+        fake = _FakeService(recusar=erro)
+
+        response = montar(monkeypatch, "gestor", fake).post(
+            URL, json=self.payload, headers=TOKEN
+        )
+
+        assert response.status_code == status_esperado
+
+    def test_datas_invalidas_devolvem_422(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        fake = _FakeService()
+        payload = {
+            "opens_at": "2030-02-01T00:00:00Z",
+            "closes_at": "2030-01-01T00:00:00Z",
+        }
+
+        response = montar(monkeypatch, "gestor", fake).post(
+            URL, json=payload, headers=TOKEN
+        )
+
+        assert response.status_code == 422
+        assert fake.pedido is None
