@@ -26,6 +26,7 @@ from app.domains.users.repository import UserRepository
 from app.domains.users.service import (
     MemberRemovalService,
     MemberService,
+    OrganizationApprovalService,
     OrganizationRemovalService,
     UserService,
 )
@@ -119,3 +120,15 @@ def get_member_service(
 
 
 MemberServiceDep = Annotated[MemberService, Depends(get_member_service)]
+
+
+def get_organization_approval_service(
+    organizations: OrganizationServiceDep,
+    members: MemberServiceDep,
+) -> OrganizationApprovalService:
+    return OrganizationApprovalService(organizations, members)
+
+
+OrganizationApprovalServiceDep = Annotated[
+    OrganizationApprovalService, Depends(get_organization_approval_service)
+]

@@ -3,8 +3,9 @@
 Sem banco e sem HTTP: o repository e o `DocumentService` são dublês em memória.
 O que se prova aqui é a regra de negócio — documento inexistente ou já usado,
 o 403 do gestor em organização alheia, o PATCH parcial, a empresa pendente que o
-PATCH não tira desse estado, a leitura dos documentos numa chamada só e o cadastro
-público, que cria o documento e a organização pendente.
+PATCH não tira desse estado, a leitura dos documentos numa chamada só, o cadastro
+público, que cria o documento e a organização pendente, e a ativação dela na
+aprovação.
 
 ⚠️ Paginação e ordenação estão na consulta ao banco, e o dublê não roda consulta:
 aqui só se prova que o service calcula o deslocamento e repassa o total.
@@ -378,6 +379,46 @@ class TestComDocumentos:
             await servico(FakeOrganizationRepository([organizacao])).with_documents(
                 [organizacao]
             )
+
+
+class TestAtivarPendente:
+    """O passo do banco da aprovação (E-3); o convite é provado em
+    `tests/domains/users/test_organization_approval_service.py`."""
+
+    async def test_pendente_vira_ativa_e_e_salva(self) -> None:
+        organizacao = uma_organization(status=OrganizationStatus.PENDING)
+        repository = FakeOrganizationRepository([organizacao])
+
+        ativada = await servico(repository).activate_pending(organizacao.id)
+
+        assert ativada is organizacao
+        assert ativada.status is OrganizationStatus.ACTIVE
+        assert repository.salvos == [organizacao]
+
+    @pytest.mark.parametrize(
+        "status_atual", [OrganizationStatus.ACTIVE, OrganizationStatus.INACTIVE]
+    )
+    async def test_que_nao_esta_pendente_vira_conflito_e_nada_muda(
+        self, status_atual: OrganizationStatus
+    ) -> None:
+        organizacao = uma_organization(status=status_atual)
+        repository = FakeOrganizationRepository([organizacao])
+
+        with pytest.raises(
+            ConflictError, match=re.escape(f"{organizacao.id} não está pendente")
+        ):
+            await servico(repository).activate_pending(organizacao.id)
+
+        assert organizacao.status is status_atual
+        assert repository.salvos == []
+
+    async def test_inexistente_vira_not_found(self) -> None:
+        repository = FakeOrganizationRepository()
+
+        with pytest.raises(NotFoundError):
+            await servico(repository).activate_pending(uuid.uuid4())
+
+        assert repository.salvos == []
 
 
 class TestApagarOrganization:

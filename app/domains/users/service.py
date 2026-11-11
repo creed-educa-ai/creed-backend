@@ -21,6 +21,9 @@ importariam um ao outro.
 A exclusão de empresa (E-6, `OrganizationRemovalService`) mora aqui pelo mesmo
 motivo: ela apaga cada membro pelo `MemberRemovalService`, e `users` já depende de
 `organizacoes`. Em `organizacoes`, os dois domínios se importariam um ao outro.
+
+A aprovação de empresa (E-3, `OrganizationApprovalService`) também: ela convida quem
+cadastrou a empresa pelo `MemberService`, que é deste domínio.
 """
 
 import logging
@@ -34,7 +37,10 @@ from app.domains.documents.service import DocumentService
 from app.domains.forms.service import FormService
 from app.domains.insights.service import InsightService
 from app.domains.links.service import LinkService
-from app.domains.organizacoes.service import OrganizationService
+from app.domains.organizacoes.service import (
+    OrganizationService,
+    OrganizationWithDocument,
+)
 from app.domains.participants.service import ParticipantService
 from app.domains.questions.service import QuestionService
 from app.domains.responses.service import FormResponseService
@@ -43,7 +49,7 @@ from app.domains.users.repository import UserRepository
 from app.domains.users.schemas import MemberInvite, UserCreate
 from app.external_services.keycloak import admin as keycloak_admin
 from app.external_services.keycloak.client import KeycloakUnavailableError
-from app.shared.enums import RecordStatus, Roles
+from app.shared.enums import LinkType, RecordStatus, Roles
 from app.shared.exceptions import (
     ConflictError,
     ForbiddenError,
@@ -608,3 +614,69 @@ class MemberService:
         return await self.users.create_user_service(
             UserCreate(name=request.name, email=request.email, link_id=link.id)
         )
+
+
+class OrganizationApprovalService:
+    """Aprova uma empresa pendente e convida quem a cadastrou como gestor (E-3).
+
+    Compõe o `OrganizationService`, dono do status, e o `MemberService`, dono do
+    convite. Não confere o papel: a guarda `admin` é da rota.
+    """
+
+    def __init__(
+        self, organizations: OrganizationService, members: MemberService
+    ) -> None:
+        self.organizations = organizations
+        self.members = members
+
+    async def approve(
+        self, organization_id: uuid.UUID, *, own_organization_id: uuid.UUID
+    ) -> OrganizationWithDocument:
+        """Ativa a empresa e manda o convite de gestor ao e-mail do cadastro.
+
+        `own_organization_id` é a organização de quem pede, e só segue para o
+        convite. Devolve a empresa já com o documento, pronta para a resposta: este
+        domínio não importa o model `Organization`.
+
+        A ordem é status antes do convite, e tudo na mesma transação da requisição.
+        Assim, uma empresa que não está pendente para no `ConflictError` antes de
+        criar qualquer coisa, e um convite que falha (e-mail com acesso, Keycloak ou
+        SMTP fora do ar) faz o `get_db` desfazer a troca de status junto com o
+        participante e o vínculo: a empresa continua pendente e pode ser aprovada de
+        novo. O usuário do realm já é desfeito pelo `create_user_service` (D7).
+
+        🟡 Premissa P-053 — o convite vai ao e-mail do cadastro, em nome do
+        responsável (`contact_name`), com papel `gestor` e vínculo `emprego` (P-047).
+        🟡 Premissa P-077 — e-mail que já tem acesso é o `ConflictError` do
+        `create_user_service`, que sobe sem tratamento: a empresa continua pendente.
+        🟡 Premissa P-079 — só `admin` aprova; por isso o convite sai com o papel
+        `admin` de quem pede, que convida em qualquer organização.
+        """
+        organization = await self.organizations.activate_pending(organization_id)
+
+        # Toda empresa pendente vem do cadastro público, que exige os dois campos.
+        # Só uma criada pelo `POST /organizacoes` não os tem, e ela nasce ativa:
+        # chegar aqui sem eles é banco editado à mão. Vira 409, que diz o motivo e
+        # desfaz a troca de status, e não 500. O conteúdo já passou pelas regras do
+        # `MemberInvite` no cadastro (P-082).
+        if organization.email is None or organization.contact_name is None:
+            raise ConflictError(
+                f"A empresa {organization_id} não tem e-mail ou responsável para "
+                "receber o convite"
+            )
+
+        # Antes do convite: depois do e-mail enviado, nada mais pode falhar (P-073).
+        (approved,) = await self.organizations.with_documents([organization])
+
+        await self.members.invite_member_service(
+            organization.id,
+            MemberInvite(
+                name=organization.contact_name,
+                email=organization.email,
+                role=Roles.GESTOR,
+                type=LinkType.EMPREGO,
+            ),
+            role=Roles.ADMIN.value,
+            own_organization_id=own_organization_id,
+        )
+        return approved
