@@ -185,6 +185,14 @@ class LinkService:
             )
         return link
 
+    async def validate_mentee_link(
+        self, organization_id: uuid.UUID, link_id: uuid.UUID
+    ) -> None:
+        """Confere o destinatário de um período individual, após a autorização."""
+        link = await self.get_member_link(organization_id, link_id)
+        if link.type != LinkType.MENTORIA or link.role != Roles.RESPONDENTE:
+            raise ValidationError("link_id deve ser um vínculo de mentorando")
+
     async def delete_link(self, link: Link) -> None:
         """Apaga o vínculo na exclusão de membro (M-3).
 
