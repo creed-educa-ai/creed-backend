@@ -1,14 +1,17 @@
 """Regra de negócio do domínio organizacoes (ADR-0004).
 
 Esta camada não conhece HTTP nem detalhes de ORM. Documento é de outro domínio:
-a pergunta "ele existe?" e a leitura do número vão ao `DocumentService`, nunca ao
-model de `documents` — o mesmo caminho de `participants/service.py`.
+a pergunta "ele existe?", a leitura do número e a criação do documento do cadastro
+público vão ao `DocumentService`, nunca ao model de `documents` — o mesmo caminho
+de `participants/service.py`.
 
 Quem pode o quê (CREED-38):
 - `admin` cadastra, lista, lê e altera qualquer organização. Restringir cadastro,
   listagem e alteração a `admin` é do router (`require_role`).
 - `gestor` só lê a própria organização. Essa regra mora aqui, porque compara o
   recurso com quem pede (P-033, a mesma regra de `forms`).
+- Qualquer pessoa, sem login, cadastra a própria empresa (`sign_up`), que nasce
+  `pending`.
 
 Uma organização `pending` (empresa que se cadastrou e ainda não foi aprovada) só
 sai desse estado pela aprovação ou pela rejeição: o PATCH não troca o status dela.
@@ -17,10 +20,17 @@ sai desse estado pela aprovação ou pela rejeição: o PATCH não troca o statu
 import uuid
 from dataclasses import dataclass
 
-from app.domains.documents.service import DocumentService
+from app.domains.documents.service import (
+    DOCUMENT_ALREADY_REGISTERED,
+    DocumentService,
+)
 from app.domains.organizacoes.models import Organization, OrganizationStatus
 from app.domains.organizacoes.repository import OrganizationRepository
-from app.domains.organizacoes.schemas import OrganizationCreate, OrganizationUpdate
+from app.domains.organizacoes.schemas import (
+    OrganizationCreate,
+    OrganizationSignUp,
+    OrganizationUpdate,
+)
 from app.shared.exceptions import (
     ConflictError,
     ForbiddenError,
@@ -29,6 +39,10 @@ from app.shared.exceptions import (
 )
 
 ADMIN = "admin"
+
+# 🟡 Premissa P-075 — o cadastro público não pede endereço; a administradora corrige
+# pelo PATCH, como o da organização da CREED (P-059).
+ADDRESS_TO_BE_INFORMED = "[A informar]"
 
 
 @dataclass
@@ -74,6 +88,38 @@ class OrganizationService:
         # a gravação. Para quem chamou, é o mesmo conflito.
         if created is None:
             raise _documento_em_uso(request.document_id)
+
+        return created
+
+    async def sign_up(self, request: OrganizationSignUp) -> Organization:
+        """Cadastro público: cria o documento e a organização `pending`.
+
+        As duas gravações estão na mesma transação da requisição (`get_db`): se a
+        segunda falha, a primeira é desfeita junto.
+
+        🟡 Premissa P-076 — documento já cadastrado é 409, e quem levanta é o
+        `DocumentService`, antes de a organização existir.
+        🟡 Premissa P-077 — não confere se o e-mail já tem acesso; quem confere é a
+        aprovação.
+        """
+        document = await self.documents.create_brazilian_document(request.document)
+
+        organization = Organization(
+            name=request.name,
+            address=ADDRESS_TO_BE_INFORMED,
+            document_id=document.id,
+            status=OrganizationStatus.PENDING,
+            email=request.email.lower(),
+            contact_name=request.contact_name,
+            phone=request.phone,
+        )
+        created = await self.repository.create(organization)
+
+        # `None` seria outra organização com este documento, que acabou de nascer
+        # nesta transação e nenhuma outra enxerga. Tratado como o mesmo conflito do
+        # documento repetido, como `create` faz, e sem mostrar o id numa rota pública.
+        if created is None:
+            raise ConflictError(DOCUMENT_ALREADY_REGISTERED)
 
         return created
 

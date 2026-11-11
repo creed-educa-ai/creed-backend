@@ -20,6 +20,9 @@ from app.domains.forms.router_periods import router as periods_router
 from app.domains.links.router import router as links_router
 from app.domains.links.router_members import router as link_members_router
 from app.domains.organizacoes.router import router as organizacoes_router
+from app.domains.organizacoes.router_organizations import (
+    router as organizations_router,
+)
 from app.domains.participants.router import router as participants_router
 from app.domains.prismas.router import router as prismas_router
 from app.domains.prognosticos.router import router as prognosticos_router
@@ -156,6 +159,7 @@ for _router in (
     # Antes do `forms_router`: senão `/forms/{form_id}` captura `/forms/current`.
     current_form_router,
     organizacoes_router,
+    organizations_router,
     prismas_router,
     dashboards_router,
     demographics_router,

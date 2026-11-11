@@ -3,14 +3,20 @@
 Separados por direção (ADR-0004): entrada e saída não se contaminam.
 """
 
+import re
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 from app.domains.organizacoes.models import Organization, OrganizationStatus
 from app.shared.enums import RecordStatus
 from app.shared.validators import sem_caractere_de_controle
+
+# `[0-9]`, e não `\d`: no Python, `\d` aceita dígito de qualquer escrita (o um de
+# largura cheia, U+FF11, por exemplo), e o mesmo número escrito de dois jeitos
+# escaparia da constraint única de `documents`.
+CPF_OR_CNPJ_DIGITS = re.compile(r"[0-9]{11}|[0-9]{14}")
 
 
 class OrganizationCreate(BaseModel):
@@ -62,6 +68,86 @@ class OrganizationUpdate(BaseModel):
     @classmethod
     def _sem_caractere_de_controle(cls, valor: str | None) -> str | None:
         return None if valor is None else sem_caractere_de_controle(valor)
+
+
+class OrganizationSignUp(BaseModel):
+    """Payload do cadastro público (`POST /organizations/sign-up`), sem login.
+
+    Sem endereço: a tela não pede, e a organização nasce com "[A informar]"
+    (P-075, no service). O documento chega como a pessoa digitou e sai daqui só
+    com os dígitos; o tipo (CPF ou CNPJ) quem deduz é o `DocumentService`.
+
+    O e-mail vai como a pessoa digitou, como no `PasswordResetRequest`; quem grava
+    em minúsculas é o service.
+    """
+
+    model_config = ConfigDict(
+        str_strip_whitespace=True,
+        json_schema_extra={
+            "examples": [
+                {
+                    "name": "Empresa Exemplo",
+                    "document": "12.345.678/0001-90",
+                    "email": "gestora@empresa.com.br",
+                    "contact_name": "Gestora Exemplo",
+                    "phone": "51 99999-0000",
+                }
+            ]
+        },
+    )
+
+    name: str = Field(
+        min_length=1,
+        max_length=200,
+        description="Nome da empresa.",
+        examples=["Empresa Exemplo"],
+    )
+    document: str = Field(
+        min_length=1,
+        max_length=100,
+        description=(
+            "CPF ou CNPJ, com ou sem pontuação. Fica só com letras e números, e o "
+            "resultado precisa ter 11 dígitos (CPF) ou 14 (CNPJ)."
+        ),
+        examples=["12.345.678/0001-90"],
+    )
+    email: EmailStr = Field(
+        description="E-mail da empresa, que recebe o acesso de gestor na aprovação.",
+        examples=["gestora@empresa.com.br"],
+    )
+    # 🟡 Premissa P-082 — de 2 a 200, a regra do `UserBase.name`: o convite da
+    # aprovação usa este nome, e com 1 caractere ele quebraria lá.
+    contact_name: str = Field(
+        min_length=2,
+        max_length=200,
+        description="Nome completo de quem faz o cadastro.",
+        examples=["Gestora Exemplo"],
+    )
+    phone: str = Field(
+        min_length=1,
+        max_length=30,
+        description="Telefone de contato, em texto livre.",
+        examples=["51 99999-0000"],
+    )
+
+    @field_validator("name", "contact_name", "phone")
+    @classmethod
+    def _sem_caractere_de_controle(cls, valor: str) -> str:
+        return sem_caractere_de_controle(valor)
+
+    @field_validator("document")
+    @classmethod
+    def _so_os_digitos_de_cpf_ou_cnpj(cls, valor: str) -> str:
+        """🟡 Premissa P-076 — guarda só letras e números; 11 ou 14 dígitos.
+
+        Tira tudo o que não é letra nem número, o mesmo critério do `signUpSchema`
+        do front: pontuação, espaço, `_` e tab saem. Letra que sobrar reprova, porque
+        CPF e CNPJ são só dígitos. Sem dígito verificador.
+        """
+        limpo = "".join(letra for letra in valor if letra.isalnum())
+        if not CPF_OR_CNPJ_DIGITS.fullmatch(limpo):
+            raise ValueError("O documento precisa ter 11 dígitos (CPF) ou 14 (CNPJ)")
+        return limpo
 
 
 class OrganizationDocument(BaseModel):
