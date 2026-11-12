@@ -55,9 +55,9 @@ REEXPORT_DE_TIPO_PERMITIDO: dict[str, str] = {
         "filtro ?type= de router_members.py usar, sem duplicar os valores."
     ),
     "questions": (
-        "QuestionSection, QuestionType e Prisma são tipos de valor (Enum), não ORM. "
-        "schemas.py os reexporta para o filtro ?section= de router.py usar, "
-        "sem duplicar os valores em um segundo enum."
+        "QuestionSection, QuestionType, QuestionLang e Prisma são tipos de valor "
+        "(Enum), não ORM. schemas.py os reexporta para o filtro ?section= de "
+        "router.py usar, sem duplicar os valores em um segundo enum."
     ),
 }
 
