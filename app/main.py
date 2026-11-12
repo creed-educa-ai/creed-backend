@@ -97,6 +97,14 @@ OPENAPI_TAGS = [
         "name": "demographics",
         "description": "Leitura e gravação do perfil demográfico da própria pessoa.",
     },
+    {
+        "name": "prismas",
+        "description": "Cálculo e consulta das pontuações dos prismas da Matriz CREED.",
+    },
+    {
+        "name": "dashboards",
+        "description": "Resumo executivo e indicadores consolidados para a organização.",
+    },
 ]
 
 

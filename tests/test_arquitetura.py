@@ -28,11 +28,19 @@ NOMES = [caminho.name for caminho in DOMINIOS]
 # Formato: nome do domínio -> motivo. Exemplo de como preencher:
 #     "dashboards": "agrega respondentes e prismas; ver docstring do repository"
 LEITURA_ENTRE_DOMINIOS: dict[str, str] = {
+    "dashboards": (
+        "agrega form_responses, answers, organizations e links; ver docstring do"
+        " repository"
+    ),
     "links": (
         "le o membro (vinculo + nome do participante + e-mail do login + tipo do "
         "setor) numa consulta so, e para a lista de membros tambem os periodos (form) "
         "e as respostas enviadas (form_responses); grava so em links. Ver docstring "
         "do repository e o adendo das CREED-6910/697 ao ADR-0004."
+    ),
+    "prismas": (
+        "le answers, questions e options por join para calculo dos prismas; ver"
+        " docstring do repository"
     ),
 }
 
@@ -56,6 +64,7 @@ REEXPORT_DE_TIPO_PERMITIDO: dict[str, str] = {
 
 COMPOE_COM_SERVICE_DE: dict[str, str] = {
     "authentication": "le o usuario pelo UserService",
+    "dashboards": "consulta cálculos pelo PrismaService",
     "demographics": "le o participante do vinculo autenticado pelo LinkService",
     "department": "confere a organizacao pelo OrganizationService",
     "forms": "confere a organizacao pelo OrganizationService",
