@@ -60,21 +60,51 @@ class DashboardRepository:
         )
         return result.scalar_one_or_none()
 
-    async def count_invited_respondents(self, form: Form) -> int:
-        """Conta os vínculos de respondentes ativos convidados para o formulário.
+    def _eligible_link_conditions(self, form: Form) -> list[ColumnElement[bool]]:
+        """Condições de elegibilidade dos vínculos para o período do formulário.
 
-        Filtra apenas vínculos com papel de respondente que estejam ativos
-        (end_at nulo ou no futuro). Se o formulário tiver público específico
-        (form.link_id), restringe a contagem àquele vínculo.
+        Alinha o público do formulário de modo consistente entre convidados e
+        concluídos:
+        - Mesma organização do formulário
+        - Papel de respondente (Roles.RESPONDENTE)
+        - Se o formulário tiver público individual (form.link_id), apenas aquele vínculo
+        - Se o formulário tiver data de fechamento (form.closes_at):
+            - Vínculo não pode ter sido criado/iniciado após o fechamento
+            - Vínculo não pode ter sido encerrado antes da abertura do período
+        - Se o formulário não tiver data de fechamento:
+            - Vínculo ativo no momento da consulta (end_at nulo ou futuro)
         """
-        conditions = [
+        conditions: list[ColumnElement[bool]] = [
             Link.organization_id == form.organization_id,
             Link.role == Roles.RESPONDENTE,
-            or_(Link.end_at.is_(None), Link.end_at > func.now()),
         ]
         if form.link_id is not None:
             conditions.append(Link.id == form.link_id)
 
+        if form.closes_at is not None:
+            # Vínculos criados ou iniciados após o fechamento pertencem a ciclos futuros
+            conditions.append(Link.created_at <= form.closes_at)
+            conditions.append(Link.start_at <= form.closes_at)
+            if form.opens_at is not None:
+                conditions.append(
+                    or_(Link.end_at.is_(None), Link.end_at >= form.opens_at)
+                )
+            else:
+                conditions.append(
+                    or_(Link.end_at.is_(None), Link.end_at >= form.closes_at)
+                )
+        else:
+            conditions.append(or_(Link.end_at.is_(None), Link.end_at > func.now()))
+            if form.opens_at is not None:
+                conditions.append(
+                    or_(Link.end_at.is_(None), Link.end_at >= form.opens_at)
+                )
+
+        return conditions
+
+    async def count_invited_respondents(self, form: Form) -> int:
+        """Conta os vínculos de respondentes convidados para o formulário no período."""
+        conditions = self._eligible_link_conditions(form)
         result = await self.db.execute(select(func.count(Link.id)).where(*conditions))
         return result.scalar() or 0
 
@@ -86,13 +116,25 @@ class DashboardRepository:
         return result.scalar() or 0
 
     async def get_submitted_form_response_ids(
-        self, form_id: uuid.UUID
+        self, form_or_id: Form | uuid.UUID
     ) -> list[uuid.UUID]:
-        """Busca todos os IDs de FormResponse finalizados para um formulário."""
+        """Busca todos os IDs de FormResponse finalizados para o público do formulário."""
+        if isinstance(form_or_id, Form):
+            form = form_or_id
+        else:
+            form_obj = await self.get_form(form_or_id)
+            if form_obj is None:
+                return []
+            form = form_obj
+
+        conditions = [
+            FormResponse.form_id == form.id,
+            FormResponse.status == FormResponseStatus.SUBMITTED,
+            *self._eligible_link_conditions(form),
+        ]
         result = await self.db.execute(
-            select(FormResponse.id).where(
-                FormResponse.form_id == form_id,
-                FormResponse.status == FormResponseStatus.SUBMITTED,
-            )
+            select(FormResponse.id)
+            .join(Link, FormResponse.vinculo_id == Link.id)
+            .where(*conditions)
         )
         return list(result.scalars().all())

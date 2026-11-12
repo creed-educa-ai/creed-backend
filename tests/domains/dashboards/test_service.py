@@ -245,11 +245,53 @@ async def test_summary_skips_invalid_submissions_and_aggregates_valid_ones(
     service = DashboardService(repo, prismas_service)
     result = await service.calculate_company_summary(form_id, user=fake_gestor)
 
-    assert result.concluidos == 2
+    # 3 submissões enviadas contam para a taxa de conclusão (3/5 = 60%)
+    assert result.concluidos == 3
     assert result.convidados == 5
-    assert result.taxa_conclusao == 40
+    assert result.taxa_conclusao == 60
+    # Apenas as 2 submissões calculáveis compõem as médias dos prismas
     assert result.scores[Prisma.SEGURANCA_PSICOLOGICA.value] == 3.5
     assert result.scores_100[Prisma.SEGURANCA_PSICOLOGICA.value] == 70.0
+
+
+@pytest.mark.asyncio
+async def test_summary_with_all_submissions_uncalculated_keeps_concluidos_and_zero_radar(
+    fake_gestor: AuthenticatedUser,
+) -> None:
+    repo = AsyncMock()
+    form_id = uuid.uuid4()
+    repo.get_form.return_value = Form(
+        id=form_id,
+        name="Teste Resiliencia Total",
+        organization_id=fake_gestor.organization_uuid,
+        status=FormStatus.PUBLISHED,
+    )
+    repo.get_organization_name.return_value = "Empresa Resiliente Total"
+    repo.count_invited_respondents.return_value = 4
+
+    resp_1 = uuid.uuid4()
+    resp_2 = uuid.uuid4()
+    repo.get_submitted_form_response_ids.return_value = [resp_1, resp_2]
+
+    prismas_service = AsyncMock()
+    prismas_service.calculate_for_form_response = AsyncMock(
+        side_effect=[
+            ValidationError("Dimensoes sem resposta: S2"),
+            ValueError("Calculo invalido"),
+        ]
+    )
+
+    service = DashboardService(repo, prismas_service)
+    result = await service.calculate_company_summary(form_id, user=fake_gestor)
+
+    # 2 submissões enviadas de 4 convidados = 50%
+    assert result.concluidos == 2
+    assert result.convidados == 4
+    assert result.taxa_conclusao == 50
+    # Sem cálculos válidos, cards e radar retornam estrutura neutra
+    assert result.destaque.rotulo == "Sem dados"
+    assert result.scores[Prisma.SEGURANCA_PSICOLOGICA.value] == 0.0
+    assert result.scores_100[Prisma.SEGURANCA_PSICOLOGICA.value] == 0.0
 
 
 @pytest.mark.asyncio

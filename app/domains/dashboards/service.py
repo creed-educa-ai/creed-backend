@@ -131,7 +131,7 @@ class DashboardService:
             or "Organização"
         )
         total_convidados = await self.repository.count_invited_respondents(form)
-        response_ids = await self.repository.get_submitted_form_response_ids(form_id)
+        response_ids = await self.repository.get_submitted_form_response_ids(form)
 
         # Agregação resiliente: ignora submissões com dados faltantes/inválidos
         valid_prismas: list[FormResponsePrismasRead] = []
@@ -148,12 +148,12 @@ class DashboardService:
                     exc,
                 )
 
-        concluidos = len(valid_prismas)
+        concluidos = len(response_ids)
         convidados = max(total_convidados, concluidos)
         taxa = round((concluidos / convidados) * 100) if convidados > 0 else 0
 
         # Se não há submissões calculáveis, retorna estrutura neutra com valores base
-        if concluidos == 0:
+        if len(valid_prismas) == 0:
             default_prisma = Prisma.NEUROINOVACAO_PRISMA
             info = PRISMA_INFO[default_prisma]
             card_padrao = MetricCardRead(
@@ -167,9 +167,9 @@ class DashboardService:
                 form_id=form.id,
                 organization_id=form.organization_id,
                 nome_empresa=nome_empresa,
-                concluidos=0,
+                concluidos=concluidos,
                 convidados=convidados,
-                taxa_conclusao=0,
+                taxa_conclusao=taxa,
                 destaque=card_padrao,
                 oportunidade=card_padrao,
                 mais_comum=card_padrao,
@@ -186,8 +186,9 @@ class DashboardService:
                 totals[p] += res_prisma.scores.get(p.value, 0.0)
                 totals_100[p] += res_prisma.scores_100.get(p.value, 0.0)
 
-        avg_scores = {p: round(totals[p] / concluidos, 2) for p in Prisma}
-        avg_scores_100 = {p: round(totals_100[p] / concluidos, 1) for p in Prisma}
+        n_valid = len(valid_prismas)
+        avg_scores = {p: round(totals[p] / n_valid, 2) for p in Prisma}
+        avg_scores_100 = {p: round(totals_100[p] / n_valid, 1) for p in Prisma}
 
         # Eleição dos prismas para os 3 cards
         destaque_prisma = max(avg_scores_100, key=lambda p: avg_scores_100[p])
