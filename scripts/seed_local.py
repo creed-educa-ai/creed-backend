@@ -39,11 +39,17 @@ from app.domains.participants.models import Participant
 from app.domains.participants.repository import ParticipantRepository
 from app.domains.questions.models import (
     Question,
+    QuestionLang,
     QuestionOption,
     QuestionSection,
+    QuestionTranslation,
     QuestionType,
 )
-from app.domains.questions.repository import QuestionOptionRepository, QuestionRepository
+from app.domains.questions.repository import (
+    QuestionOptionRepository,
+    QuestionRepository,
+    QuestionTranslationRepository,
+)
 from app.domains.users.models import User
 from app.domains.users.repository import UserRepository
 from app.shared.enums import Dimension, LinkType, RecordStatus, Roles
@@ -124,14 +130,40 @@ LIKERT_OPTIONS = [
     ("5", "Concordo totalmente"),
 ]
 
-# (dimensão, texto); a posição é o índice na lista (0 = item 12 do formulário).
+# (dimensão, texto, traduções); a posição é o índice na lista (0 = item 12 do
+# formulário). `traduções` é {idioma: texto}; o PT não entra nela, é o `texto`.
 INVENTORY_QUESTIONS = [
     # S2: itens 12 a 19 do formulário
-    (Dimension.S2, "Já fui fundador(a) ou sócio(a) de um negócio."),
-    (Dimension.S2, "Já atuei como intraempreendedor(a) dentro de uma organização."),
+    (
+        Dimension.S2,
+        "Já fui fundador(a) ou sócio(a) de um negócio.",
+        {
+            QuestionLang.ES: "He sido fundador(a) o socio(a) de un negocio.",
+            QuestionLang.EN: "I have been a founder or partner in a business.",
+        },
+    ),
+    (
+        Dimension.S2,
+        "Já atuei como intraempreendedor(a) dentro de uma organização.",
+        {
+            QuestionLang.ES: (
+                "He actuado como intraemprendedor(a) dentro de una organización."
+            ),
+            QuestionLang.EN: "I have worked as an intrapreneur within an organization.",
+        },
+    ),
     (
         Dimension.S2,
         "Participei do desenvolvimento de novos produtos, serviços ou negócios.",
+        {
+            QuestionLang.ES: (
+                "He participado en el desarrollo de nuevos productos, servicios o "
+                "negocios."
+            ),
+            QuestionLang.EN: (
+                "I have taken part in developing new products, services, or businesses."
+            ),
+        },
     ),
     (
         Dimension.S2,
@@ -139,14 +171,45 @@ INVENTORY_QUESTIONS = [
             "Atuei como mentor(a), avaliador(a) ou conselheiro(a) em iniciativas "
             "empreendedoras."
         ),
+        {
+            QuestionLang.ES: (
+                "He actuado como mentor(a), evaluador(a) o consejero(a) en "
+                "iniciativas emprendedoras."
+            ),
+            QuestionLang.EN: (
+                "I have acted as a mentor, evaluator, or advisor in entrepreneurial "
+                "initiatives."
+            ),
+        },
     ),
-    (Dimension.S2, "Tenho conexões com ecossistemas de empreendedorismo e inovação."),
+    (
+        Dimension.S2,
+        "Tenho conexões com ecossistemas de empreendedorismo e inovação.",
+        {
+            QuestionLang.ES: (
+                "Tengo conexiones con ecosistemas de emprendimiento e innovación."
+            ),
+            QuestionLang.EN: (
+                "I have connections with entrepreneurship and innovation ecosystems."
+            ),
+        },
+    ),
     (
         Dimension.S2,
         (
             "Sou incentivado(a) a identificar oportunidades a partir de problemas "
             "sociais e culturais."
         ),
+        {
+            QuestionLang.ES: (
+                "Se me incentiva a identificar oportunidades a partir de problemas "
+                "sociales y culturales."
+            ),
+            QuestionLang.EN: (
+                "I am encouraged to identify opportunities arising from social and "
+                "cultural problems."
+            ),
+        },
     ),
     (
         Dimension.S2,
@@ -154,19 +217,58 @@ INVENTORY_QUESTIONS = [
             "Tomo decisões com segurança mesmo em situações incertas e com recursos"
             " limitados."
         ),
+        {
+            QuestionLang.ES: (
+                "Tomo decisiones con seguridad incluso en situaciones de "
+                "incertidumbre y con recursos limitados."
+            ),
+            QuestionLang.EN: (
+                "I make decisions confidently, even in uncertain situations with limited "
+                "resources."
+            ),
+        },
     ),
     (
         Dimension.S2,
         "Persisto diante dos obstáculos e adapto minha abordagem ao longo do processo.",
+        {
+            QuestionLang.ES: (
+                "Persisto ante los obstáculos y adapto mi enfoque a lo largo del proceso."
+            ),
+            QuestionLang.EN: (
+                "I persist in the face of obstacles and adapt my approach throughout the "
+                "process."
+            ),
+        },
     ),
     # S4: itens 20 a 25 do formulário
     (
         Dimension.S4,
         "A diversidade cultural é valorizada nas práticas da organização em que atuo.",
+        {
+            QuestionLang.ES: (
+                "La diversidad cultural es valorada en las prácticas de la "
+                "organización en la que trabajo."
+            ),
+            QuestionLang.EN: (
+                "Cultural diversity is valued in the practices of the organization where "
+                "I work."
+            ),
+        },
     ),
     (
         Dimension.S4,
         "A organização integra conteúdos e perspetivas de diferentes culturas.",
+        {
+            QuestionLang.ES: (
+                "La organización integra contenidos y perspectivas de diferentes "
+                "culturas."
+            ),
+            QuestionLang.EN: (
+                "The organization integrates content and perspectives from different "
+                "cultures."
+            ),
+        },
     ),
     (
         Dimension.S4,
@@ -174,11 +276,40 @@ INVENTORY_QUESTIONS = [
             "As práticas da organização em que atuo contribuem para a redução de "
             "preconceitos."
         ),
+        {
+            QuestionLang.ES: (
+                "Las prácticas de la organización en la que trabajo contribuyen a la "
+                "reducción de prejuicios."
+            ),
+            QuestionLang.EN: (
+                "The practices of the organization where I work contribute to reducing "
+                "prejudice."
+            ),
+        },
     ),
-    (Dimension.S4, "Diferenças culturais são tratadas como fonte de aprendizagem."),
+    (
+        Dimension.S4,
+        "Diferenças culturais são tratadas como fonte de aprendizagem.",
+        {
+            QuestionLang.ES: (
+                "Las diferencias culturales se tratan como fuente de aprendizaje."
+            ),
+            QuestionLang.EN: "Cultural differences are treated as a source of learning.",
+        },
+    ),
     (
         Dimension.S4,
         "A organização em que atuo promove justiça social, equidade e inclusão.",
+        {
+            QuestionLang.ES: (
+                "La organización en la que trabajo promueve la justicia social, la "
+                "equidad y la inclusión."
+            ),
+            QuestionLang.EN: (
+                "The organization where I work promotes social justice, equity, and "
+                "inclusion."
+            ),
+        },
     ),
     (
         Dimension.S4,
@@ -186,6 +317,16 @@ INVENTORY_QUESTIONS = [
             "Demonstro empatia e abertura ao interagir com pessoas de culturas e "
             "contextos diferentes."
         ),
+        {
+            QuestionLang.ES: (
+                "Demuestro empatía y apertura al interactuar con personas de "
+                "culturas y contextos diferentes."
+            ),
+            QuestionLang.EN: (
+                "I show empathy and openness when interacting with people from different "
+                "cultures and backgrounds."
+            ),
+        },
     ),
     # S5A: itens 26 a 32 do formulário
     (
@@ -194,24 +335,106 @@ INVENTORY_QUESTIONS = [
             "Compreendo metodologias ativas como Design Thinking, Lean Startup e "
             "Effectuation."
         ),
+        {
+            QuestionLang.ES: (
+                "Comprendo metodologías activas como Design Thinking, Lean Startup y "
+                "Effectuation."
+            ),
+            QuestionLang.EN: (
+                "I understand active methodologies such as Design Thinking, Lean "
+                "Startup, and Effectuation."
+            ),
+        },
     ),
     (
         Dimension.S5A,
         "Vivencio e utilizo metodologias ativas na minha instituição ou organização.",
+        {
+            QuestionLang.ES: (
+                "Vivencio y utilizo metodologías activas en mi institución u "
+                "organización."
+            ),
+            QuestionLang.EN: (
+                "I experience and use active methodologies in my institution or "
+                "organization."
+            ),
+        },
     ),
-    (Dimension.S5A, "Utilizo tecnologias digitais para ensinar ou aprender."),
-    (Dimension.S5A, "As metodologias utilizadas são culturalmente acessíveis."),
-    (Dimension.S5A, "Jogos, simulações e desafios consideram a diversidade cultural."),
-    (Dimension.S5A, "Desenvolvo criatividade para propor soluções inovadoras."),
-    (Dimension.S5A, "Aprendo a transformar ideias em ações empreendedoras concretas."),
+    (
+        Dimension.S5A,
+        "Utilizo tecnologias digitais para ensinar ou aprender.",
+        {
+            QuestionLang.ES: "Utilizo tecnologías digitales para enseñar o aprender.",
+            QuestionLang.EN: "I use digital technologies to teach or learn.",
+        },
+    ),
+    (
+        Dimension.S5A,
+        "As metodologias utilizadas são culturalmente acessíveis.",
+        {
+            QuestionLang.ES: "Las metodologías utilizadas son culturalmente accesibles.",
+            QuestionLang.EN: "The methodologies used are culturally accessible.",
+        },
+    ),
+    (
+        Dimension.S5A,
+        "Jogos, simulações e desafios consideram a diversidade cultural.",
+        {
+            QuestionLang.ES: (
+                "Los juegos, simulaciones y desafíos consideran la diversidad cultural."
+            ),
+            QuestionLang.EN: (
+                "Games, simulations, and challenges take cultural diversity into account."
+            ),
+        },
+    ),
+    (
+        Dimension.S5A,
+        "Desenvolvo criatividade para propor soluções inovadoras.",
+        {
+            QuestionLang.ES: (
+                "Desarrollo creatividad para proponer soluciones innovadoras."
+            ),
+            QuestionLang.EN: "I develop creativity to propose innovative solutions.",
+        },
+    ),
+    (
+        Dimension.S5A,
+        "Aprendo a transformar ideias em ações empreendedoras concretas.",
+        {
+            QuestionLang.ES: (
+                "Aprendo a transformar ideas en acciones emprendedoras concretas."
+            ),
+            QuestionLang.EN: (
+                "I learn to turn ideas into concrete entrepreneurial actions."
+            ),
+        },
+    ),
     # S5B: itens 33 a 40 do formulário
-    (Dimension.S5B, "Prefiro aprender de forma autónoma e ao meu próprio ritmo."),
+    (
+        Dimension.S5B,
+        "Prefiro aprender de forma autónoma e ao meu próprio ritmo.",
+        {
+            QuestionLang.ES: "Prefiero aprender de forma autónoma y a mi propio ritmo.",
+            QuestionLang.EN: "I prefer to learn autonomously and at my own pace.",
+        },
+    ),
     (
         Dimension.S5B,
         (
             "Aprendo melhor em contextos colaborativos, com troca de experiências "
             "entre pares."
         ),
+        {
+            QuestionLang.ES: (
+                "Aprendo mejor en contextos colaborativos, con intercambio de "
+                "experiencias entre pares."
+            ),
+            QuestionLang.EN: (
+                "I learn best in collaborative contexts, with an exchange of experiences "
+                "among peers."
+            ),
+        },
     ),
     (
         Dimension.S5B,
@@ -219,6 +442,16 @@ INVENTORY_QUESTIONS = [
             "Integro critérios de sustentabilidade e impacto social nas "
             "metodologias que aplico."
         ),
+        {
+            QuestionLang.ES: (
+                "Integro criterios de sostenibilidad e impacto social en las "
+                "metodologías que aplico."
+            ),
+            QuestionLang.EN: (
+                "I integrate sustainability and social impact criteria into the "
+                "methodologies I apply."
+            ),
+        },
     ),
     (
         Dimension.S5B,
@@ -226,6 +459,16 @@ INVENTORY_QUESTIONS = [
             "Reconheço meus próprios padrões de aprendizagem e ajusto estratégias "
             "para aprender com mais eficácia."
         ),
+        {
+            QuestionLang.ES: (
+                "Reconozco mis propios patrones de aprendizaje y ajusto mis "
+                "estrategias para aprender con mayor eficacia."
+            ),
+            QuestionLang.EN: (
+                "I recognize my own learning patterns and adjust my strategies to learn "
+                "more effectively."
+            ),
+        },
     ),
     (
         Dimension.S5B,
@@ -233,6 +476,16 @@ INVENTORY_QUESTIONS = [
             "Aprendo com os erros e utilizo o feedback como oportunidade de "
             "reorganização e crescimento mental."
         ),
+        {
+            QuestionLang.ES: (
+                "Aprendo de los errores y utilizo la retroalimentación como "
+                "oportunidad de reorganización y crecimiento mental."
+            ),
+            QuestionLang.EN: (
+                "I learn from mistakes and use feedback as an opportunity for "
+                "reorganization and mental growth."
+            ),
+        },
     ),
     (
         Dimension.S5B,
@@ -240,6 +493,16 @@ INVENTORY_QUESTIONS = [
             "Compreendo que a prática deliberada e a repetição fortalecem conexões "
             "neurais e consolidam novos saberes."
         ),
+        {
+            QuestionLang.ES: (
+                "Comprendo que la práctica deliberada y la repetición fortalecen las "
+                "conexiones neuronales y consolidan nuevos saberes."
+            ),
+            QuestionLang.EN: (
+                "I understand that deliberate practice and repetition strengthen neural "
+                "connections and consolidate new knowledge."
+            ),
+        },
     ),
     (
         Dimension.S5B,
@@ -247,6 +510,16 @@ INVENTORY_QUESTIONS = [
             "Desenvolvo aprendizagens significativas mesmo em contextos sem acesso "
             "a tecnologia."
         ),
+        {
+            QuestionLang.ES: (
+                "Desarrollo aprendizajes significativos incluso en contextos sin "
+                "acceso a tecnología."
+            ),
+            QuestionLang.EN: (
+                "I develop meaningful learning even in contexts without access to "
+                "technology."
+            ),
+        },
     ),
     (
         Dimension.S5B,
@@ -254,24 +527,79 @@ INVENTORY_QUESTIONS = [
             "Reconheço meu próprio perfil de aprendizagem — individual ou coletivo,"
             " digital ou presencial — e uso esse autoconhecimento a meu favor."
         ),
+        {
+            QuestionLang.ES: (
+                "Reconozco mi propio perfil de aprendizaje (individual o colectivo, "
+                "digital o presencial) y uso ese autoconocimiento a mi favor."
+            ),
+            QuestionLang.EN: (
+                "I recognize my own learning profile (individual or collective, digital "
+                "or in-person) and use this self-knowledge to my advantage."
+            ),
+        },
     ),
     # S6: itens 41 a 46 do formulário
-    (Dimension.S6, "Adapto minhas práticas às necessidades culturais de cada contexto."),
+    (
+        Dimension.S6,
+        "Adapto minhas práticas às necessidades culturais de cada contexto.",
+        {
+            QuestionLang.ES: (
+                "Adapto mis prácticas a las necesidades culturales de cada contexto."
+            ),
+            QuestionLang.EN: (
+                "I adapt my practices to the cultural needs of each context."
+            ),
+        },
+    ),
     (
         Dimension.S6,
         "Reconheço como a cultura influencia os processos de inovação e criação.",
+        {
+            QuestionLang.ES: (
+                "Reconozco cómo la cultura influye en los procesos de innovación y "
+                "creación."
+            ),
+            QuestionLang.EN: (
+                "I recognize how culture influences innovation and creation processes."
+            ),
+        },
     ),
     (
         Dimension.S6,
         "Crio ambientes inclusivos onde perspectivas diversas são valorizadas.",
+        {
+            QuestionLang.ES: (
+                "Creo ambientes inclusivos donde se valoran las perspectivas diversas."
+            ),
+            QuestionLang.EN: (
+                "I create inclusive environments where diverse perspectives are valued."
+            ),
+        },
     ),
     (
         Dimension.S6,
         "Desenvolvo práticas que respeitam e celebram a diversidade cultural.",
+        {
+            QuestionLang.ES: (
+                "Desarrollo prácticas que respetan y celebran la diversidad cultural."
+            ),
+            QuestionLang.EN: (
+                "I develop practices that respect and celebrate cultural diversity."
+            ),
+        },
     ),
     (
         Dimension.S6,
         "Promovo equidade no acesso a oportunidades de inovação e desenvolvimento.",
+        {
+            QuestionLang.ES: (
+                "Promuevo la equidad en el acceso a oportunidades de innovación y "
+                "desarrollo."
+            ),
+            QuestionLang.EN: (
+                "I promote equity in access to innovation and development opportunities."
+            ),
+        },
     ),
     (
         Dimension.S6,
@@ -279,6 +607,15 @@ INVENTORY_QUESTIONS = [
             "Sinto-me seguro(a) para expressar perspectivas diferentes e "
             "experimentar novas abordagens."
         ),
+        {
+            QuestionLang.ES: (
+                "Me siento seguro(a) para expresar perspectivas diferentes y "
+                "experimentar nuevos enfoques."
+            ),
+            QuestionLang.EN: (
+                "I feel safe expressing different perspectives and trying new approaches."
+            ),
+        },
     ),
     # S7: itens 47 a 52 do formulário
     (
@@ -287,11 +624,41 @@ INVENTORY_QUESTIONS = [
             "Possuo consciência profunda sobre minha própria identidade e bagagem "
             "cultural."
         ),
+        {
+            QuestionLang.ES: (
+                "Tengo una conciencia profunda de mi propia identidad y bagaje cultural."
+            ),
+            QuestionLang.EN: (
+                "I have a deep awareness of my own identity and cultural background."
+            ),
+        },
     ),
-    (Dimension.S7, "Navego com eficácia entre diferentes sistemas de valores e crenças."),
+    (
+        Dimension.S7,
+        "Navego com eficácia entre diferentes sistemas de valores e crenças.",
+        {
+            QuestionLang.ES: (
+                "Me desenvuelvo con eficacia entre diferentes sistemas de valores y "
+                "creencias."
+            ),
+            QuestionLang.EN: (
+                "I navigate effectively between different value and belief systems."
+            ),
+        },
+    ),
     (
         Dimension.S7,
         "Transformo tensões e conflitos culturais em oportunidades de cocriação.",
+        {
+            QuestionLang.ES: (
+                "Transformo tensiones y conflictos culturales en oportunidades de "
+                "cocreación."
+            ),
+            QuestionLang.EN: (
+                "I turn cultural tensions and conflicts into opportunities for "
+                "co-creation."
+            ),
+        },
     ),
     (
         Dimension.S7,
@@ -299,6 +666,16 @@ INVENTORY_QUESTIONS = [
             "Contribuo para a construção de culturas organizacionais mais "
             "inovadoras e inclusivas."
         ),
+        {
+            QuestionLang.ES: (
+                "Contribuyo a la construcción de culturas organizacionales más "
+                "innovadoras e inclusivas."
+            ),
+            QuestionLang.EN: (
+                "I contribute to building more innovative and inclusive organizational "
+                "cultures."
+            ),
+        },
     ),
     (
         Dimension.S7,
@@ -306,6 +683,16 @@ INVENTORY_QUESTIONS = [
             "Lidero com inteligência cultural em contextos de alta complexidade e "
             "diversidade."
         ),
+        {
+            QuestionLang.ES: (
+                "Lidero con inteligencia cultural en contextos de alta complejidad y "
+                "diversidad."
+            ),
+            QuestionLang.EN: (
+                "I lead with cultural intelligence in highly complex and diverse "
+                "contexts."
+            ),
+        },
     ),
     (
         Dimension.S7,
@@ -313,6 +700,16 @@ INVENTORY_QUESTIONS = [
             "Identifico oportunidades de inovação a partir da diversidade de "
             "contextos e perspectivas."
         ),
+        {
+            QuestionLang.ES: (
+                "Identifico oportunidades de innovación a partir de la diversidad de "
+                "contextos y perspectivas."
+            ),
+            QuestionLang.EN: (
+                "I identify innovation opportunities from the diversity of contexts and "
+                "perspectives."
+            ),
+        },
     ),
     # S8: itens 53 a 58 do formulário
     (
@@ -321,19 +718,69 @@ INVENTORY_QUESTIONS = [
             "Oriento meus projetos e iniciativas para gerar impacto social positivo"
             " e duradouro."
         ),
+        {
+            QuestionLang.ES: (
+                "Oriento mis proyectos e iniciativas para generar un impacto social "
+                "positivo y duradero."
+            ),
+            QuestionLang.EN: (
+                "I guide my projects and initiatives to generate positive and lasting "
+                "social impact."
+            ),
+        },
     ),
-    (Dimension.S8, "Considero implicações éticas na criação e aplicação de inovações."),
+    (
+        Dimension.S8,
+        "Considero implicações éticas na criação e aplicação de inovações.",
+        {
+            QuestionLang.ES: (
+                "Considero las implicaciones éticas en la creación y aplicación de "
+                "innovaciones."
+            ),
+            QuestionLang.EN: (
+                "I consider ethical implications in the creation and application of "
+                "innovations."
+            ),
+        },
+    ),
     (
         Dimension.S8,
         "Desenvolvo soluções que endereçam desafios sistêmicos e estruturais.",
+        {
+            QuestionLang.ES: (
+                "Desarrollo soluciones que abordan desafíos sistémicos y estructurales."
+            ),
+            QuestionLang.EN: (
+                "I develop solutions that address systemic and structural challenges."
+            ),
+        },
     ),
-    (Dimension.S8, "Meço e comunico o impacto concreto das minhas contribuições."),
+    (
+        Dimension.S8,
+        "Meço e comunico o impacto concreto das minhas contribuições.",
+        {
+            QuestionLang.ES: "Mido y comunico el impacto concreto de mis contribuciones.",
+            QuestionLang.EN: (
+                "I measure and communicate the concrete impact of my contributions."
+            ),
+        },
+    ),
     (
         Dimension.S8,
         (
             "Construo legados que transcendem meu contexto e beneficiam comunidades"
             " mais amplas."
         ),
+        {
+            QuestionLang.ES: (
+                "Construyo legados que trascienden mi contexto y benefician a "
+                "comunidades más amplias."
+            ),
+            QuestionLang.EN: (
+                "I build legacies that transcend my context and benefit broader "
+                "communities."
+            ),
+        },
     ),
     (
         Dimension.S8,
@@ -341,6 +788,16 @@ INVENTORY_QUESTIONS = [
             "Incorporo princípios de responsabilidade social e governança nas "
             "minhas iniciativas de inovação."
         ),
+        {
+            QuestionLang.ES: (
+                "Incorporo principios de responsabilidad social y gobernanza en mis "
+                "iniciativas de innovación."
+            ),
+            QuestionLang.EN: (
+                "I incorporate principles of social responsibility and governance into "
+                "my innovation initiatives."
+            ),
+        },
     ),
 ]
 
@@ -468,6 +925,7 @@ async def semear() -> None:
             FormRepository(session),
             QuestionRepository(session),
             QuestionOptionRepository(session),
+            QuestionTranslationRepository(session),
         )
         if (
             criou_participante
@@ -617,11 +1075,14 @@ async def _ensure_inventory_form(
     forms: FormRepository,
     questions: QuestionRepository,
     options: QuestionOptionRepository,
+    translations: QuestionTranslationRepository,
 ) -> bool:
-    """Cria o formulário do inventário, as perguntas e as alternativas que faltam.
+    """Cria o formulário do inventário, as perguntas, as alternativas e as traduções
+    que faltam.
 
     Idempotente: cada pergunta e cada alternativa só entra se a posição dela ainda
-    estiver vazia, então rodar de novo não duplica nada. Diz se criou.
+    estiver vazia, e cada tradução só se a pergunta ainda não tiver aquele idioma,
+    então rodar de novo não duplica nada. Diz se criou.
     """
     criou = False
 
@@ -638,7 +1099,7 @@ async def _ensure_inventory_form(
         )
         criou = True
 
-    for order_index, (dimensao, text) in enumerate(INVENTORY_QUESTIONS):
+    for order_index, (dimensao, text, traducoes) in enumerate(INVENTORY_QUESTIONS):
         question = await questions.get_by_form_and_order(INVENTORY_FORM_ID, order_index)
         if question is None:
             question = await questions.insert(
@@ -669,6 +1130,14 @@ async def _ensure_inventory_form(
                     value=value,
                     order_index=option_index,
                 )
+            )
+            criou = True
+
+        for lang, traducao in traducoes.items():
+            if await translations.get_by_question_and_lang(question.id, lang) is not None:
+                continue
+            await translations.insert(
+                QuestionTranslation(question_id=question.id, lang=lang, text=traducao)
             )
             criou = True
 
