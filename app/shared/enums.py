@@ -47,3 +47,44 @@ class Prisma(enum.Enum):
     CULTURA_EMPREENDEDORA = "cultura_empreendedora"
     ADAPTABILIDADE_COGNITIVA = "adaptabilidade_cognitiva"
     NEUROINOVACAO_PRISMA = "neuroinovacao_prisma"
+
+
+class DepartmentType(enum.Enum):
+    """Os cinco setores fixos de uma organização.
+
+    Tipo `department_type` no banco, da tabela `departments`. Compartilhado por
+    `department` (o setor cadastrado da empresa) e `links` (o setor que a troca de
+    setor do membro recebe e devolve).
+    """
+
+    MARKETING = "Marketing"
+    FINANCEIRO = "Financeiro"
+    ADMINISTRATIVO = "Administrativo"
+    RECURSOS_HUMANOS = "RecursosHumanos"
+    TECNOLOGIA_INFORMACAO = "TecnologiaInformacao"
+
+
+class LinkType(enum.Enum):
+    """Tipo do vínculo entre a pessoa e a organização.
+
+    Tipo `linktype` no banco, da tabela `links`. Mora aqui, e não em
+    `links/models.py`, porque o convite de membro (`users/schemas.py`) recebe o tipo
+    e não pode importar `models.py` de outro domínio (CREED-23.8).
+    """
+
+    EMPREGO = "emprego"
+    MENTORIA = "mentoria"
+    ACADEMICO = "academico"
+    PESSOAL = "pessoal"
+
+
+class Roles(enum.Enum):
+    """Papéis do vínculo, na lista fixada pela P-006.
+
+    É a única fonte do papel de acesso na plataforma: `user` não guarda papel. Tipo
+    `roles` no banco, da tabela `links`. Mora aqui pelo mesmo motivo do `LinkType`.
+    """
+
+    ADMIN = "admin"
+    GESTOR = "gestor"
+    RESPONDENTE = "respondente"

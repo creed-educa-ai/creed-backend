@@ -48,6 +48,15 @@ class AuthenticationService:
 
         return await self._build_session(tokens, error_message=_SESSION_EXPIRED)
 
+    async def request_password_reset(self, email: str) -> None:
+        """Pedido de "esqueci minha senha". Quem sabe se o e-mail tem acesso é o `users`.
+
+        Não devolve nada, tenha o e-mail acesso ou não: a rota responde igual nos dois
+        casos. O e-mail sai pelo back, e não pela página do Keycloak, porque o front
+        não conhece o endereço dele (spec, D10).
+        """
+        await self.users.send_password_reset_service(email)
+
     async def _build_session(
         self, tokens: dict[str, Any], error_message: str
     ) -> SessionResponse:

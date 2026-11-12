@@ -138,6 +138,49 @@ JSON, ou perca a alteração no próximo `down -v` — e é assim de propósito.
 > `User.keycloak_id` com o `sub` do `dev@creed.example.com` lido uma vez — o seed tem que
 > perguntar ao Keycloak a cada execução.
 
+## Primeiro admin de um ambiente novo
+
+Um ambiente novo não tem usuário nenhum, e em produção ninguém pode nascer com senha
+conhecida (P-052). O primeiro admin nasce por **convite**: o script cria o acesso sem
+senha, e a pessoa define a senha pelo link do e-mail. Ele roda em qualquer ambiente.
+
+```bash
+python -m scripts.convidar_primeiro_admin --email <e-mail> --nome "<nome>"
+```
+
+Na EC2, por quem tem acesso a ela, no diretório do compose de produção (é onde está o
+link para o `/opt/creed/.env`). O `--no-deps` é o mesmo do `ec2/deploy.sh`: o comando
+nunca sobe outro serviço do compose, nem se o `back` passar a depender de algum.
+
+```bash
+cd /opt/creed/creed-infrastructure/ec2
+docker compose run --rm --no-deps back python -m scripts.convidar_primeiro_admin --email <e-mail> --nome "<nome>"
+```
+
+> ⚠️ **Só depois de duas coisas:** o release que leva o script à imagem e a
+> consolidação das migrations (CREED-57). O script precisa da tabela `organizations`,
+> que hoje nenhuma revision cria, nem num banco limpo nem em produção. Sem ela, o
+> comando para com traceback do banco, sem gravar nada.
+
+O que ele faz, e pode rodar de novo sem duplicar nada:
+
+1. garante a organização da própria CREED e o documento dela, com ids fixos (P-048);
+2. se o e-mail já tem acesso ativo, **só reenvia o convite**, sem mudar papel nem
+   organização (P-060). Se o e-mail é, por exemplo, de uma gestora, o script sai com
+   sucesso, reenvia o convite e **ela não vira admin**: a mensagem diz o papel dela;
+3. senão, cria participante, vínculo `admin` na organização da CREED e o acesso, e manda
+   o convite. É o mesmo convite da rota de membros, tudo ou nada: se o e-mail não sai,
+   o banco volta e o usuário criado no Keycloak é apagado.
+
+Duas falhas escapam desse tudo ou nada: o commit que falha depois do e-mail enviado e o
+Keycloak que cai entre criar o usuário e apagá-lo (fica só no log). Nas duas, a próxima
+execução dá "Já existe acesso com o e-mail …", e a correção é apagar o usuário no
+console do Keycloak, pelo túnel SSH (README do `creed-infrastructure/ec2`, "Console de
+admin do Keycloak").
+
+No local, o convite aparece no Mailpit (http://localhost:8025). Em produção ele sai do
+Gmail do projeto, uma conta nova: **avise a pessoa para olhar também o spam**.
+
 ## Qualidade
 
 ```bash

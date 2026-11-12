@@ -43,6 +43,25 @@ class Form(Base):
         Enum(FormStatus), nullable=False, default=FormStatus.DRAFT
     )
 
+    # O período do questionário. Nulos no formulário que ainda não tem período,
+    # como o de demonstração do seed.
+    opens_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    closes_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    # O público: nulo é a organização inteira; preenchido, só a pessoa deste
+    # vínculo.
+    link_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("links.id", name="fk_form_link_id_links"),
+        nullable=True,
+        index=True,
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

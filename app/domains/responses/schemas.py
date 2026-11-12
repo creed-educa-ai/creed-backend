@@ -12,6 +12,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.domains.forms.schemas import FormRead
 from app.domains.responses.models import Answer, FormResponse, FormResponseStatus
 
 
@@ -65,6 +66,30 @@ class FormResponseResponse(BaseModel):
     def de_model(cls, form_response: FormResponse) -> "FormResponseResponse":
         """Monta a saída a partir do model."""
         return cls.model_validate(form_response)
+
+
+class CurrentFormRead(BaseModel):
+    """O questionário disponível agora e a resposta da pessoa nele."""
+
+    form: FormRead = Field(description="Questionário aberto para a pessoa logada.")
+    form_response: FormResponseResponse | None = Field(
+        description=(
+            "Resposta da pessoa neste questionário. Nulo: ainda não começou; "
+            "`status` diz se está em andamento ou já foi enviada."
+        )
+    )
+
+    @classmethod
+    def de_models(
+        cls, form: object, form_response: FormResponse | None
+    ) -> "CurrentFormRead":
+        """Monta a saída. `form` é um `Form`, model de outro domínio: não se importa."""
+        return cls(
+            form=FormRead.model_validate(form),
+            form_response=(
+                FormResponseResponse.de_model(form_response) if form_response else None
+            ),
+        )
 
 
 class AnswerCreate(BaseModel):

@@ -32,3 +32,13 @@ class DashboardService:
             raise NotFoundError(f"Dashboard {dashboard_id} não encontrado")
 
         return dashboard
+
+    async def delete_for_member_removal(
+        self, form_response_ids: list[uuid.UUID], user_id: uuid.UUID | None
+    ) -> None:
+        """Apaga os dashboards que impediriam a exclusão de membro (M-3).
+
+        Os das respostas que saem e os do login que sai: as duas colunas são chave
+        estrangeira, e o banco recusaria apagar a resposta ou o login primeiro.
+        """
+        await self.repository.delete_by_form_responses_or_user(form_response_ids, user_id)

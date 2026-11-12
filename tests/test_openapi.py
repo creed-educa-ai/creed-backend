@@ -46,10 +46,15 @@ def test_all_endpoints_have_method_summary_description_and_operation_id() -> Non
         ("/api/v1/authentication/login", "post"),
         ("/api/v1/authentication/renew", "post"),
         ("/api/v1/authentication/session", "get"),
+        ("/api/v1/authentication/password-reset", "post"),
         ("/api/v1/users", "post"),
         ("/api/v1/users/{user_id}", "delete"),
+        ("/api/v1/users/{user_id}/invitation", "post"),
+        ("/api/v1/organizations/{organization_id}/members", "post"),
         ("/api/v1/forms", "post"),
         ("/api/v1/forms/{form_id}", "get"),
+        ("/api/v1/forms/current", "get"),
+        ("/api/v1/organizations/{organization_id}/periods", "get"),
         ("/api/v1/form-responses", "post"),
         ("/api/v1/form-responses/{form_response_id}", "patch"),
         ("/api/v1/form-responses/{form_response_id}/answers", "post"),
@@ -60,6 +65,12 @@ def test_all_endpoints_have_method_summary_description_and_operation_id() -> Non
         ("/api/v1/forms/{form_id}/questions", "get"),
         ("/api/v1/questions/{question_id}/translations", "post"),
         ("/api/v1/options/{option_id}/translations", "post"),
+        ("/api/v1/organizations/{organization_id}/members/{link_id}", "patch"),
+        ("/api/v1/organizations/{organization_id}/members", "get"),
+        ("/api/v1/organizations/{organization_id}/members/{link_id}", "delete"),
+        ("/api/v1/organizations/sign-up", "post"),
+        ("/api/v1/organizations/{organization_id}", "delete"),
+        ("/api/v1/organizations/{organization_id}/approval", "post"),
     }
 
     documented_operations = {
@@ -95,7 +106,10 @@ def test_request_fields_path_parameters_and_examples_are_documented() -> None:
     components = schema["components"]["schemas"]
 
     assert components["LoginRequest"]["examples"]
+    assert components["PasswordResetRequest"]["examples"]
     assert components["UserCreate"]["examples"]
+    assert components["MemberInvite"]["examples"]
+    assert components["OrganizationSignUp"]["examples"]
     assert components["FormResponseCreate"]["examples"]
     assert components["SessionResponse"]["examples"]
     assert components["UserResponse"]["examples"]
@@ -109,7 +123,10 @@ def test_request_fields_path_parameters_and_examples_are_documented() -> None:
 
     for schema_name in (
         "LoginRequest",
+        "PasswordResetRequest",
         "UserCreate",
+        "MemberInvite",
+        "OrganizationSignUp",
         "FormResponseCreate",
         "ParticipantCreate",
         "QuestionCreate",
@@ -122,6 +139,12 @@ def test_request_fields_path_parameters_and_examples_are_documented() -> None:
     assert user_id["name"] == "user_id"
     assert user_id["description"]
     assert user_id["schema"]["examples"]
+
+    resend_invitation = _operation(schema, "/api/v1/users/{user_id}/invitation", "post")
+    invited_user_id = resend_invitation["parameters"][0]
+    assert invited_user_id["name"] == "user_id"
+    assert invited_user_id["description"]
+    assert invited_user_id["schema"]["examples"]
 
     submit_response = _operation(
         schema,
@@ -165,6 +188,46 @@ def test_success_error_and_bearer_authentication_responses_are_documented() -> N
         "404",
         "503",
     }
+    # Reenvio de convite: usuário de outra organização é 404, não 403, para não vazar
+    # cadastro alheio; o e-mail do Keycloak fora do ar é 503 (CREED-23.8).
+    assert set(
+        _operation(schema, "/api/v1/users/{user_id}/invitation", "post")["responses"]
+    ) >= {"204", "401", "403", "404", "422", "503"}
+    # Esqueci minha senha: rota pública, sem 401 nem 404, porque a resposta não pode
+    # dizer se o e-mail tem acesso (CREED-23.8).
+    password_reset = _operation(schema, "/api/v1/authentication/password-reset", "post")
+    assert set(password_reset["responses"]) >= {"204", "422", "503"}
+    assert not {"401", "404"} & set(password_reset["responses"])
+    assert "security" not in password_reset
+    # Cadastro público de empresa: sem login, então sem 401 nem 403; documento
+    # repetido é 409, e o 422 é só o do Pydantic (CREED-69, E-2).
+    sign_up = _operation(schema, "/api/v1/organizations/sign-up", "post")
+    assert set(sign_up["responses"]) >= {"201", "409", "422"}
+    assert not {"401", "403"} & set(sign_up["responses"])
+    assert "security" not in sign_up
+    # Excluir (e rejeitar) empresa: só admin; a própria organização é 409 e o
+    # Keycloak fora do ar é 503, sem nada apagado (CREED-69, E-6, P-079, P-073).
+    assert set(
+        _operation(schema, "/api/v1/organizations/{organization_id}", "delete")[
+            "responses"
+        ]
+    ) >= {"204", "401", "403", "404", "409", "503"}
+    # Aprovar empresa: só admin, sem corpo, 200 com a empresa ativa; a que não está
+    # pendente e o e-mail com acesso são 409, e o convite que falha é 503, com a
+    # empresa ainda pendente (CREED-69, E-3, P-077, P-079).
+    approval = _operation(
+        schema, "/api/v1/organizations/{organization_id}/approval", "post"
+    )
+    assert set(approval["responses"]) >= {"200", "401", "403", "404", "409", "503"}
+    assert "201" not in approval["responses"]
+    assert "requestBody" not in approval
+    # Convite de membro: o recorte do gestor é 403, a organização inexistente é 404,
+    # e o Keycloak ou o SMTP fora do ar é 503, como no cadastro (D7, D8).
+    assert set(
+        _operation(schema, "/api/v1/organizations/{organization_id}/members", "post")[
+            "responses"
+        ]
+    ) >= {"201", "401", "403", "404", "409", "422", "503"}
     # O vínculo de quem responde vem do login desde a CREED-47 (P-031).
     assert set(_operation(schema, "/api/v1/form-responses", "post")["responses"]) >= {
         "201",
@@ -173,6 +236,18 @@ def test_success_error_and_bearer_authentication_responses_are_documented() -> N
         "409",
         "422",
     }
+    # Troca de setor do membro: 403 antes de 404, e corpo inválido é 422 (CREED-6910).
+    assert set(
+        _operation(
+            schema, "/api/v1/organizations/{organization_id}/members/{link_id}", "patch"
+        )["responses"]
+    ) >= {"200", "401", "403", "404", "422"}
+    # Lista de membros: 403 antes de 404, e `?type=` inválido é 422 (CREED-697).
+    assert set(
+        _operation(schema, "/api/v1/organizations/{organization_id}/members", "get")[
+            "responses"
+        ]
+    ) >= {"200", "401", "403", "404", "422"}
     # Referência inexistente no corpo é 422; no caminho, 404 (CREED-47).
     assert set(
         _operation(schema, "/api/v1/organizations/{organization_id}/links", "post")[

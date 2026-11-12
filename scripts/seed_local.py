@@ -19,6 +19,7 @@ roda `docker compose down -v` ganha um usuário novo no realm (ver README).
 import asyncio
 import sys
 import uuid
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -30,9 +31,9 @@ from app.core.database import AsyncSessionLocal
 from app.domains.documents.models import DocType, Document
 from app.domains.forms.models import Form, FormStatus
 from app.domains.forms.repository import FormRepository
-from app.domains.links.models import Link, LinkType, Roles
+from app.domains.links.models import Link
 from app.domains.links.repository import LinkRepository
-from app.domains.organizacoes.models import Organization
+from app.domains.organizacoes.models import Organization, OrganizationStatus
 from app.domains.organizacoes.repository import OrganizationRepository
 from app.domains.participants.models import Participant
 from app.domains.participants.repository import ParticipantRepository
@@ -40,7 +41,7 @@ from app.domains.questions.models import Question, QuestionSection, QuestionType
 from app.domains.questions.repository import QuestionRepository
 from app.domains.users.models import User
 from app.domains.users.repository import UserRepository
-from app.shared.enums import RecordStatus
+from app.shared.enums import LinkType, RecordStatus, Roles
 
 EMAIL = "dev@creed.example.com"
 NAME = "Dev CREED"
@@ -70,6 +71,10 @@ ORGANIZATION_DOCUMENT_VALUE = "DEMO-ORG-0001"
 # por (formulário, posição), que já é único.
 DEMO_FORM_ID = uuid.UUID("00000000-0000-0000-0000-000000000003")
 DEMO_FORM_NAME = "[Demonstração] Formulário de teste"
+# Período longo, porque o back só aceita resposta dentro dele. Provisório: sai
+# quando o seed da Q-0 abrir o período com as perguntas do instrumento.
+DEMO_OPENS_AT = datetime(2026, 1, 1, tzinfo=UTC)
+DEMO_CLOSES_AT = datetime(2031, 1, 1, tzinfo=UTC)
 
 # Texto sintético de propósito: o conteúdo do instrumento é da cliente. Uma por
 # seção (P-020), todas descritivas: o back já aceita a objetiva, mas o front
@@ -299,7 +304,7 @@ async def _ensure_organization(
                 name=ORGANIZATION_NAME,
                 address=ORGANIZATION_ADDRESS,
                 document_id=ORGANIZATION_DOCUMENT_ID,
-                status=RecordStatus.ACTIVE,
+                status=OrganizationStatus.ACTIVE,
             )
         )
         criou = True
@@ -313,15 +318,24 @@ async def _ensure_demo_form(forms: FormRepository, questions: QuestionRepository
     """Cria o formulário de demonstração e as perguntas que faltam. Diz se criou."""
     criou = False
 
-    if await forms.get_by_id(DEMO_FORM_ID) is None:
+    form = await forms.get_by_id(DEMO_FORM_ID)
+
+    if form is None:
         await forms.create(
             Form(
                 id=DEMO_FORM_ID,
                 name=DEMO_FORM_NAME,
                 organization_id=ORGANIZATION_ID,
                 status=FormStatus.DRAFT,
+                opens_at=DEMO_OPENS_AT,
+                closes_at=DEMO_CLOSES_AT,
             )
         )
+        criou = True
+    elif form.opens_at is None or form.closes_at is None:
+        # Banco semeado antes de o período existir: quem grava é o commit do seed.
+        form.opens_at = DEMO_OPENS_AT
+        form.closes_at = DEMO_CLOSES_AT
         criou = True
 
     for order_index, (section, text, required) in enumerate(DEMO_QUESTIONS):

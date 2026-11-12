@@ -4,9 +4,10 @@ import uuid
 
 import pytest
 
-from app.domains.department.models import Department, DepartmentType
+from app.domains.department.models import Department
 from app.domains.department.schemas import DepartmentCreate
 from app.domains.department.service import DepartmentService
+from app.shared.enums import DepartmentType
 from app.shared.exceptions import NotFoundError, ValidationError
 
 
@@ -23,6 +24,7 @@ class FakeOrganizationService:
 class FakeDepartmentRepository:
     def __init__(self) -> None:
         self.department: Department | None = None
+        self.deleted_for: list[uuid.UUID] = []
 
     async def get_by_id(
         self,
@@ -35,6 +37,9 @@ class FakeDepartmentRepository:
     async def create(self, department: Department) -> Department:
         self.department = department
         return department
+
+    async def delete_by_organization(self, organization_id: uuid.UUID) -> None:
+        self.deleted_for.append(organization_id)
 
 
 @pytest.fixture
@@ -120,3 +125,16 @@ class TestDepartmentService:
             )
 
         assert repository.department is None
+
+    @pytest.mark.asyncio
+    async def test_delete_for_organization(
+        self,
+        service: DepartmentService,
+        repository: FakeDepartmentRepository,
+    ) -> None:
+        """A exclusão de empresa (E-6) apaga os setores pela organização."""
+        organization_id = uuid.uuid4()
+
+        await service.delete_for_organization(organization_id)
+
+        assert repository.deleted_for == [organization_id]

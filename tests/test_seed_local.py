@@ -15,7 +15,9 @@ from app.domains.forms.models import Form
 from app.domains.organizacoes.models import Organization
 from app.domains.questions.models import Question, QuestionSection, QuestionType
 from scripts.seed_local import (
+    DEMO_CLOSES_AT,
     DEMO_FORM_ID,
+    DEMO_OPENS_AT,
     EMAIL,
     LINK_ROLE,
     ORGANIZATION_DOCUMENT_ID,
@@ -263,3 +265,32 @@ class TestOrganizacaoDeDev:
         assert await semear_organizacao(documents, organizations)
         assert len(documents.itens) == 1
         assert len(organizations.itens) == 1
+
+
+class TestPeriodoDoFormularioDeDemonstracao:
+    async def test_nasce_com_o_periodo_aberto(
+        self, forms: FakeFormRepository, questions: FakeQuestionRepository
+    ) -> None:
+        await semear(forms, questions)
+
+        assert forms.itens[0].opens_at == DEMO_OPENS_AT
+        assert forms.itens[0].closes_at == DEMO_CLOSES_AT
+
+    async def test_formulario_antigo_sem_periodo_recebe_o_periodo(
+        self, forms: FakeFormRepository, questions: FakeQuestionRepository
+    ) -> None:
+        await semear(forms, questions)
+        forms.itens[0].opens_at = None
+        forms.itens[0].closes_at = None
+
+        assert await semear(forms, questions) is True
+        assert forms.itens[0].opens_at == DEMO_OPENS_AT
+
+    async def test_periodo_existente_nao_e_alterado(
+        self, forms: FakeFormRepository, questions: FakeQuestionRepository
+    ) -> None:
+        await semear(forms, questions)
+        forms.itens[0].closes_at = DEMO_OPENS_AT
+
+        assert await semear(forms, questions) is False
+        assert forms.itens[0].closes_at == DEMO_OPENS_AT

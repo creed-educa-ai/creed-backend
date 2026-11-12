@@ -6,14 +6,39 @@ são de outros domínios: a pergunta "ele existe?" vai ao service dono de cada u
 """
 
 import uuid
+from dataclasses import dataclass
+from datetime import UTC, datetime
 
 from app.domains.department.service import DepartmentService
+from app.domains.forms.service import pick_period
 from app.domains.links.models import Link
 from app.domains.links.repository import LinkRepository
-from app.domains.links.schemas import LinkCreate
+from app.domains.links.schemas import LinkCreate, MemberPeriod
 from app.domains.organizacoes.service import OrganizationService
 from app.domains.participants.service import ParticipantService
-from app.shared.exceptions import NotFoundError, ValidationError
+from app.shared.enums import DepartmentType, LinkType, Roles
+from app.shared.exceptions import ForbiddenError, NotFoundError, ValidationError
+
+
+@dataclass
+class Member:
+    """Um vínculo visto com a pessoa: o que a tabela de membros mostra.
+
+    `email` é `None` quando o vínculo não tem login (criado sem convite).
+    """
+
+    link: Link
+    name: str
+    email: str | None
+    department: DepartmentType | None
+
+
+@dataclass
+class MemberWithPeriod:
+    """Um membro na lista da organização, com o período que vale para ele."""
+
+    member: Member
+    period: MemberPeriod | None
 
 
 class LinkService:
@@ -75,6 +100,24 @@ class LinkService:
                 f"Departamento {department_id} não é da organização {organization_id}"
             )
 
+    async def create_member_link(
+        self,
+        organization_id: uuid.UUID,
+        participant_id: uuid.UUID,
+        role: Roles,
+        link_type: LinkType,
+    ) -> Link:
+        """O vínculo do convite de membro (CREED-23.8, D8), sem setor.
+
+        Existe para o `users` não montar `LinkCreate`, que é schema deste domínio
+        (`tests/test_arquitetura.py`). Passa pelo `create_link_service`, então o
+        participante continua conferido.
+        """
+        return await self.create_link_service(
+            organization_id,
+            LinkCreate(participant_id=participant_id, type=link_type, role=role),
+        )
+
     async def get_link_by_id_service(self, link_id: uuid.UUID) -> Link | None:
         """Lê um vínculo pelo id, ou `None` se não existir.
 
@@ -82,3 +125,150 @@ class LinkService:
         (404 no cadastro de usuário, 401 no login — task 4 e 5).
         """
         return await self.repository.get_by_id(link_id)
+
+    async def update_member_department(
+        self,
+        organization_id: uuid.UUID,
+        link_id: uuid.UUID,
+        department: DepartmentType | None,
+        *,
+        role: str,
+        own_organization_id: uuid.UUID,
+    ) -> Member:
+        """Escolhe, troca ou tira (`None`) o setor de um membro da organização.
+
+        `role` e `own_organization_id` são de quem pede. A ordem de conferência é
+        acesso (403), depois vínculo (404): quem não pode mexer na organização
+        recebe 403 mesmo para um vínculo que não existe, e a resposta não revela
+        quais vínculos existem (mesma regra de `OrganizationService.get`).
+
+        O setor da empresa é criado na hora se ela ainda não tem aquele tipo
+        (`DepartmentService.get_or_create`). Não há conferência de organização
+        inexistente: o vínculo só é achado se for dela, então organização
+        inexistente já cai no 404.
+        """
+        self._check_can_manage_members(
+            organization_id, role=role, own_organization_id=own_organization_id
+        )
+
+        found = await self.repository.get_member(organization_id, link_id)
+        if found is None:
+            raise NotFoundError(
+                f"Membro {link_id} não encontrado na organização {organization_id}"
+            )
+        link, name, email, _old_department = found
+
+        if department is None:
+            link.department_id = None
+        else:
+            company_department = await self.departments.get_or_create(
+                organization_id, department
+            )
+            link.department_id = company_department.id
+
+        await self.repository.save(link)
+        return Member(link=link, name=name, email=email, department=department)
+
+    async def get_member_link(
+        self, organization_id: uuid.UUID, link_id: uuid.UUID
+    ) -> Link:
+        """O vínculo, se for desta organização. Sem regra de acesso: quem chama já
+        conferiu quem pede (a exclusão de membro, M-3).
+
+        Vínculo inexistente e vínculo de outra organização são o mesmo 404, como em
+        `update_member_department`.
+        """
+        link = await self.repository.get_by_id(link_id)
+        if link is None or link.organization_id != organization_id:
+            raise NotFoundError(
+                f"Membro {link_id} não encontrado na organização {organization_id}"
+            )
+        return link
+
+    async def validate_mentee_link(
+        self, organization_id: uuid.UUID, link_id: uuid.UUID
+    ) -> None:
+        """Confere o destinatário de um período individual, após a autorização."""
+        link = await self.get_member_link(organization_id, link_id)
+        if link.type != LinkType.MENTORIA or link.role != Roles.RESPONDENTE:
+            raise ValidationError("link_id deve ser um vínculo de mentorando")
+
+    async def delete_link(self, link: Link) -> None:
+        """Apaga o vínculo na exclusão de membro (M-3).
+
+        Quem chama já apagou o que aponta para ele: o login, as respostas e os
+        questionários individuais.
+        """
+        await self.repository.delete(link)
+
+    async def list_organization_link_ids(
+        self, organization_id: uuid.UUID
+    ) -> list[uuid.UUID]:
+        """Os vínculos da organização, de qualquer tipo e papel.
+
+        Sem regra de acesso: é o que a exclusão de empresa (E-6) usa, depois de
+        conferir quem pede, para apagar cada membro como a M-3.
+        """
+        return await self.repository.list_ids_by_organization(organization_id)
+
+    async def participant_has_links(self, participant_id: uuid.UUID) -> bool:
+        """Se a pessoa ainda tem vínculo com alguma organização."""
+        return await self.repository.count_by_participant(participant_id) > 0
+
+    async def list_members(
+        self,
+        organization_id: uuid.UUID,
+        link_type: LinkType | None,
+        *,
+        role: str,
+        own_organization_id: uuid.UUID,
+    ) -> list[MemberWithPeriod]:
+        """Os membros da organização, cada um com o período dele (CREED-697).
+
+        `role` e `own_organization_id` são de quem pede. Acesso (403) antes de
+        tudo, e organização inexistente é 404: só o `admin` chega a essa conferência.
+
+        Depois de conferir a organização, são três consultas de dados, qualquer que
+        seja o número de membros: os membros, os períodos da organização e as
+        respostas enviadas. O período de cada um é
+        escolhido aqui, por `pick_period` (P-068), e não numa consulta por pessoa.
+        """
+        self._check_can_manage_members(
+            organization_id, role=role, own_organization_id=own_organization_id
+        )
+        if not await self.organizations.organization_exists(organization_id):
+            raise NotFoundError(f"Organização {organization_id} não encontrada")
+
+        rows = await self.repository.list_members(organization_id, link_type)
+        periods = await self.repository.list_organization_periods(organization_id)
+        submitted = await self.repository.list_submitted(organization_id)
+        now = datetime.now(UTC)
+
+        members: list[MemberWithPeriod] = []
+        for link, name, email, department in rows:
+            picked = pick_period(periods, link.id, now)
+            period: MemberPeriod | None = None
+            if picked is not None:
+                period = MemberPeriod(
+                    form_id=picked.form.id,
+                    opens_at=picked.opens_at,
+                    closes_at=picked.closes_at,
+                    period_status=picked.status,
+                    has_answered=(picked.form.id, link.id) in submitted,
+                )
+            member = Member(link=link, name=name, email=email, department=department)
+            members.append(MemberWithPeriod(member=member, period=period))
+        return members
+
+    def _check_can_manage_members(
+        self, organization_id: uuid.UUID, *, role: str, own_organization_id: uuid.UUID
+    ) -> None:
+        """🟡 Premissa P-066: o `admin` mexe nos membros de qualquer organização;
+        o `gestor`, só nos da organização do próprio vínculo; o `respondente`, em
+        nenhuma. Confirmar na próxima reunião.
+        """
+        if role == Roles.ADMIN.value:
+            return
+        if role == Roles.GESTOR.value and organization_id == own_organization_id:
+            return
+        raise ForbiddenError("Sem acesso aos membros desta organização")
