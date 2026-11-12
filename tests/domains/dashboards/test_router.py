@@ -146,3 +146,19 @@ def test_get_company_dashboard_returns_403_when_forbidden(
 
     response = client.get(f"/dashboards/company/{uuid.uuid4()}", headers=TOKEN)
     assert response.status_code == 403
+
+
+def test_get_company_dashboard_returns_403_for_respondent_on_empty_form(
+    app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.domains.dashboards.service import DashboardService
+
+    autenticar_como(app, monkeypatch, "respondente", organization_id=ORGANIZATION_ID)
+    fake_repo = AsyncMock()
+    # Mesmo com o formulário sem submissões, o respondente é barrado com 403
+    real_service = DashboardService(fake_repo, AsyncMock())
+    app.dependency_overrides[get_dashboard_service] = lambda: real_service
+
+    response = client.get(f"/dashboards/company/{uuid.uuid4()}", headers=TOKEN)
+    assert response.status_code == 403
+    assert "Apenas administradores e gestores" in response.json()["detail"]

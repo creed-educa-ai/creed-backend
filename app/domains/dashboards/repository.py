@@ -13,6 +13,7 @@ from app.domains.forms.models import Form
 from app.domains.links.models import Link
 from app.domains.organizacoes.models import Organization
 from app.domains.responses.models import FormResponse, FormResponseStatus
+from app.shared.enums import Roles
 
 
 class DashboardRepository:
@@ -59,8 +60,26 @@ class DashboardRepository:
         )
         return result.scalar_one_or_none()
 
+    async def count_invited_respondents(self, form: Form) -> int:
+        """Conta os vínculos de respondentes ativos convidados para o formulário.
+
+        Filtra apenas vínculos com papel de respondente que estejam ativos
+        (end_at nulo ou no futuro). Se o formulário tiver público específico
+        (form.link_id), restringe a contagem àquele vínculo.
+        """
+        conditions = [
+            Link.organization_id == form.organization_id,
+            Link.role == Roles.RESPONDENTE,
+            or_(Link.end_at.is_(None), Link.end_at > func.now()),
+        ]
+        if form.link_id is not None:
+            conditions.append(Link.id == form.link_id)
+
+        result = await self.db.execute(select(func.count(Link.id)).where(*conditions))
+        return result.scalar() or 0
+
     async def count_organization_members(self, organization_id: uuid.UUID) -> int:
-        """Conta o total de membros vinculados à organização."""
+        """Conta o total de membros vinculados à organização (legado)."""
         result = await self.db.execute(
             select(func.count(Link.id)).where(Link.organization_id == organization_id)
         )

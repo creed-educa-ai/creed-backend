@@ -4,7 +4,9 @@ Esta camada não conhece HTTP nem ORM. Agrega os resultados dos colaboradores,
 calcula as métricas do grupo e elege os cards de Destaque, Oportunidade e Mais Comum.
 """
 
+import logging
 import uuid
+from collections import Counter
 from typing import TYPE_CHECKING
 
 from app.domains.dashboards.models import Dashboard
@@ -14,14 +16,18 @@ from app.domains.dashboards.schemas import (
     MetricCardRead,
 )
 from app.shared.enums import Prisma
-from app.shared.exceptions import ForbiddenError, NotFoundError
+from app.shared.exceptions import ForbiddenError, NotFoundError, ValidationError
 
 if TYPE_CHECKING:
     from app.domains.dashboards.repository import DashboardRepository
+    from app.domains.prismas.schemas import FormResponsePrismasRead
     from app.domains.prismas.service import PrismaService
     from app.shared.authorization import AuthenticatedUser
 
+logger = logging.getLogger(__name__)
+
 ADMIN_ROLE = "admin"
+GESTOR_ROLE = "gestor"
 
 PRISMA_INFO: dict[Prisma, dict[str, str]] = {
     Prisma.SEGURANCA_PSICOLOGICA: {
@@ -108,6 +114,11 @@ class DashboardService:
         if self.prismas_service is None:
             raise RuntimeError("PrismaService não configurado no DashboardService")
 
+        if user.role not in (ADMIN_ROLE, GESTOR_ROLE):
+            raise ForbiddenError(
+                "Apenas administradores e gestores podem acessar o resumo da empresa"
+            )
+
         form = await self.repository.get_form(form_id)
         if form is None:
             raise NotFoundError(f"Formulário {form_id} não encontrado")
@@ -119,16 +130,29 @@ class DashboardService:
             await self.repository.get_organization_name(form.organization_id)
             or "Organização"
         )
-        total_convidados = await self.repository.count_organization_members(
-            form.organization_id
-        )
+        total_convidados = await self.repository.count_invited_respondents(form)
         response_ids = await self.repository.get_submitted_form_response_ids(form_id)
 
-        concluidos = len(response_ids)
+        # Agregação resiliente: ignora submissões com dados faltantes/inválidos
+        valid_prismas: list[FormResponsePrismasRead] = []
+        for resp_id in response_ids:
+            try:
+                res_prisma = await self.prismas_service.calculate_for_form_response(
+                    resp_id, user=user
+                )
+                valid_prismas.append(res_prisma)
+            except (ValidationError, ValueError) as exc:
+                logger.warning(
+                    "Submissão %s ignorada no dashboard por dados inválidos: %s",
+                    resp_id,
+                    exc,
+                )
+
+        concluidos = len(valid_prismas)
         convidados = max(total_convidados, concluidos)
         taxa = round((concluidos / convidados) * 100) if convidados > 0 else 0
 
-        # Se não há submissões, retorna estrutura neutra com valores base
+        # Se não há submissões calculáveis, retorna estrutura neutra com valores base
         if concluidos == 0:
             default_prisma = Prisma.NEUROINOVACAO_PRISMA
             info = PRISMA_INFO[default_prisma]
@@ -153,14 +177,11 @@ class DashboardService:
                 scores_100={p.value: 0.0 for p in Prisma},
             )
 
-        # Agregação das pontuações de todos os formulários concluídos
+        # Agregação das pontuações de todos os formulários concluídos válidos
         totals: dict[Prisma, float] = dict.fromkeys(Prisma, 0.0)
         totals_100: dict[Prisma, float] = dict.fromkeys(Prisma, 0.0)
 
-        for resp_id in response_ids:
-            res_prisma = await self.prismas_service.calculate_for_form_response(
-                resp_id, user=user
-            )
+        for res_prisma in valid_prismas:
             for p in Prisma:
                 totals[p] += res_prisma.scores.get(p.value, 0.0)
                 totals_100[p] += res_prisma.scores_100.get(p.value, 0.0)
@@ -172,9 +193,22 @@ class DashboardService:
         destaque_prisma = max(avg_scores_100, key=lambda p: avg_scores_100[p])
         oportunidade_prisma = min(avg_scores_100, key=lambda p: avg_scores_100[p])
 
-        # Mais comum: o prisma cuja nota está mais próxima da mediana das médias
-        sorted_prisms = sorted(avg_scores_100.keys(), key=lambda p: avg_scores_100[p])
-        mais_comum_prisma = sorted_prisms[len(sorted_prisms) // 2]
+        # Mais comum: moda do prisma predominante entre os respondentes avaliados.
+        # Para cada submissão válida, identifica-se o prisma com maior nota individual.
+        # O card 'Mais Comum' reflete o prisma mais frequente como destaque (moda),
+        # desempacando pela média corporativa caso haja empate de frequência.
+        predominant_counts = Counter(
+            max(res.scores_100.keys(), key=lambda k: res.scores_100[k])
+            for res in valid_prismas
+        )
+        mais_comum_str = max(
+            predominant_counts.keys(),
+            key=lambda p_str: (
+                predominant_counts[p_str],
+                avg_scores_100[Prisma(p_str)],
+            ),
+        )
+        mais_comum_prisma = Prisma(mais_comum_str)
 
         destaque_card = MetricCardRead(
             rotulo="Destaque",

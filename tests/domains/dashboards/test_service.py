@@ -13,7 +13,7 @@ from app.domains.forms.models import Form, FormStatus
 from app.domains.prismas.schemas import FormResponsePrismasRead
 from app.shared.authorization import AuthenticatedUser
 from app.shared.enums import Dimension, Prisma
-from app.shared.exceptions import ForbiddenError, NotFoundError
+from app.shared.exceptions import ForbiddenError, NotFoundError, ValidationError
 
 
 @pytest.fixture
@@ -26,6 +26,29 @@ def fake_gestor() -> AuthenticatedUser:
         link_id=str(uuid.uuid4()),
         organization_id=org_id,
     )
+
+
+@pytest.fixture
+def fake_respondente() -> AuthenticatedUser:
+    org_id = str(uuid.uuid4())
+    return AuthenticatedUser(
+        sub=str(uuid.uuid4()),
+        email="respondente@empresa.com",
+        roles=["respondente"],
+        link_id=str(uuid.uuid4()),
+        organization_id=org_id,
+    )
+
+
+@pytest.mark.asyncio
+async def test_summary_raises_forbidden_for_respondent(
+    fake_respondente: AuthenticatedUser,
+) -> None:
+    repo = AsyncMock()
+    prismas_service = AsyncMock()
+    service = DashboardService(repo, prismas_service)
+    with pytest.raises(ForbiddenError, match="Apenas administradores e gestores"):
+        await service.calculate_company_summary(uuid.uuid4(), user=fake_respondente)
 
 
 @pytest.mark.asyncio
@@ -73,7 +96,7 @@ async def test_summary_empty_when_no_submissions(
         status=FormStatus.PUBLISHED,
     )
     repo.get_organization_name.return_value = "Empresa XPTO"
-    repo.count_organization_members.return_value = 10
+    repo.count_invited_respondents.return_value = 10
     repo.get_submitted_form_response_ids.return_value = []
 
     prismas_service = AsyncMock()
@@ -101,7 +124,7 @@ async def test_summary_calculates_aggregated_and_cards(
         status=FormStatus.PUBLISHED,
     )
     repo.get_organization_name.return_value = "Empresa XPTO"
-    repo.count_organization_members.return_value = 2
+    repo.count_invited_respondents.return_value = 2
 
     resp_1 = uuid.uuid4()
     resp_2 = uuid.uuid4()
@@ -170,6 +193,138 @@ async def test_summary_calculates_aggregated_and_cards(
     assert result.oportunidade.rotulo == "Oportunidade"
     assert result.oportunidade.prisma == Prisma.ADAPTABILIDADE_COGNITIVA
     assert result.oportunidade.valor == 60.0
+
+
+@pytest.mark.asyncio
+async def test_summary_skips_invalid_submissions_and_aggregates_valid_ones(
+    fake_gestor: AuthenticatedUser,
+) -> None:
+    repo = AsyncMock()
+    form_id = uuid.uuid4()
+    repo.get_form.return_value = Form(
+        id=form_id,
+        name="Teste Resiliência",
+        organization_id=fake_gestor.organization_uuid,
+        status=FormStatus.PUBLISHED,
+    )
+    repo.get_organization_name.return_value = "Empresa Resiliente"
+    repo.count_invited_respondents.return_value = 5
+
+    resp_valid_1 = uuid.uuid4()
+    resp_invalid = uuid.uuid4()
+    resp_valid_2 = uuid.uuid4()
+    repo.get_submitted_form_response_ids.return_value = [
+        resp_valid_1,
+        resp_invalid,
+        resp_valid_2,
+    ]
+
+    prismas_service = AsyncMock()
+    prismas_service.calculate_for_form_response = AsyncMock(
+        side_effect=[
+            FormResponsePrismasRead(
+                form_response_id=resp_valid_1,
+                form_id=form_id,
+                vinculo_id=fake_gestor.link_uuid,
+                scores={p.value: 4.0 for p in Prisma},
+                scores_100={p.value: 80.0 for p in Prisma},
+                dimensions={},
+            ),
+            ValidationError("Dimensoes sem resposta: S2"),
+            FormResponsePrismasRead(
+                form_response_id=resp_valid_2,
+                form_id=form_id,
+                vinculo_id=fake_gestor.link_uuid,
+                scores={p.value: 3.0 for p in Prisma},
+                scores_100={p.value: 60.0 for p in Prisma},
+                dimensions={},
+            ),
+        ]
+    )
+
+    service = DashboardService(repo, prismas_service)
+    result = await service.calculate_company_summary(form_id, user=fake_gestor)
+
+    assert result.concluidos == 2
+    assert result.convidados == 5
+    assert result.taxa_conclusao == 40
+    assert result.scores[Prisma.SEGURANCA_PSICOLOGICA.value] == 3.5
+    assert result.scores_100[Prisma.SEGURANCA_PSICOLOGICA.value] == 70.0
+
+
+@pytest.mark.asyncio
+async def test_summary_calculates_mais_comum_using_mode_of_predominant_prisms(
+    fake_gestor: AuthenticatedUser,
+) -> None:
+    repo = AsyncMock()
+    form_id = uuid.uuid4()
+    repo.get_form.return_value = Form(
+        id=form_id,
+        name="Teste Moda",
+        organization_id=fake_gestor.organization_uuid,
+        status=FormStatus.PUBLISHED,
+    )
+    repo.get_organization_name.return_value = "Empresa Moda"
+    repo.count_invited_respondents.return_value = 3
+
+    resp_1 = uuid.uuid4()
+    resp_2 = uuid.uuid4()
+    resp_3 = uuid.uuid4()
+    repo.get_submitted_form_response_ids.return_value = [resp_1, resp_2, resp_3]
+
+    res_1 = FormResponsePrismasRead(
+        form_response_id=resp_1,
+        form_id=form_id,
+        vinculo_id=fake_gestor.link_uuid,
+        scores={p.value: 3.0 for p in Prisma},
+        scores_100={
+            Prisma.SEGURANCA_PSICOLOGICA.value: 70.0,
+            Prisma.LIDERANCA_ADAPTATIVA.value: 60.0,
+            Prisma.CULTURA_EMPREENDEDORA.value: 85.0,
+            Prisma.ADAPTABILIDADE_COGNITIVA.value: 50.0,
+            Prisma.NEUROINOVACAO_PRISMA.value: 65.0,
+        },
+        dimensions={},
+    )
+    res_2 = FormResponsePrismasRead(
+        form_response_id=resp_2,
+        form_id=form_id,
+        vinculo_id=fake_gestor.link_uuid,
+        scores={p.value: 3.0 for p in Prisma},
+        scores_100={
+            Prisma.SEGURANCA_PSICOLOGICA.value: 60.0,
+            Prisma.LIDERANCA_ADAPTATIVA.value: 70.0,
+            Prisma.CULTURA_EMPREENDEDORA.value: 90.0,
+            Prisma.ADAPTABILIDADE_COGNITIVA.value: 55.0,
+            Prisma.NEUROINOVACAO_PRISMA.value: 68.0,
+        },
+        dimensions={},
+    )
+    res_3 = FormResponsePrismasRead(
+        form_response_id=resp_3,
+        form_id=form_id,
+        vinculo_id=fake_gestor.link_uuid,
+        scores={p.value: 3.0 for p in Prisma},
+        scores_100={
+            Prisma.SEGURANCA_PSICOLOGICA.value: 95.0,
+            Prisma.LIDERANCA_ADAPTATIVA.value: 60.0,
+            Prisma.CULTURA_EMPREENDEDORA.value: 70.0,
+            Prisma.ADAPTABILIDADE_COGNITIVA.value: 50.0,
+            Prisma.NEUROINOVACAO_PRISMA.value: 68.0,
+        },
+        dimensions={},
+    )
+
+    prismas_service = AsyncMock()
+    prismas_service.calculate_for_form_response = AsyncMock(
+        side_effect=[res_1, res_2, res_3]
+    )
+
+    service = DashboardService(repo, prismas_service)
+    result = await service.calculate_company_summary(form_id, user=fake_gestor)
+
+    assert result.mais_comum.rotulo == "Mais Comum"
+    assert result.mais_comum.prisma == Prisma.CULTURA_EMPREENDEDORA
 
 
 @pytest.mark.asyncio
