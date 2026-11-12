@@ -7,7 +7,12 @@ calcula as métricas do grupo e elege os cards de Destaque, Oportunidade e Mais 
 import uuid
 from typing import TYPE_CHECKING
 
-from app.domains.dashboards.schemas import CompanySummaryRead, MetricCardRead
+from app.domains.dashboards.models import Dashboard
+from app.domains.dashboards.schemas import (
+    CompanySummaryRead,
+    DashboardCreate,
+    MetricCardRead,
+)
 from app.shared.enums import Prisma
 from app.shared.exceptions import ForbiddenError, NotFoundError
 
@@ -60,10 +65,38 @@ class DashboardService:
     def __init__(
         self,
         repository: "DashboardRepository",
-        prismas_service: "PrismaService",
+        prismas_service: "PrismaService | None" = None,
     ) -> None:
         self.repository = repository
         self.prismas_service = prismas_service
+
+    async def create(self, request: DashboardCreate) -> Dashboard:
+        """Cria um novo dashboard."""
+        dashboard = Dashboard(
+            user_id=request.user_id,
+            form_id=request.form_id,
+            is_private=request.is_private,
+        )
+        return await self.repository.create(dashboard)
+
+    async def get(self, dashboard_id: uuid.UUID) -> Dashboard:
+        """Busca um dashboard pelo identificador."""
+        dashboard = await self.repository.get_by_id(dashboard_id)
+
+        if dashboard is None:
+            raise NotFoundError(f"Dashboard {dashboard_id} não encontrado")
+
+        return dashboard
+
+    async def delete_for_member_removal(
+        self, form_response_ids: list[uuid.UUID], user_id: uuid.UUID | None
+    ) -> None:
+        """Apaga os dashboards que impediriam a exclusão de membro (M-3).
+
+        Os das respostas que saem e os do login que sai: as duas colunas são chave
+        estrangeira, e o banco recusaria apagar a resposta ou o login primeiro.
+        """
+        await self.repository.delete_by_form_responses_or_user(form_response_ids, user_id)
 
     async def calculate_company_summary(
         self,
@@ -72,6 +105,9 @@ class DashboardService:
         user: "AuthenticatedUser",
     ) -> CompanySummaryRead:
         """Calcula o resumo executivo da organização para um formulário/período."""
+        if self.prismas_service is None:
+            raise RuntimeError("PrismaService não configurado no DashboardService")
+
         form = await self.repository.get_form(form_id)
         if form is None:
             raise NotFoundError(f"Formulário {form_id} não encontrado")
@@ -100,52 +136,37 @@ class DashboardService:
                 rotulo="Sem dados",
                 titulo=info["titulo"],
                 valor=0.0,
-                descricao="Ainda não há respostas enviadas para calcular este indicador.",
+                descricao=info["descricao"],
                 prisma=default_prisma,
             )
-            empty_scores = {p.value: 0.0 for p in Prisma}
             return CompanySummaryRead(
                 form_id=form.id,
                 organization_id=form.organization_id,
                 nome_empresa=nome_empresa,
                 concluidos=0,
                 convidados=convidados,
-                taxa_conclusao=taxa,
+                taxa_conclusao=0,
                 destaque=card_padrao,
                 oportunidade=card_padrao,
                 mais_comum=card_padrao,
-                scores=empty_scores,
-                scores_100=empty_scores,
+                scores={p.value: 0.0 for p in Prisma},
+                scores_100={p.value: 0.0 for p in Prisma},
             )
 
-        # Agrega as pontuações de todos os respondentes concluídos
-        totals_scores_100: dict[Prisma, float] = dict.fromkeys(Prisma, 0.0)
-        totals_scores: dict[Prisma, float] = dict.fromkeys(Prisma, 0.0)
+        # Agregação das pontuações de todos os formulários concluídos
+        totals: dict[Prisma, float] = dict.fromkeys(Prisma, 0.0)
+        totals_100: dict[Prisma, float] = dict.fromkeys(Prisma, 0.0)
 
         for resp_id in response_ids:
-            answers = await self.prismas_service.repository.get_answers_with_dimensions(
-                resp_id
+            res_prisma = await self.prismas_service.calculate_for_form_response(
+                resp_id, user=user
             )
-            if not answers:
-                continue
-            data = self.prismas_service.compute_prisms_data(
-                form_response_id=resp_id,
-                form_id=form.id,
-                vinculo_id=form.organization_id,
-                answers=answers,
-            )
-            for prisma in Prisma:
-                val = data.scores.get(prisma.value, 0.0)
-                val_100 = data.scores_100.get(prisma.value, 0.0)
-                totals_scores[prisma] += val
-                totals_scores_100[prisma] += val_100
+            for p in Prisma:
+                totals[p] += res_prisma.scores.get(p.value, 0.0)
+                totals_100[p] += res_prisma.scores_100.get(p.value, 0.0)
 
-        avg_scores: dict[Prisma, float] = {
-            p: round(totals_scores[p] / concluidos, 2) for p in Prisma
-        }
-        avg_scores_100: dict[Prisma, float] = {
-            p: round(totals_scores_100[p] / concluidos, 1) for p in Prisma
-        }
+        avg_scores = {p: round(totals[p] / concluidos, 2) for p in Prisma}
+        avg_scores_100 = {p: round(totals_100[p] / concluidos, 1) for p in Prisma}
 
         # Eleição dos prismas para os 3 cards
         destaque_prisma = max(avg_scores_100, key=lambda p: avg_scores_100[p])

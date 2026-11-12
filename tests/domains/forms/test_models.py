@@ -17,6 +17,9 @@ class TestForms:
             "name": False,
             "organization_id": False,
             "status": False,
+            "opens_at": True,
+            "closes_at": True,
+            "link_id": True,
             "created_at": False,
         }
 
@@ -46,9 +49,20 @@ class TestForms:
         """A CREED-47 deixou esta FK para quando `organizations` existisse (D1)."""
         fks = {fk.parent.name: fk.target_fullname for fk in Form.__table__.foreign_keys}
 
-        assert fks == {"organization_id": "organizations.id"}
+        assert fks == {
+            "organization_id": "organizations.id",
+            "link_id": "links.id",
+        }
 
     def test_fk_de_organizacao_tem_o_nome_que_a_migration_usa(self) -> None:
         fk = next(iter(Form.__table__.c.organization_id.foreign_keys))
 
         assert fk.name == "fk_form_organization_id_organizations"
+
+    def test_fk_de_vinculo_tem_o_nome_que_a_migration_usa(self) -> None:
+        fk = next(iter(Form.__table__.c.link_id.foreign_keys))
+
+        assert fk.name == "fk_form_link_id_links"
+
+    def test_link_id_has_index(self) -> None:
+        assert Form.__table__.c.link_id.index is True

@@ -1,4 +1,8 @@
-"""Wiring de injeção de dependência do domínio dashboards."""
+"""Wiring de injeção de dependência do domínio dashboards.
+
+Usa o sistema Depends nativo do FastAPI para montar a cadeia
+repository -> service, mantendo o router livre de construção de objetos.
+"""
 
 from typing import Annotated
 

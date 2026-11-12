@@ -33,5 +33,21 @@ class ConflictError(DomainError):
     """Conflito de estado (ex: duplicidade). Traduzido para 409 no router."""
 
 
+class PeriodClosedError(DomainError):
+    """O questionário não aceita respostas agora. Traduzido para 423 no router.
+
+    Status próprio porque o front só enxerga o status e o `detail`, e 403 e 409 já
+    têm outro significado nas rotas de resposta.
+    """
+
+
 class AuthenticationError(DomainError):
     """Login ou renovação de sessão falhou. Traduzido para 401 no router."""
+
+
+class ServiceUnavailableError(DomainError):
+    """Um serviço de que a operação depende não respondeu. Traduzido para 503 no router.
+
+    Ex.: o Keycloak ou o SMTP fora do ar no cadastro de acesso e no login. Não é
+    erro de quem pediu: a mesma chamada pode dar certo daqui a pouco.
+    """

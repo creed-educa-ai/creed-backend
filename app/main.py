@@ -13,10 +13,16 @@ from app import models  # noqa: F401  (registra todas as tabelas; ver app/models
 from app.core.config import settings
 from app.domains.authentication.router import router as authentication_router
 from app.domains.dashboards.router import router as dashboards_router
+from app.domains.demographics.router import router as demographics_router
 from app.domains.department.router import router as department_router
 from app.domains.forms.router import router as forms_router
+from app.domains.forms.router_periods import router as periods_router
 from app.domains.links.router import router as links_router
+from app.domains.links.router_members import router as link_members_router
 from app.domains.organizacoes.router import router as organizacoes_router
+from app.domains.organizacoes.router_organizations import (
+    router as organizations_router,
+)
 from app.domains.participants.router import router as participants_router
 from app.domains.prismas.router import router as prismas_router
 from app.domains.prognosticos.router import router as prognosticos_router
@@ -24,7 +30,9 @@ from app.domains.questions.router import router as questions_router
 from app.domains.questions.router_options import router as question_options_router
 from app.domains.relatorios.router import router as relatorios_router
 from app.domains.responses.router import router as respostas_router
+from app.domains.responses.router_current import router as current_form_router
 from app.domains.users.router import router as user_router
+from app.domains.users.router_members import router as members_router
 from app.shared.schemas import HealthResponse
 
 API_DESCRIPTION = """
@@ -47,7 +55,11 @@ OPENAPI_TAGS = [
     },
     {
         "name": "users",
-        "description": "Criação e remoção dos usuários da plataforma.",
+        "description": (
+            "Criação e remoção dos usuários da plataforma, e o convite de membros "
+            "de uma organização, que cria o acesso e manda o e-mail de primeiro "
+            "acesso."
+        ),
     },
     {
         "name": "form-responses",
@@ -56,6 +68,10 @@ OPENAPI_TAGS = [
     {
         "name": "links",
         "description": "Criação do vínculo entre um participante e uma organização.",
+    },
+    {
+        "name": "members",
+        "description": "Membros de uma organização e o setor de cada um.",
     },
     {
         "name": "participants",
@@ -76,6 +92,18 @@ OPENAPI_TAGS = [
     {
         "name": "department",
         "description": "Cadastro e consulta dos setores.",
+    },
+    {
+        "name": "demographics",
+        "description": "Leitura e gravação do perfil demográfico da própria pessoa.",
+    },
+    {
+        "name": "prismas",
+        "description": "Cálculo e consulta das pontuações dos prismas da Matriz CREED.",
+    },
+    {
+        "name": "dashboards",
+        "description": "Resumo executivo e indicadores consolidados para a organização.",
     },
 ]
 
@@ -136,17 +164,24 @@ async def health() -> HealthResponse:
 for _router in (
     authentication_router,
     respostas_router,
+    # Antes do `forms_router`: senão `/forms/{form_id}` captura `/forms/current`.
+    current_form_router,
     organizacoes_router,
+    organizations_router,
     prismas_router,
     dashboards_router,
+    demographics_router,
     prognosticos_router,
     questions_router,
     question_options_router,
     relatorios_router,
     user_router,
+    members_router,
     links_router,
+    link_members_router,
     participants_router,
     forms_router,
+    periods_router,
     department_router,
 ):
     app.include_router(_router, prefix=settings.API_V1_PREFIX)

@@ -15,7 +15,9 @@ from app.domains.forms.models import Form
 from app.domains.organizacoes.models import Organization
 from app.domains.questions.models import Question, QuestionSection, QuestionType
 from scripts.seed_local import (
+    DEMO_CLOSES_AT,
     DEMO_FORM_ID,
+    DEMO_OPENS_AT,
     EMAIL,
     LINK_ROLE,
     ORGANIZATION_DOCUMENT_ID,
@@ -45,6 +47,16 @@ class TestUsuarioDeTeste:
         assert usuario["enabled"] is True
         assert usuario["requiredActions"] == []
         assert usuario["credentials"][0]["temporary"] is False
+
+    def test_senha_passa_na_politica_do_realm(self) -> None:
+        """O `length(8)` do realm (P-004 de 07/09) vale também para a Admin API.
+
+        Com senha mais curta, ela recusa criar o usuário, e o seed para antes de
+        gravar qualquer coisa no banco: ninguém entra no ambiente local.
+        """
+        senha = _usuario_de_teste()["credentials"][0]["value"]
+
+        assert len(senha) >= 8
 
     def test_papel_do_realm_e_um_da_premissa_p006(self) -> None:
         """O papel dado no realm é o do vínculo, e precisa existir no realm."""
@@ -253,3 +265,32 @@ class TestOrganizacaoDeDev:
         assert await semear_organizacao(documents, organizations)
         assert len(documents.itens) == 1
         assert len(organizations.itens) == 1
+
+
+class TestPeriodoDoFormularioDeDemonstracao:
+    async def test_nasce_com_o_periodo_aberto(
+        self, forms: FakeFormRepository, questions: FakeQuestionRepository
+    ) -> None:
+        await semear(forms, questions)
+
+        assert forms.itens[0].opens_at == DEMO_OPENS_AT
+        assert forms.itens[0].closes_at == DEMO_CLOSES_AT
+
+    async def test_formulario_antigo_sem_periodo_recebe_o_periodo(
+        self, forms: FakeFormRepository, questions: FakeQuestionRepository
+    ) -> None:
+        await semear(forms, questions)
+        forms.itens[0].opens_at = None
+        forms.itens[0].closes_at = None
+
+        assert await semear(forms, questions) is True
+        assert forms.itens[0].opens_at == DEMO_OPENS_AT
+
+    async def test_periodo_existente_nao_e_alterado(
+        self, forms: FakeFormRepository, questions: FakeQuestionRepository
+    ) -> None:
+        await semear(forms, questions)
+        forms.itens[0].closes_at = DEMO_OPENS_AT
+
+        assert await semear(forms, questions) is False
+        assert forms.itens[0].closes_at == DEMO_OPENS_AT

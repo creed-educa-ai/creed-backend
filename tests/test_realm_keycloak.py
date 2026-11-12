@@ -65,6 +65,74 @@ def test_segredo_e_ssl_chegam_pelo_ambiente(client: dict[str, Any]) -> None:
     assert REALM["sslRequired"] == "${CREED_REALM_SSL_REQUIRED}"
 
 
+def test_smtp_chega_pelo_ambiente() -> None:
+    """ADR-0006, item 3: a forma do SMTP mora aqui, os valores vêm do ambiente.
+
+    O local manda para o Mailpit, e a produção pelo Gmail do projeto. A senha de
+    produção é a senha de app desse Gmail: escrita aqui, ela iria para o GitHub. Os
+    valores locais estão no `docker-compose.yml`.
+
+    A sintaxe é `${VARIAVEL}`, sem `env.`: com `${env.X}` o Keycloak importa o realm
+    sem trocar o valor, e o erro só aparece na hora do envio.
+    """
+    smtp = REALM["smtpServer"]
+
+    # S105: é o nome da variável, não uma senha — justamente o que o teste garante.
+    assert smtp["password"] == "${SMTP_PASSWORD}"  # noqa: S105
+    assert smtp["user"] == "${SMTP_USER}"
+    assert smtp["host"] == "${SMTP_HOST}"
+    assert smtp["port"] == "${SMTP_PORT}"
+    assert smtp["from"] == "${SMTP_FROM}"
+    assert smtp["auth"] == "${SMTP_AUTH}"
+
+
+def test_smtp_liga_o_tls_pelo_ambiente() -> None:
+    """O Gmail de produção só aceita a porta 587 com STARTTLS (adendo do ADR-0006).
+
+    O bloco do ADR-0006 não tinha `starttls` nem `ssl`, e chave que falta fica com o
+    padrão do Keycloak, desligado: o envio de produção sairia sem TLS e o Google
+    recusaria. O Mailpit local não tem TLS, então os dois chegam pelo ambiente.
+    """
+    smtp = REALM["smtpServer"]
+
+    assert smtp["starttls"] == "${SMTP_STARTTLS}"
+    assert smtp["ssl"] == "${SMTP_SSL}"
+
+
+def test_paginas_e_email_em_portugues_da_premissa_p050() -> None:
+    """P-050: o texto padrão do Keycloak em português, com inglês e espanhol.
+
+    Sem `internationalizationEnabled`, o Keycloak ignora a lista e fala inglês. O
+    `defaultLocale` vale quando nem a pessoa nem o navegador pedem outro idioma, que
+    é o caso do e-mail: ele sai de uma chamada do back à Admin API.
+    """
+    assert REALM["internationalizationEnabled"] is True
+    assert REALM["defaultLocale"] == "pt-BR"
+    assert set(REALM["supportedLocales"]) == {"pt-BR", "en", "es"}
+
+
+def test_senha_tem_no_minimo_8_caracteres_da_premissa_p004() -> None:
+    """P-004 de 07/09: no mínimo 8 caracteres, sem regra de complexidade.
+
+    A regra mora no realm porque quem recebe a senha nova é a página do Keycloak,
+    aberta pelo link do convite, e não o front. Regra a mais aqui é premissa nova.
+    """
+    assert REALM["passwordPolicy"] == "length(8)"
+
+
+def test_redirect_do_client_chega_pelo_ambiente(client: dict[str, Any]) -> None:
+    """P-051: o link "voltar" da página do convite leva ao front.
+
+    O front muda por ambiente: `http://localhost:5173` no local, o Amplify em
+    produção. Sem o endereço nesta lista, o Keycloak recusa o `redirect_uri` do
+    convite (`Invalid redirect uri`), e pela D7 o convite inteiro falha.
+
+    A lista não liga o login pelo navegador: o fluxo continua desligado (decisão D1).
+    """
+    assert client["redirectUris"] == ["${CREED_FRONTEND_URL}/*"]
+    assert client["standardFlowEnabled"] is False
+
+
 def test_papeis_do_realm_sao_os_da_premissa_p006() -> None:
     nomes = {papel["name"] for papel in REALM["roles"]["realm"]}
 
@@ -116,6 +184,23 @@ def test_perfil_nao_exige_nome_para_provisionar() -> None:
 
     assert "firstName" not in obrigatorios
     assert "lastName" not in obrigatorios
+
+
+def test_email_so_o_admin_edita() -> None:
+    """Decisão D12 da CREED-23.8: a pessoa não troca o próprio e-mail.
+
+    O link do convite leva a pessoa às páginas do Keycloak, e o console de conta
+    passa pelo Caddy. Lá ela poderia trocar o e-mail sem verificação e perderia o
+    acesso, porque o login e a guarda procuram o usuário pelo e-mail.
+    """
+    perfil = json.loads(
+        REALM["components"]["org.keycloak.userprofile.UserProfileProvider"][0]["config"][
+            "kc.user.profile.config"
+        ][0]
+    )
+    email = next(a for a in perfil["attributes"] if a["name"] == "email")
+
+    assert email["permissions"]["edit"] == ["admin"]
 
 
 def test_service_account_tem_o_minimo_verificado() -> None:

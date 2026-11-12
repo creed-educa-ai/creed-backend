@@ -66,12 +66,22 @@ O Keycloak sobe pelo mesmo `docker-compose`, com o realm **importado de arquivo*
 clicado é dev e produção divergindo sem ninguém perceber.
 
 ```bash
-docker compose up -d db keycloak
+docker compose up -d db keycloak mailpit
 ```
 
 > Quem já tinha o volume `pgdata` antes desta mudança precisa de um
 > `docker compose down -v` uma vez: o schema `keycloak` é criado pelo script de
 > init do Postgres, que só roda com o volume vazio.
+
+O `mailpit` é o e-mail do ambiente local (ADR-0006). Quem manda e-mail é o Keycloak,
+nunca o back, e no local ele manda para o Mailpit, que não entrega a ninguém: as
+mensagens aparecem em http://localhost:8025. Sem o `mailpit` de pé, todo envio falha.
+
+> ⚠️ **O realm só é importado quando nasce.** Mudou o `realm-creed.json`, inclusive
+> num `git pull`? O Keycloak não relê o arquivo: rode `docker compose down -v`, suba de
+> novo e rode `alembic upgrade head` e o seed. O `down -v` **apaga também o banco
+> local**, porque o realm mora no schema `keycloak` do mesmo Postgres, e os workflows
+> do N8N local.
 
 O usuário de teste **não** vem do realm: o arquivo é o mesmo que a produção importa,
 e lá não pode existir admin com senha conhecida. Quem o cria — no Keycloak e no
@@ -89,13 +99,17 @@ que na tela vira "e-mail ou senha inválidos". Por isso o seed faz os dois lados
 Conferir que o login funciona (depois do seed):
 
 ```bash
-curl -s -X POST http://localhost:8080/realms/creed/protocol/openid-connect/token -d grant_type=password -d client_id=creed-backend -d client_secret=creed-local-secret -d username=dev@creed.example.com -d password=dev
+curl -s -X POST http://localhost:8080/realms/creed/protocol/openid-connect/token -d grant_type=password -d client_id=creed-backend -d client_secret=creed-local-secret -d username=dev@creed.example.com -d password=dev-creed
 ```
 
 | Onde | Valor |
 |---|---|
 | Console do Keycloak | http://localhost:8080 — `admin` / `admin` |
-| Usuário de teste (criado pelo seed) | `dev@creed.example.com` / `dev`, papel `admin` |
+| Usuário de teste (criado pelo seed) | `dev@creed.example.com` / `dev-creed`, papel `admin` |
+| E-mails do Keycloak (Mailpit) | http://localhost:8025 |
+
+A senha tem 8 caracteres ou mais porque o realm recusa senha mais curta
+(`passwordPolicy`), inclusive na criação do usuário pelo seed.
 
 Rode o seed de novo depois de todo `docker compose down -v`: ele recria o usuário no
 realm e reata a tabela `user` ao `sub` novo, em vez de estourar na constraint única.
@@ -112,6 +126,10 @@ JSON, ou perca a alteração no próximo `down -v` — e é assim de propósito.
 > público e a produção importa este mesmo realm, então os dois são placeholders
 > (`${CREED_BACKEND_CLIENT_SECRET}` e `${CREED_REALM_SSL_REQUIRED}`) que o Keycloak
 > troca pelo ambiente ao importar — os valores locais estão no `docker-compose.yml`.
+> O mesmo vale para o SMTP (`${SMTP_HOST}`, `${SMTP_PASSWORD}` e as outras `SMTP_*`) e
+> para o endereço do front no redirect do client (`${CREED_FRONTEND_URL}`). Escreva
+> `${VARIAVEL}`, **sem** o prefixo `env.`: com `${env.X}` o Keycloak não troca o valor,
+> e o erro só aparece na hora do envio (ADR-0006).
 > Exportou o realm pela UI? O export volta com o segredo em texto puro: recoloque os
 > placeholders antes de commitar (o `test_realm_keycloak.py` acusa se esquecer).
 
@@ -119,6 +137,49 @@ JSON, ou perca a alteração no próximo `down -v` — e é assim de propósito.
 > papel, não o id: quem recria o ambiente ganha um `sub` novo. Nenhum seed pode gravar
 > `User.keycloak_id` com o `sub` do `dev@creed.example.com` lido uma vez — o seed tem que
 > perguntar ao Keycloak a cada execução.
+
+## Primeiro admin de um ambiente novo
+
+Um ambiente novo não tem usuário nenhum, e em produção ninguém pode nascer com senha
+conhecida (P-052). O primeiro admin nasce por **convite**: o script cria o acesso sem
+senha, e a pessoa define a senha pelo link do e-mail. Ele roda em qualquer ambiente.
+
+```bash
+python -m scripts.convidar_primeiro_admin --email <e-mail> --nome "<nome>"
+```
+
+Na EC2, por quem tem acesso a ela, no diretório do compose de produção (é onde está o
+link para o `/opt/creed/.env`). O `--no-deps` é o mesmo do `ec2/deploy.sh`: o comando
+nunca sobe outro serviço do compose, nem se o `back` passar a depender de algum.
+
+```bash
+cd /opt/creed/creed-infrastructure/ec2
+docker compose run --rm --no-deps back python -m scripts.convidar_primeiro_admin --email <e-mail> --nome "<nome>"
+```
+
+> ⚠️ **Só depois de duas coisas:** o release que leva o script à imagem e a
+> consolidação das migrations (CREED-57). O script precisa da tabela `organizations`,
+> que hoje nenhuma revision cria, nem num banco limpo nem em produção. Sem ela, o
+> comando para com traceback do banco, sem gravar nada.
+
+O que ele faz, e pode rodar de novo sem duplicar nada:
+
+1. garante a organização da própria CREED e o documento dela, com ids fixos (P-048);
+2. se o e-mail já tem acesso ativo, **só reenvia o convite**, sem mudar papel nem
+   organização (P-060). Se o e-mail é, por exemplo, de uma gestora, o script sai com
+   sucesso, reenvia o convite e **ela não vira admin**: a mensagem diz o papel dela;
+3. senão, cria participante, vínculo `admin` na organização da CREED e o acesso, e manda
+   o convite. É o mesmo convite da rota de membros, tudo ou nada: se o e-mail não sai,
+   o banco volta e o usuário criado no Keycloak é apagado.
+
+Duas falhas escapam desse tudo ou nada: o commit que falha depois do e-mail enviado e o
+Keycloak que cai entre criar o usuário e apagá-lo (fica só no log). Nas duas, a próxima
+execução dá "Já existe acesso com o e-mail …", e a correção é apagar o usuário no
+console do Keycloak, pelo túnel SSH (README do `creed-infrastructure/ec2`, "Console de
+admin do Keycloak").
+
+No local, o convite aparece no Mailpit (http://localhost:8025). Em produção ele sai do
+Gmail do projeto, uma conta nova: **avise a pessoa para olhar também o spam**.
 
 ## Qualidade
 

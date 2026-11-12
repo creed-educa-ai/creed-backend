@@ -56,7 +56,9 @@ jobs:
         run: ruff format --check .
 
       - name: Mypy (tipos, strict)
-        run: mypy app
+        # `scripts/` junto: o convidar_primeiro_admin.py vai na imagem, e um
+        # construtor velho nele passou com o CI verde (review da #53).
+        run: mypy app scripts
 
       - name: Alembic — checar heads únicas
         run: |

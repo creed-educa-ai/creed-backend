@@ -32,6 +32,12 @@ LEITURA_ENTRE_DOMINIOS: dict[str, str] = {
         "agrega form_responses, answers, organizations e links; ver docstring do"
         " repository"
     ),
+    "links": (
+        "le o membro (vinculo + nome do participante + e-mail do login + tipo do "
+        "setor) numa consulta so, e para a lista de membros tambem os periodos (form) "
+        "e as respostas enviadas (form_responses); grava so em links. Ver docstring "
+        "do repository e o adendo das CREED-6910/697 ao ADR-0004."
+    ),
     "prismas": (
         "le answers, questions e options por join para calculo dos prismas; ver"
         " docstring do repository"
@@ -44,6 +50,10 @@ LEITURA_ENTRE_DOMINIOS: dict[str, str] = {
 # reexportar é o mesmo desvio de `router.py` importar de `models.py` direto,
 # só que escondido atrás de schemas.py. Formato: nome do domínio -> motivo.
 REEXPORT_DE_TIPO_PERMITIDO: dict[str, str] = {
+    "links": (
+        "LinkType é tipo de valor (Enum), não ORM. schemas.py o reexporta para o "
+        "filtro ?type= de router_members.py usar, sem duplicar os valores."
+    ),
     "questions": (
         "QuestionSection, QuestionType e Prisma são tipos de valor (Enum), não ORM. "
         "schemas.py os reexporta para o filtro ?section= de router.py usar, "
@@ -55,23 +65,55 @@ REEXPORT_DE_TIPO_PERMITIDO: dict[str, str] = {
 COMPOE_COM_SERVICE_DE: dict[str, str] = {
     "authentication": "le o usuario pelo UserService",
     "dashboards": "consulta cálculos pelo PrismaService",
+    "demographics": "le o participante do vinculo autenticado pelo LinkService",
     "department": "confere a organizacao pelo OrganizationService",
     "forms": "confere a organizacao pelo OrganizationService",
     "links": (
         "confere participante, organizacao e setor pelo ParticipantService, "
-        "OrganizationService e DepartmentService"
+        "OrganizationService e DepartmentService; escolhe o periodo do membro com "
+        "pick_period e period_status do forms.service; a exclusao de membro "
+        "(router_members.py) delega ao MemberRemovalService de users.dependencies"
     ),
-    "organizacoes": "consulta documento pelo DocumentService",
+    "organizacoes": (
+        "cria e le documentos pelo DocumentService; a exclusao e a aprovacao de "
+        "empresa (router_organizations.py) delegam ao OrganizationRemovalService e "
+        "ao OrganizationApprovalService de users.dependencies"
+    ),
     "participants": "consulta documento pelo DocumentService",
     "questions": "confere o formulario pelo FormService",
     "responses": (
         "confere formulario, pergunta e alternativa pelo FormService, "
         "QuestionService e QuestionOptionService"
     ),
-    "users": "le o papel e a organizacao do vinculo pelo LinkService",
+    "users": (
+        "le o papel e a organizacao do vinculo pelo LinkService; no convite de "
+        "membro, cria participante e vinculo pelo ParticipantService e pelo "
+        "LinkService e confere a organizacao pelo OrganizationService; a "
+        "exclusao de membro "
+        "(M-3, MemberRemovalService) apaga pelo service de cada dono: forms, "
+        "questions, responses, insights, dashboards, links, demographics e "
+        "participants; a exclusao de empresa (E-6, OrganizationRemovalService) "
+        "apaga cada membro pelo MemberRemovalService e o resto pelo service de "
+        "cada dono, inclusive organizacoes, department e documents; a aprovacao "
+        "de empresa (E-3, OrganizationApprovalService) ativa a pendente e junta o "
+        "documento pelo OrganizationService e convida o responsavel pelo "
+        "MemberService"
+    ),
 }
 
 SUBMODULOS_DE_COMPOSICAO = {"service", "dependencies"}
+
+# Exceção declarada: schemas.py pode usar o schema de saída de outro domínio numa
+# resposta que junta os dois. Formato: (domínio, domínio importado) -> motivo.
+SCHEMA_DE_SAIDA_DE_OUTRO_DOMINIO: dict[tuple[str, str], str] = {
+    ("responses", "forms"): (
+        "GET /forms/current devolve o FormRead junto da resposta, sem duplicar o schema"
+    ),
+    ("links", "forms"): (
+        "o período de cada membro (GET .../members) usa o PeriodStatus de forms, "
+        "sem duplicar os valores num segundo enum"
+    ),
+}
 
 IMPORT_DE_DOMINIO = re.compile(r"from app\.domains\.(\w+)\.(\w+)")
 
@@ -112,13 +154,16 @@ def test_service_nao_conhece_http_nem_orm(dominio: Path) -> None:
 
 @pytest.mark.parametrize("dominio", DOMINIOS, ids=NOMES)
 def test_router_nao_conhece_models_nem_orm(dominio: Path) -> None:
+    # Todo `router*.py`, não só `router.py`: domínio pode ter um segundo router
+    # (`questions/router_options.py`, `links/router_members.py`).
     proibidos = [
-        linha
-        for linha in _imports(_codigo(dominio / "router.py"))
+        f"{arquivo.name}: {linha}"
+        for arquivo in sorted(dominio.glob("router*.py"))
+        for linha in _imports(_codigo(arquivo))
         if ".models import" in linha or "sqlalchemy" in linha
     ]
     assert not proibidos, (
-        f"{dominio.name}/router.py conhece a tabela: {proibidos}. "
+        f"{dominio.name} tem router que conhece a tabela: {proibidos}. "
         "O mapeamento model -> schema é `de_model()`, em schemas.py."
     )
 
@@ -174,7 +219,12 @@ def test_dominio_nao_importa_dominio(dominio: Path) -> None:
                     dominio.name in COMPOE_COM_SERVICE_DE
                     and submodulo in SUBMODULOS_DE_COMPOSICAO
                 )
-                if not (leitura_por_join or composicao_por_service):
+                schema_de_saida = (
+                    (dominio.name, alvo) in SCHEMA_DE_SAIDA_DE_OUTRO_DOMINIO
+                    and arquivo.name == "schemas.py"
+                    and submodulo == "schemas"
+                )
+                if not (leitura_por_join or composicao_por_service or schema_de_saida):
                     invasores.append(f"{arquivo.name}: {linha.strip()}")
 
     assert not invasores, (

@@ -158,6 +158,35 @@ class TestCadastrarComDocumento:
             )
 
 
+class TestCadastrarMembro:
+    """O participante do convite de membro (CREED-23.8): só o nome."""
+
+    async def test_grava_o_nome_ativo_e_sem_documento(self) -> None:
+        repository = FakeParticipantRepository()
+
+        criado = await servico(repository).create_member_participant("Pessoa Exemplo")
+
+        assert criado.name == "Pessoa Exemplo"
+        assert criado.status is RecordStatus.ACTIVE
+        assert criado.document_id is None
+        assert repository.itens == [criado]
+
+
+class TestDocumentoEmUso:
+    """O que a exclusão de empresa (E-6) pergunta antes de apagar o documento."""
+
+    async def test_documento_de_um_participante_esta_em_uso(self) -> None:
+        document_id = uuid.uuid4()
+        repository = FakeParticipantRepository([um_participant(document_id=document_id)])
+
+        assert await servico(repository).document_in_use(document_id)
+
+    async def test_documento_sem_participante_esta_livre(self) -> None:
+        repository = FakeParticipantRepository([um_participant(document_id=uuid.uuid4())])
+
+        assert not await servico(repository).document_in_use(uuid.uuid4())
+
+
 class TestConsultarParticipante:
     async def test_devolve_o_participante_pelo_id(self) -> None:
         existente = um_participant()
