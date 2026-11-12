@@ -1,0 +1,180 @@
+{
+  "name": "CREED - Geracao de insight (beta local)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "creed/insights/beta",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -700,
+        0
+      ],
+      "id": "6d661cf4-a761-4d60-9fcb-e74821569ed4",
+      "name": "Receber solicitacao",
+      "webhookId": "c4fc8754-a6ca-4a06-b684-42e9f4ace4ba"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\nconst payload = input.body ?? input;\nconst startedAtMs = Date.now();\nconst errors = [];\nconst knownPrisms = new Set([\n  'plasticidade_humana',\n  'empreendedorismo',\n  'multiculturalismo',\n  'neuroinovacao',\n  'tomada_decisao',\n]);\n\nif (payload.contract_version !== 'beta-1') {\n  errors.push('contract_version deve ser beta-1');\n}\nif (typeof payload.request_id !== 'string' || payload.request_id.trim() === '') {\n  errors.push('request_id e obrigatorio');\n}\nif (typeof payload.form_response_id !== 'string' || payload.form_response_id.trim() === '') {\n  errors.push('form_response_id e obrigatorio');\n}\nif (!Array.isArray(payload.answers) || payload.answers.length === 0) {\n  errors.push('answers deve ser uma lista nao vazia');\n}\n\nconst answers = Array.isArray(payload.answers) ? payload.answers : [];\nfor (const [index, answer] of answers.entries()) {\n  if (typeof answer.question_id !== 'string' || answer.question_id.trim() === '') {\n    errors.push(`answers[${index}].question_id e obrigatorio`);\n  }\n  if (!knownPrisms.has(answer.prisma)) {\n    errors.push(`answers[${index}].prisma e invalido`);\n  }\n  const hasScore = typeof answer.score === 'number' && Number.isFinite(answer.score);\n  const hasText = typeof answer.answer === 'string' && answer.answer.trim() !== '';\n  if (!hasScore && !hasText) {\n    errors.push(`answers[${index}] precisa de score numerico ou answer textual`);\n  }\n  if (hasScore && (answer.score < 0 || answer.score > 5)) {\n    errors.push(`answers[${index}].score deve estar entre 0 e 5`);\n  }\n}\n\nif (errors.length > 0) {\n  return [{\n    json: {\n      valid: false,\n      status: 'invalid_payload',\n      request_id: payload.request_id ?? null,\n      contract_version: 'beta-1',\n      errors,\n      metrics: {\n        received_at: new Date(startedAtMs).toISOString(),\n        n8n_processing_ms: Date.now() - startedAtMs,\n      },\n    },\n  }];\n}\n\nreturn [{\n  json: {\n    valid: true,\n    request: {\n      contract_version: payload.contract_version,\n      request_id: payload.request_id,\n      form_response_id: payload.form_response_id,\n      source: payload.source ?? 'unspecified',\n      answers,\n    },\n    metrics: {\n      received_at: new Date(startedAtMs).toISOString(),\n      started_at_ms: startedAtMs,\n    },\n  },\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -460,
+        0
+      ],
+      "id": "e2900de1-d4fa-43af-a29e-fdc71a1d20bb",
+      "name": "Validar e normalizar entrada"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "3634a7da-6db1-48a6-92a1-1243711e44ac",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -220,
+        0
+      ],
+      "id": "9bbaeb8c-c48f-4928-88c9-a19849c2ca52",
+      "name": "Payload valido?"
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst request = data.request;\nconst labels = {\n  plasticidade_humana: 'Plasticidade humana',\n  empreendedorismo: 'Empreendedorismo',\n  multiculturalismo: 'Multiculturalismo',\n  neuroinovacao: 'Neuroinovacao',\n  tomada_decisao: 'Tomada de decisao',\n};\nconst grouped = {};\n\nfor (const answer of request.answers) {\n  grouped[answer.prisma] ??= { scores: [], textualAnswers: 0 };\n  if (typeof answer.score === 'number') {\n    grouped[answer.prisma].scores.push(answer.score);\n  }\n  if (typeof answer.answer === 'string' && answer.answer.trim() !== '') {\n    grouped[answer.prisma].textualAnswers += 1;\n  }\n}\n\nconst prismScores = Object.entries(grouped).map(([prisma, values]) => {\n  const average = values.scores.length === 0\n    ? null\n    : Number((values.scores.reduce((total, score) => total + score, 0) / values.scores.length).toFixed(2));\n  return {\n    prisma,\n    label: labels[prisma],\n    average_score: average,\n    numeric_answers: values.scores.length,\n    textual_answers: values.textualAnswers,\n  };\n});\n\nconst ranked = prismScores\n  .filter((item) => item.average_score !== null)\n  .sort((a, b) => b.average_score - a.average_score);\nconst strongest = ranked[0] ?? null;\nconst textualCount = prismScores.reduce((total, item) => total + item.textual_answers, 0);\nconst content = strongest\n  ? `Na amostra beta, ${strongest.label} apresentou a maior media (${strongest.average_score}/5). Foram processadas ${request.answers.length} respostas, incluindo ${textualCount} resposta(s) textual(is).`\n  : `A amostra beta processou ${request.answers.length} respostas textuais. Ainda nao ha notas numericas para comparar os prismas.`;\nconst finishedAtMs = Date.now();\n\nreturn [{\n  json: {\n    status: 'completed',\n    contract_version: request.contract_version,\n    request_id: request.request_id,\n    form_response_id: request.form_response_id,\n    source: request.source,\n    insight: {\n      content,\n      prism_scores: prismScores,\n      evidence_summary: {\n        answers_total: request.answers.length,\n        numeric_answers: prismScores.reduce((total, item) => total + item.numeric_answers, 0),\n        textual_answers: textualCount,\n      },\n      generator: 'deterministic-beta',\n    },\n    metrics: {\n      received_at: data.metrics.received_at,\n      finished_at: new Date(finishedAtMs).toISOString(),\n      n8n_processing_ms: finishedAtMs - data.metrics.started_at_ms,\n    },\n  },\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        20,
+        -100
+      ],
+      "id": "10d8ab2d-d340-4445-9948-8936d592d9b8",
+      "name": "Gerar insight beta"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        280,
+        -100
+      ],
+      "id": "dfad95e2-0365-4470-a596-02e50f8da1d0",
+      "name": "Responder sucesso"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 422
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        20,
+        120
+      ],
+      "id": "0073ff45-f1ec-428f-9fb7-9ae471d794b7",
+      "name": "Responder payload invalido"
+    }
+  ],
+  "connections": {
+    "Receber solicitacao": {
+      "main": [
+        [
+          {
+            "node": "Validar e normalizar entrada",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validar e normalizar entrada": {
+      "main": [
+        [
+          {
+            "node": "Payload valido?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Payload valido?": {
+      "main": [
+        [
+          {
+            "node": "Gerar insight beta",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Responder payload invalido",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gerar insight beta": {
+      "main": [
+        [
+          {
+            "node": "Responder sucesso",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "b726c2bc-0706-4032-89f2-749cfbd660a0",
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "id": "creed55InsightBeta",
+  "tags": []
+}
