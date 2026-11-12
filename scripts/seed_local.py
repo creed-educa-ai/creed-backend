@@ -37,11 +37,16 @@ from app.domains.organizacoes.models import Organization, OrganizationStatus
 from app.domains.organizacoes.repository import OrganizationRepository
 from app.domains.participants.models import Participant
 from app.domains.participants.repository import ParticipantRepository
-from app.domains.questions.models import Question, QuestionSection, QuestionType
-from app.domains.questions.repository import QuestionRepository
+from app.domains.questions.models import (
+    Question,
+    QuestionOption,
+    QuestionSection,
+    QuestionType,
+)
+from app.domains.questions.repository import QuestionOptionRepository, QuestionRepository
 from app.domains.users.models import User
 from app.domains.users.repository import UserRepository
-from app.shared.enums import LinkType, RecordStatus, Roles
+from app.shared.enums import Dimension, LinkType, RecordStatus, Roles
 
 EMAIL = "dev@creed.example.com"
 NAME = "Dev CREED"
@@ -97,6 +102,245 @@ DEMO_QUESTIONS = [
         QuestionSection.CLOSING,
         "[Demonstração] Pergunta de encerramento, opcional. Pode ficar em branco.",
         False,
+    ),
+]
+
+# Inventário CREED (CREED-61): as 47 afirmações Likert do formulário "Linguagem
+# melhorada", em PT, que é o idioma padrão (EN/ES vão para as tabelas de tradução).
+# Formulário próprio, separado do de demonstração, na mesma organização de dev.
+# Id fixo e perguntas reconhecidas por (formulário, posição), como no de demonstração.
+# `prisma` fica vazio: os prismas são médias das dimensões, não das perguntas.
+INVENTORY_FORM_ID = uuid.UUID("00000000-0000-0000-0000-000000000005")
+INVENTORY_FORM_NAME = "Inventário CREED"
+
+# As mesmas cinco alternativas em todas as perguntas, mas cada pergunta tem as
+# suas linhas: a resposta objetiva aponta para o `option_id` da pergunta.
+# (value, label); a posição é o índice na lista.
+LIKERT_OPTIONS = [
+    ("1", "Discordo totalmente"),
+    ("2", "Discordo"),
+    ("3", "Nem concordo nem discordo"),
+    ("4", "Concordo"),
+    ("5", "Concordo totalmente"),
+]
+
+# (dimensão, texto); a posição é o índice na lista (0 = item 12 do formulário).
+INVENTORY_QUESTIONS = [
+    # S2: itens 12 a 19 do formulário
+    (Dimension.S2, "Já fui fundador(a) ou sócio(a) de um negócio."),
+    (Dimension.S2, "Já atuei como intraempreendedor(a) dentro de uma organização."),
+    (
+        Dimension.S2,
+        "Participei do desenvolvimento de novos produtos, serviços ou negócios.",
+    ),
+    (
+        Dimension.S2,
+        (
+            "Atuei como mentor(a), avaliador(a) ou conselheiro(a) em iniciativas "
+            "empreendedoras."
+        ),
+    ),
+    (Dimension.S2, "Tenho conexões com ecossistemas de empreendedorismo e inovação."),
+    (
+        Dimension.S2,
+        (
+            "Sou incentivado(a) a identificar oportunidades a partir de problemas "
+            "sociais e culturais."
+        ),
+    ),
+    (
+        Dimension.S2,
+        (
+            "Tomo decisões com segurança mesmo em situações incertas e com recursos"
+            " limitados."
+        ),
+    ),
+    (
+        Dimension.S2,
+        "Persisto diante dos obstáculos e adapto minha abordagem ao longo do processo.",
+    ),
+    # S4: itens 20 a 25 do formulário
+    (
+        Dimension.S4,
+        "A diversidade cultural é valorizada nas práticas da organização em que atuo.",
+    ),
+    (
+        Dimension.S4,
+        "A organização integra conteúdos e perspetivas de diferentes culturas.",
+    ),
+    (
+        Dimension.S4,
+        (
+            "As práticas da organização em que atuo contribuem para a redução de "
+            "preconceitos."
+        ),
+    ),
+    (Dimension.S4, "Diferenças culturais são tratadas como fonte de aprendizagem."),
+    (
+        Dimension.S4,
+        "A organização em que atuo promove justiça social, equidade e inclusão.",
+    ),
+    (
+        Dimension.S4,
+        (
+            "Demonstro empatia e abertura ao interagir com pessoas de culturas e "
+            "contextos diferentes."
+        ),
+    ),
+    # S5A: itens 26 a 32 do formulário
+    (
+        Dimension.S5A,
+        (
+            "Compreendo metodologias ativas como Design Thinking, Lean Startup e "
+            "Effectuation."
+        ),
+    ),
+    (
+        Dimension.S5A,
+        "Vivencio e utilizo metodologias ativas na minha instituição ou organização.",
+    ),
+    (Dimension.S5A, "Utilizo tecnologias digitais para ensinar ou aprender."),
+    (Dimension.S5A, "As metodologias utilizadas são culturalmente acessíveis."),
+    (Dimension.S5A, "Jogos, simulações e desafios consideram a diversidade cultural."),
+    (Dimension.S5A, "Desenvolvo criatividade para propor soluções inovadoras."),
+    (Dimension.S5A, "Aprendo a transformar ideias em ações empreendedoras concretas."),
+    # S5B: itens 33 a 40 do formulário
+    (Dimension.S5B, "Prefiro aprender de forma autónoma e ao meu próprio ritmo."),
+    (
+        Dimension.S5B,
+        (
+            "Aprendo melhor em contextos colaborativos, com troca de experiências "
+            "entre pares."
+        ),
+    ),
+    (
+        Dimension.S5B,
+        (
+            "Integro critérios de sustentabilidade e impacto social nas "
+            "metodologias que aplico."
+        ),
+    ),
+    (
+        Dimension.S5B,
+        (
+            "Reconheço meus próprios padrões de aprendizagem e ajusto estratégias "
+            "para aprender com mais eficácia."
+        ),
+    ),
+    (
+        Dimension.S5B,
+        (
+            "Aprendo com os erros e utilizo o feedback como oportunidade de "
+            "reorganização e crescimento mental."
+        ),
+    ),
+    (
+        Dimension.S5B,
+        (
+            "Compreendo que a prática deliberada e a repetição fortalecem conexões "
+            "neurais e consolidam novos saberes."
+        ),
+    ),
+    (
+        Dimension.S5B,
+        (
+            "Desenvolvo aprendizagens significativas mesmo em contextos sem acesso "
+            "a tecnologia."
+        ),
+    ),
+    (
+        Dimension.S5B,
+        (
+            "Reconheço meu próprio perfil de aprendizagem — individual ou coletivo,"
+            " digital ou presencial — e uso esse autoconhecimento a meu favor."
+        ),
+    ),
+    # S6: itens 41 a 46 do formulário
+    (Dimension.S6, "Adapto minhas práticas às necessidades culturais de cada contexto."),
+    (
+        Dimension.S6,
+        "Reconheço como a cultura influencia os processos de inovação e criação.",
+    ),
+    (
+        Dimension.S6,
+        "Crio ambientes inclusivos onde perspectivas diversas são valorizadas.",
+    ),
+    (
+        Dimension.S6,
+        "Desenvolvo práticas que respeitam e celebram a diversidade cultural.",
+    ),
+    (
+        Dimension.S6,
+        "Promovo equidade no acesso a oportunidades de inovação e desenvolvimento.",
+    ),
+    (
+        Dimension.S6,
+        (
+            "Sinto-me seguro(a) para expressar perspectivas diferentes e "
+            "experimentar novas abordagens."
+        ),
+    ),
+    # S7: itens 47 a 52 do formulário
+    (
+        Dimension.S7,
+        (
+            "Possuo consciência profunda sobre minha própria identidade e bagagem "
+            "cultural."
+        ),
+    ),
+    (Dimension.S7, "Navego com eficácia entre diferentes sistemas de valores e crenças."),
+    (
+        Dimension.S7,
+        "Transformo tensões e conflitos culturais em oportunidades de cocriação.",
+    ),
+    (
+        Dimension.S7,
+        (
+            "Contribuo para a construção de culturas organizacionais mais "
+            "inovadoras e inclusivas."
+        ),
+    ),
+    (
+        Dimension.S7,
+        (
+            "Lidero com inteligência cultural em contextos de alta complexidade e "
+            "diversidade."
+        ),
+    ),
+    (
+        Dimension.S7,
+        (
+            "Identifico oportunidades de inovação a partir da diversidade de "
+            "contextos e perspectivas."
+        ),
+    ),
+    # S8: itens 53 a 58 do formulário
+    (
+        Dimension.S8,
+        (
+            "Oriento meus projetos e iniciativas para gerar impacto social positivo"
+            " e duradouro."
+        ),
+    ),
+    (Dimension.S8, "Considero implicações éticas na criação e aplicação de inovações."),
+    (
+        Dimension.S8,
+        "Desenvolvo soluções que endereçam desafios sistêmicos e estruturais.",
+    ),
+    (Dimension.S8, "Meço e comunico o impacto concreto das minhas contribuições."),
+    (
+        Dimension.S8,
+        (
+            "Construo legados que transcendem meu contexto e beneficiam comunidades"
+            " mais amplas."
+        ),
+    ),
+    (
+        Dimension.S8,
+        (
+            "Incorporo princípios de responsabilidade social e governança nas "
+            "minhas iniciativas de inovação."
+        ),
     ),
 ]
 
@@ -220,7 +464,17 @@ async def semear() -> None:
         criou_formulario = await _ensure_demo_form(
             FormRepository(session), QuestionRepository(session)
         )
-        if criou_participante or criou_organizacao or criou_formulario:
+        criou_inventario = await _ensure_inventory_form(
+            FormRepository(session),
+            QuestionRepository(session),
+            QuestionOptionRepository(session),
+        )
+        if (
+            criou_participante
+            or criou_organizacao
+            or criou_formulario
+            or criou_inventario
+        ):
             await session.commit()
 
         existente = await users.get_user_by_email(EMAIL)
@@ -356,6 +610,70 @@ async def _ensure_demo_form(forms: FormRepository, questions: QuestionRepository
 
     situacao = "criado" if criou else "já estava no banco"
     print(f"formulário de demonstração {DEMO_FORM_ID} {situacao}.")
+    return criou
+
+
+async def _ensure_inventory_form(
+    forms: FormRepository,
+    questions: QuestionRepository,
+    options: QuestionOptionRepository,
+) -> bool:
+    """Cria o formulário do inventário, as perguntas e as alternativas que faltam.
+
+    Idempotente: cada pergunta e cada alternativa só entra se a posição dela ainda
+    estiver vazia, então rodar de novo não duplica nada. Diz se criou.
+    """
+    criou = False
+
+    if await forms.get_by_id(INVENTORY_FORM_ID) is None:
+        await forms.create(
+            Form(
+                id=INVENTORY_FORM_ID,
+                name=INVENTORY_FORM_NAME,
+                organization_id=ORGANIZATION_ID,
+                status=FormStatus.DRAFT,
+                opens_at=DEMO_OPENS_AT,
+                closes_at=DEMO_CLOSES_AT,
+            )
+        )
+        criou = True
+
+    for order_index, (dimensao, text) in enumerate(INVENTORY_QUESTIONS):
+        question = await questions.get_by_form_and_order(INVENTORY_FORM_ID, order_index)
+        if question is None:
+            question = await questions.insert(
+                Question(
+                    form_id=INVENTORY_FORM_ID,
+                    text=text,
+                    order_index=order_index,
+                    type=QuestionType.OBJECTIVE,
+                    section=QuestionSection.ASSESSMENT,
+                    required=True,
+                    prisma=None,
+                    dimensao=dimensao,
+                )
+            )
+            if question is None:
+                # Só acontece se outra execução ocupou a posição ao mesmo tempo.
+                raise SeedError(f"posição {order_index} do inventário já ocupada.")
+            criou = True
+
+        for option_index, (value, label) in enumerate(LIKERT_OPTIONS):
+            existente = await options.get_by_question_and_order(question.id, option_index)
+            if existente is not None:
+                continue
+            await options.insert(
+                QuestionOption(
+                    question_id=question.id,
+                    label=label,
+                    value=value,
+                    order_index=option_index,
+                )
+            )
+            criou = True
+
+    situacao = "criado" if criou else "já estava no banco"
+    print(f"inventário {INVENTORY_FORM_ID} {situacao}.")
     return criou
 
 
