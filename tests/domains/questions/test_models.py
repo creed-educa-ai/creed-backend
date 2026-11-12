@@ -9,7 +9,14 @@ from typing import cast
 
 import sqlalchemy as sa
 
-from app.domains.questions.models import Question, QuestionSection, QuestionType
+from app.domains.questions.models import (
+    Question,
+    QuestionLang,
+    QuestionOptionTranslation,
+    QuestionSection,
+    QuestionTranslation,
+    QuestionType,
+)
 from app.shared.enums import Dimension, Prisma
 
 # `Question.__table__` é tipado como `FromClause` (a base genérica); o cast dá acesso
@@ -106,3 +113,32 @@ def test_restricao_unica_em_form_id_e_order_index() -> None:
         "form_id",
         "order_index",
     }
+
+
+def test_lang_de_traducao_so_tem_ingles_e_espanhol() -> None:
+    """O PT vive em `Question.text`/`QuestionOption.label`: não é tradução."""
+    assert [item.value for item in QuestionLang] == ["en", "es"]
+
+
+def test_restricao_unica_em_question_id_e_lang() -> None:
+    tabela = cast(sa.Table, QuestionTranslation.__table__)
+    restricoes = [
+        constraint
+        for constraint in tabela.constraints
+        if isinstance(constraint, sa.UniqueConstraint)
+        and constraint.name == "uq_question_translations_question_id_lang"
+    ]
+    assert len(restricoes) == 1
+    assert {coluna.name for coluna in restricoes[0].columns} == {"question_id", "lang"}
+
+
+def test_restricao_unica_em_option_id_e_lang() -> None:
+    tabela = cast(sa.Table, QuestionOptionTranslation.__table__)
+    restricoes = [
+        constraint
+        for constraint in tabela.constraints
+        if isinstance(constraint, sa.UniqueConstraint)
+        and constraint.name == "uq_question_option_translations_option_id_lang"
+    ]
+    assert len(restricoes) == 1
+    assert {coluna.name for coluna in restricoes[0].columns} == {"option_id", "lang"}
