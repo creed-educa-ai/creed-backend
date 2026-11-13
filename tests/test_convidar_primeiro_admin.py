@@ -474,13 +474,20 @@ class TestArgumentos:
             parse_invite(["--email", "admin@exemplo.com"])
 
 
-def test_ids_fixos_nao_colidem_com_os_do_seed() -> None:
-    """No ambiente local, a organização da CREED convive com a de dev do seed."""
+def test_seed_usa_a_mesma_organizacao_da_creed() -> None:
+    """No ambiente local, a admin do seed fica onde a de produção fica (P-048)."""
+    assert seed_local.CREED.id == CREED_ORGANIZATION_ID
+    assert seed_local.CREED.document_id == CREED_ORGANIZATION_DOCUMENT_ID
+
+
+def test_ids_fixos_nao_colidem_com_as_empresas_do_seed() -> None:
+    """No ambiente local, a organização da CREED convive com as empresas do seed."""
     seed_ids = {
-        seed_local.ORGANIZATION_ID,
-        seed_local.ORGANIZATION_DOCUMENT_ID,
-        seed_local.PARTICIPANT_ID,
-        seed_local.DEMO_FORM_ID,
+        seed_local.EMPRESA.id,
+        seed_local.EMPRESA.document_id,
+        seed_local.OUTRA_EMPRESA.id,
+        seed_local.OUTRA_EMPRESA.document_id,
+        *(pessoa.participant_id for pessoa in seed_local.PESSOAS),
     }
 
     assert CREED_ORGANIZATION_ID not in seed_ids

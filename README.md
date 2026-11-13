@@ -105,8 +105,25 @@ curl -s -X POST http://localhost:8080/realms/creed/protocol/openid-connect/token
 | Onde | Valor |
 |---|---|
 | Console do Keycloak | http://localhost:8080 — `admin` / `admin` |
-| Usuário de teste (criado pelo seed) | `dev@creed.example.com` / `dev-creed`, papel `admin` |
+| Admin de teste (criada pelo seed) | `dev@creed.example.com` / `dev-creed` — as outras pessoas estão logo abaixo |
 | E-mails do Keycloak (Mailpit) | http://localhost:8025 |
+
+O seed deixa o ambiente como o de produção: a admin na organização da CREED, junto
+com os mentorandos, e duas empresas de demonstração com os seus membros. **Nenhum
+período nasce do seed**: quem abre é a gestora (para a empresa toda) ou a admin (para
+um mentorando), pelo painel. Todas as pessoas entram com a senha `dev-creed`.
+
+| E-mail | Papel | Organização |
+|---|---|---|
+| `dev@creed.example.com` | `admin` | CREED.ai Educa |
+| `mentorando1@creed.example.com` · `mentorando2@creed.example.com` | `respondente` (vínculo `mentoria`) | CREED.ai Educa |
+| `gestora@creed.example.com` | `gestor` | [Demonstração] Organização de dev |
+| `funcionario@creed.example.com` | `respondente` | [Demonstração] Organização de dev |
+| `funcionario.outra@creed.example.com` | `respondente` | [Demonstração] Outra empresa |
+
+Banco semeado antes desta versão: o seed muda a admin para a organização da CREED e
+apaga o formulário de demonstração antigo (aberto até 2031), com as respostas de teste
+dele.
 
 A senha tem 8 caracteres ou mais porque o realm recusa senha mais curta
 (`passwordPolicy`), inclusive na criação do usuário pelo seed.
