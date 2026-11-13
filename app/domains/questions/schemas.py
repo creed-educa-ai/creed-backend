@@ -129,7 +129,7 @@ class QuestionCreate(QuestionBase):
 
 
 class QuestionResponse(QuestionBase):
-    """Representacão de saida.
+    """Representação de saída.
 
     text vem no idioma pedido em `de_model(lang=...)`, com fallback pro PT.
     """
