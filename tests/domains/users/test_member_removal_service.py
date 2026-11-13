@@ -43,7 +43,6 @@ class World:
     links: dict[uuid.UUID, Link] = field(default_factory=dict)
     logins: dict[uuid.UUID, User] = field(default_factory=dict)  # por link_id
     forms: dict[uuid.UUID, uuid.UUID | None] = field(default_factory=dict)  # -> link
-    questions: dict[uuid.UUID, uuid.UUID] = field(default_factory=dict)  # -> form
     # resposta -> (formulário, vínculo)
     responses: dict[uuid.UUID, tuple[uuid.UUID, uuid.UUID]] = field(default_factory=dict)
     insights: dict[uuid.UUID, uuid.UUID] = field(default_factory=dict)  # -> resposta
@@ -101,30 +100,12 @@ class FakeFormService:
     async def delete_individual_forms(self, form_ids: list[uuid.UUID]) -> None:
         w = self.world
         for form_id in form_ids:
-            w.refuse_if(form_id in w.questions.values(), "formulário (pergunta)")
             w.refuse_if(
                 any(form == form_id for form, _ in w.responses.values()),
                 "formulário (resposta)",
             )
             del w.forms[form_id]
         w.log.append("forms")
-
-
-class FakeQuestionService:
-    def __init__(self, world: World) -> None:
-        self.world = world
-
-    async def delete_for_forms(self, form_ids: list[uuid.UUID]) -> None:
-        w = self.world
-        for question_id, form_id in list(w.questions.items()):
-            if form_id in form_ids:
-                # As alternativas marcadas (`answer`) apontam para a pergunta.
-                w.refuse_if(
-                    any(form == form_id for form, _ in w.responses.values()),
-                    "pergunta (resposta)",
-                )
-                del w.questions[question_id]
-        w.log.append("questions")
 
 
 class FakeFormResponseService:
@@ -231,7 +212,6 @@ def service(world: World) -> MemberRemovalService:
         FakeUserService(world),  # type: ignore[arg-type]
         FakeLinkService(world),  # type: ignore[arg-type]
         FakeFormService(world),  # type: ignore[arg-type]
-        FakeQuestionService(world),  # type: ignore[arg-type]
         FakeFormResponseService(world),  # type: ignore[arg-type]
         FakeInsightService(world),  # type: ignore[arg-type]
         FakeDashboardService(world),  # type: ignore[arg-type]
@@ -287,11 +267,10 @@ def add_person(
 def add_answered_form(
     world: World, link: Link, *, individual: bool
 ) -> tuple[uuid.UUID, uuid.UUID]:
-    """Um questionário com uma pergunta, respondido pelo vínculo. Devolve
+    """Um questionário respondido pelo vínculo. Devolve
     (formulário, resposta)."""
     form_id = uuid.uuid4()
     world.forms[form_id] = link.id if individual else None
-    world.questions[uuid.uuid4()] = form_id
     response_id = uuid.uuid4()
     world.responses[response_id] = (form_id, link.id)
     return form_id, response_id

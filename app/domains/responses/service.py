@@ -236,7 +236,7 @@ class AnswerService:
         except NotFoundError as exc:
             raise ValidationError(exc.message) from exc
 
-        if question.form_id != form_response.form_id:
+        if not await self.questions.belongs_to_form(question, form_response.form_id):
             raise ValidationError(
                 f"Pergunta {dados.question_id} não é do formulário desta resposta"
             )

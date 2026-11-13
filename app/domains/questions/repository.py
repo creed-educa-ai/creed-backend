@@ -2,7 +2,7 @@
 
 Esta camada NAO contem regra de negocio: so queries. Ordenacao e filtro por
 secao sao feitos na propria consulta (ADR: filtro/ordenacao no banco, nunca
-em memoria) — por isso list_by_form recebe `section` e monta o where
+em memoria) — por isso list_by_instrument recebe `section` e monta o where
 condicionalmente, em vez de devolver tudo e deixar o service filtrar.
 
 `insert` devolve `None` quando a UniqueConstraint recusa a gravacao — isto
@@ -11,19 +11,20 @@ NAO e decisao de negocio, e devolver `None` (nao levantar) e o que
 e o service.
 
 Traducoes (EN/ES) ficam em tabelas proprias; o PT vive em `Question.text` e
-`QuestionOption.label`. `list_by_form` sempre carrega as alternativas; quando
+`QuestionOption.label`. `list_by_instrument` sempre carrega as alternativas; quando
 `lang` e pedido, so a traducao daquele idioma e carregada, da pergunta e das
 alternativas (filtro dentro do `selectinload`), sem N+1.
 """
 
 import uuid
 
-from sqlalchemy import delete, select
+from sqlalchemy import exists, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.domains.questions.models import (
+    Instrument,
     Question,
     QuestionLang,
     QuestionOption,
@@ -47,7 +48,7 @@ class QuestionRepository:
         try:
             await self.db.flush()
         except IntegrityError as exc:
-            if "uq_questions_form_id_order_index" not in str(exc.orig):
+            if "uq_questions_instrument_id_order_index" not in str(exc.orig):
                 raise
             return None
         await self.db.refresh(question)
@@ -57,13 +58,19 @@ class QuestionRepository:
         result = await self.db.execute(select(Question).where(Question.id == question_id))
         return result.scalar_one_or_none()
 
-    async def list_by_form(
+    async def instrument_exists(self, instrument_id: uuid.UUID) -> bool:
+        result = await self.db.execute(
+            select(exists().where(Instrument.id == instrument_id))
+        )
+        return bool(result.scalar())
+
+    async def list_by_instrument(
         self,
-        form_id: uuid.UUID,
+        instrument_id: uuid.UUID,
         section: QuestionSection | None = None,
         lang: QuestionLang | None = None,
     ) -> list[Question]:
-        query = select(Question).where(Question.form_id == form_id)
+        query = select(Question).where(Question.instrument_id == instrument_id)
 
         if section is not None:
             query = query.where(Question.section == section)
@@ -87,44 +94,28 @@ class QuestionRepository:
         result = await self.db.execute(query)
         return list(result.scalars().all())
 
-    async def list_required(self, form_id: uuid.UUID) -> list[Question]:
-        """Obrigatorias do formulario, em ordem de posicao; o filtro e no banco."""
+    async def list_required(self, instrument_id: uuid.UUID) -> list[Question]:
+        """Obrigatorias do instrumento, em ordem de posicao; o filtro e no banco."""
         result = await self.db.execute(
             select(Question)
             .where(
-                Question.form_id == form_id,
+                Question.instrument_id == instrument_id,
                 Question.required.is_(True),
             )
             .order_by(Question.order_index)
         )
         return list(result.scalars().all())
 
-    async def get_by_form_and_order(
-        self, form_id: uuid.UUID, order_index: int
+    async def get_by_instrument_and_order(
+        self, instrument_id: uuid.UUID, order_index: int
     ) -> Question | None:
         result = await self.db.execute(
             select(Question).where(
-                Question.form_id == form_id,
+                Question.instrument_id == instrument_id,
                 Question.order_index == order_index,
             )
         )
         return result.scalar_one_or_none()
-
-    async def delete_by_forms(self, form_ids: list[uuid.UUID]) -> None:
-        """Apaga as perguntas dos formularios e, antes, as alternativas delas.
-
-        As duas tabelas sao deste dominio, entao a ordem mora aqui: a alternativa
-        aponta para a pergunta, e o banco recusaria apagar a pergunta primeiro.
-        """
-        if not form_ids:
-            return
-        questions_of_forms = select(Question.id).where(Question.form_id.in_(form_ids))
-        await self.db.execute(
-            delete(QuestionOption).where(
-                QuestionOption.question_id.in_(questions_of_forms)
-            )
-        )
-        await self.db.execute(delete(Question).where(Question.form_id.in_(form_ids)))
 
 
 class QuestionTranslationRepository:

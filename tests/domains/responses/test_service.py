@@ -183,6 +183,12 @@ class FakeQuestionService:
             raise NotFoundError(f"Pergunta {question_id} não encontrada")
         return self.perguntas[question_id]
 
+    async def belongs_to_form(
+        self, question: SimpleNamespace, form_id: uuid.UUID
+    ) -> bool:
+        """No dublê, a pergunta guarda o formulário cujo instrumento a aplica."""
+        return bool(question.form_id == form_id)
+
     def is_descriptive(self, question: SimpleNamespace) -> bool:
         return bool(question.descritiva)
 

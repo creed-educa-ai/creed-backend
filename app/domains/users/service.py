@@ -42,7 +42,6 @@ from app.domains.organizacoes.service import (
     OrganizationWithDocument,
 )
 from app.domains.participants.service import ParticipantService
-from app.domains.questions.service import QuestionService
 from app.domains.responses.service import FormResponseService
 from app.domains.users.models import User
 from app.domains.users.repository import UserRepository
@@ -326,7 +325,6 @@ class MemberRemovalService:
         users: UserService,
         links: LinkService,
         forms: FormService,
-        questions: QuestionService,
         responses: FormResponseService,
         insights: InsightService,
         dashboards: DashboardService,
@@ -336,7 +334,6 @@ class MemberRemovalService:
         self.users = users
         self.links = links
         self.forms = forms
-        self.questions = questions
         self.responses = responses
         self.insights = insights
         self.dashboards = dashboards
@@ -390,8 +387,8 @@ class MemberRemovalService:
         outro vínculo, o participante e o perfil demográfico.
 
         🟡 Premissa P-072 — saem também os insights e os dashboards das respostas
-        apagadas e do login, e as perguntas dos questionários individuais: o banco
-        não deixa apagar o que eles referenciam.
+        apagadas e do login: o banco não deixa apagar o que eles referenciam. As
+        perguntas ficam: são do instrumento, e não do questionário.
         """
         link = await self.links.get_member_link(organization_id, link_id)
 
@@ -404,7 +401,6 @@ class MemberRemovalService:
             response_ids, login.id if login is not None else None
         )
         await self.responses.delete_with_answers(response_ids)
-        await self.questions.delete_for_forms(form_ids)
         await self.forms.delete_individual_forms(form_ids)
 
         keycloak_id = await self.users.delete_login(login) if login is not None else None
@@ -461,7 +457,6 @@ class OrganizationRemovalService:
         organizations: OrganizationService,
         links: LinkService,
         forms: FormService,
-        questions: QuestionService,
         responses: FormResponseService,
         insights: InsightService,
         dashboards: DashboardService,
@@ -473,7 +468,6 @@ class OrganizationRemovalService:
         self.organizations = organizations
         self.links = links
         self.forms = forms
-        self.questions = questions
         self.responses = responses
         self.insights = insights
         self.dashboards = dashboards
@@ -494,8 +488,8 @@ class OrganizationRemovalService:
 
         1. cada membro, pelo `delete_member_data` da M-3, que devolve o login;
         2. os questionários que sobraram (os "para todos"): antes, as respostas que
-           ainda apontam para eles, com os insights e os dashboards delas; depois,
-           as perguntas e as alternativas;
+           ainda apontam para eles, com os insights e os dashboards delas (as
+           perguntas são do instrumento e ficam);
         3. os setores, para onde os vínculos apontavam;
         4. a organização;
         5. o documento dela, que é apontado pela organização e só sai depois dela;
@@ -539,7 +533,6 @@ class OrganizationRemovalService:
         # Sem login: os logins dos membros já saíram, com os dashboards deles.
         await self.dashboards.delete_for_member_removal(response_ids, None)
         await self.responses.delete_with_answers(response_ids)
-        await self.questions.delete_for_forms(form_ids)
         await self.forms.delete_organization_forms(form_ids)
 
         await self.departments.delete_for_organization(organization_id)

@@ -47,7 +47,8 @@ from app.shared.schemas import ErrorResponse, ValidationErrorResponse
 
 router = APIRouter(tags=["questions"])
 
-EditorDep = Annotated[AuthenticatedUser, Depends(require_role("admin", "gestor"))]
+# A pergunta é do instrumento, o mesmo para toda organização: só o admin cadastra.
+AdminDep = Annotated[AuthenticatedUser, Depends(require_role("admin"))]
 
 _UNAUTHORIZED: dict[int | str, dict[str, Any]] = {
     status.HTTP_401_UNAUTHORIZED: {
@@ -58,16 +59,17 @@ _UNAUTHORIZED: dict[int | str, dict[str, Any]] = {
 }
 
 
-def _forbidden(description: str) -> dict[int | str, dict[str, Any]]:
+_ONLY_ADMIN = "Papel sem permissão para cadastrar: só o admin cadastra."
+
+
+def _forbidden(
+    description: str, example: str = "Sem acesso a formulário de outra organização"
+) -> dict[int | str, dict[str, Any]]:
     return {
         status.HTTP_403_FORBIDDEN: {
             "model": ErrorResponse,
             "description": description,
-            "content": {
-                "application/json": {
-                    "example": {"detail": "Sem acesso a formulário de outra organização"}
-                }
-            },
+            "content": {"application/json": {"example": {"detail": example}}},
         },
     }
 
@@ -101,27 +103,25 @@ _INVALID_BODY: dict[int | str, dict[str, Any]] = {
     status_code=status.HTTP_201_CREATED,
     summary="Criar pergunta",
     description=(
-        "Cadastra uma pergunta num formulário, na seção e posição informadas. "
-        "O formulário precisa já existir. Exige o papel admin ou gestor; o "
-        "gestor só cadastra em formulário da própria organização. O texto é "
+        "Cadastra uma pergunta num instrumento, na seção e posição informadas. "
+        "O instrumento precisa já existir. Exige o papel admin: o instrumento é "
+        "o mesmo para toda organização. O texto é "
         "sempre o PT; traduções entram por `POST /questions/{id}/translations`."
     ),
     response_description="Pergunta criada.",
     operation_id="create_question",
     responses={
         **_UNAUTHORIZED,
-        **_forbidden(
-            "Papel sem permissão para cadastrar, ou formulário de outra organização."
-        ),
+        **_forbidden(_ONLY_ADMIN, "Cargo insuficiente para acessar"),
         status.HTTP_409_CONFLICT: {
             "model": ErrorResponse,
-            "description": "Já existe pergunta na mesma posição do formulário.",
+            "description": "Já existe pergunta na mesma posição do instrumento.",
             "content": {
                 "application/json": {
                     "example": {
                         "detail": (
                             "Já existe pergunta na posição 0 "
-                            "do formulário 00000000-0000-0000-0000-000000000001"
+                            "do instrumento 00000000-0000-0000-0000-00000000c4ed"
                         )
                     }
                 }
@@ -132,14 +132,14 @@ _INVALID_BODY: dict[int | str, dict[str, Any]] = {
         status.HTTP_422_UNPROCESSABLE_CONTENT: {
             "model": ErrorResponse | ValidationErrorResponse,
             "description": (
-                "Formulário inexistente: `detail` é texto. Corpo inválido: "
+                "Instrumento inexistente: `detail` é texto. Corpo inválido: "
                 "`detail` é uma lista, um item por campo recusado."
             ),
             "content": {
                 "application/json": {
                     "example": {
                         "detail": (
-                            "Formulário 00000000-0000-0000-0000-000000000001 "
+                            "Instrumento 00000000-0000-0000-0000-00000000c4ed "
                             "não encontrado"
                         )
                     }
@@ -149,14 +149,10 @@ _INVALID_BODY: dict[int | str, dict[str, Any]] = {
     },
 )
 async def create_question(
-    dados: QuestionCreate, service: ServiceDep, user: EditorDep
+    dados: QuestionCreate, service: ServiceDep, user: AdminDep
 ) -> QuestionResponse:
     try:
-        question = await service.create(
-            dados, role=user.role, organization_id=user.organization_uuid
-        )
-    except ForbiddenError as exc:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, exc.message) from exc
+        question = await service.create(dados)
     except ValidationError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, exc.message) from exc
     except ConflictError as exc:
@@ -169,7 +165,8 @@ async def create_question(
     response_model=list[QuestionWithOptionsResponse],
     summary="Listar perguntas de um formulário",
     description=(
-        "Lista as perguntas de um formulário em ordem de posição, cada uma com as "
+        "Lista as perguntas do instrumento que o formulário aplica, em ordem de "
+        "posição, cada uma com as "
         "suas alternativas (também em ordem de posição), com filtro opcional por "
         "seção. Com `lang`, o enunciado e o texto das alternativas saem traduzidos "
         "quando existir tradução naquele idioma; sem tradução, volta o PT, item a "
@@ -253,16 +250,13 @@ async def list_questions(
     summary="Traduzir pergunta",
     description=(
         "Cadastra a tradução (`en` ou `es`) do enunciado de uma pergunta. No máximo "
-        "uma tradução por idioma: repetir devolve 409. Exige o papel admin ou "
-        "gestor; o gestor só traduz pergunta de formulário da própria organização."
+        "uma tradução por idioma: repetir devolve 409. Exige o papel admin."
     ),
     response_description="Tradução criada.",
     operation_id="create_question_translation",
     responses={
         **_UNAUTHORIZED,
-        **_forbidden(
-            "Papel sem permissão, ou pergunta de formulário de outra organização."
-        ),
+        **_forbidden(_ONLY_ADMIN, "Cargo insuficiente para acessar"),
         **_error(
             status.HTTP_404_NOT_FOUND,
             "Pergunta não encontrada.",
@@ -289,19 +283,12 @@ async def create_question_translation(
     ],
     dados: QuestionTranslationCreate,
     service: QuestionTranslationServiceDep,
-    user: EditorDep,
+    user: AdminDep,
 ) -> QuestionTranslationResponse:
     try:
-        translation = await service.create(
-            question_id,
-            dados,
-            role=user.role,
-            organization_id=user.organization_uuid,
-        )
+        translation = await service.create(question_id, dados)
     except NotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, exc.message) from exc
-    except ForbiddenError as exc:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, exc.message) from exc
     except ConflictError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, exc.message) from exc
     return QuestionTranslationResponse.de_model(translation)
@@ -315,16 +302,13 @@ async def create_question_translation(
     description=(
         "Cadastra a tradução (`en` ou `es`) do texto de uma alternativa. O `value` "
         "não é traduzido. No máximo uma tradução por idioma: repetir devolve 409. "
-        "Exige o papel admin ou gestor; o gestor só traduz alternativa de "
-        "formulário da própria organização."
+        "Exige o papel admin."
     ),
     response_description="Tradução criada.",
     operation_id="create_question_option_translation",
     responses={
         **_UNAUTHORIZED,
-        **_forbidden(
-            "Papel sem permissão, ou alternativa de formulário de outra organização."
-        ),
+        **_forbidden(_ONLY_ADMIN, "Cargo insuficiente para acessar"),
         **_error(
             status.HTTP_404_NOT_FOUND,
             "Alternativa não encontrada.",
@@ -351,19 +335,12 @@ async def create_question_option_translation(
     ],
     dados: QuestionOptionTranslationCreate,
     service: QuestionOptionTranslationServiceDep,
-    user: EditorDep,
+    user: AdminDep,
 ) -> QuestionOptionTranslationResponse:
     try:
-        translation = await service.create(
-            option_id,
-            dados,
-            role=user.role,
-            organization_id=user.organization_uuid,
-        )
+        translation = await service.create(option_id, dados)
     except NotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, exc.message) from exc
-    except ForbiddenError as exc:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, exc.message) from exc
     except ConflictError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, exc.message) from exc
     return QuestionOptionTranslationResponse.de_model(translation)

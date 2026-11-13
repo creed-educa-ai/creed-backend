@@ -26,9 +26,11 @@ from app.domains.forms.router_periods import router
 from app.domains.links.models import Link, LinkType, Roles
 from app.domains.organizacoes.models import Organization
 from app.domains.participants.models import Participant
+from app.domains.questions.models import Instrument
 from app.domains.users.dependencies import get_service as get_user_service
 from app.domains.users.service import UserAccess
 from app.shared.authorization import AuthenticatedUser, _identity_from_token
+from app.shared.instrument import CREED_INSTRUMENT_ID
 
 pytestmark = pytest.mark.skipif(
     os.getenv("RUN_POSTGRES_TESTS") != "1", reason="Requer PostgreSQL de teste"
@@ -49,6 +51,8 @@ async def database():
         organizations = [uuid.uuid4(), uuid.uuid4()]
         links = {}
         async with sessions.begin() as session:
+            # Todo período aponta para o instrumento CREED, que a migration grava.
+            session.add(Instrument(id=CREED_INSTRUMENT_ID, name="Inventário CREED"))
             for index, org in enumerate(organizations):
                 document = Document(value=f"TEST-{org}")
                 session.add(document)

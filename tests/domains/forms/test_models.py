@@ -5,6 +5,7 @@ fácil de desfazer sem perceber.
 """
 
 from app.domains.forms.models import Form, FormStatus
+from app.shared.instrument import CREED_INSTRUMENT_ID
 
 
 class TestForms:
@@ -20,6 +21,7 @@ class TestForms:
             "opens_at": True,
             "closes_at": True,
             "link_id": True,
+            "instrument_id": False,
             "created_at": False,
         }
 
@@ -52,6 +54,7 @@ class TestForms:
         assert fks == {
             "organization_id": "organizations.id",
             "link_id": "links.id",
+            "instrument_id": "instruments.id",
         }
 
     def test_fk_de_organizacao_tem_o_nome_que_a_migration_usa(self) -> None:
@@ -66,3 +69,10 @@ class TestForms:
 
     def test_link_id_has_index(self) -> None:
         assert Form.__table__.c.link_id.index is True
+
+    def test_nasce_com_o_instrumento_creed(self) -> None:
+        """Ninguém escolhe instrumento ao abrir período: todos aplicam o CREED."""
+        default = Form.__table__.c.instrument_id.default
+
+        assert default is not None
+        assert default.arg == CREED_INSTRUMENT_ID

@@ -26,11 +26,11 @@ from app.domains.questions.schemas import (
 def uma_question(**campos: object) -> Question:
     padrao: dict[str, object] = {
         "id": uuid.uuid4(),
-        "form_id": uuid.uuid4(),
+        "instrument_id": uuid.uuid4(),
         "text": "Você se adapta bem?",
         "order_index": 0,
         "type": QuestionType.OBJECTIVE,
-        "section": QuestionSection.ASSESSMENT,
+        "section": QuestionSection.S2,
         "required": True,
         "dimensao": None,
         "prisma": None,
