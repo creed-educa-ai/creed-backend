@@ -801,6 +801,48 @@ INVENTORY_QUESTIONS = [
     ),
 ]
 
+# S9 (Propostas e Recomendações): itens 59 a 61 do formulário. Descritivas e
+# opcionais, sem dimensão: S9 não entra no `Dimension`, porque NP é a média de
+# todas as dimensões do enum. Posição continua depois das afirmações Likert.
+# (texto, traduções), no mesmo formato do inventário.
+INVENTORY_OPEN_QUESTIONS = [
+    (
+        "Quais práticas multiculturais poderiam ser incorporadas à educação "
+        "empreendedora?",
+        {
+            QuestionLang.ES: (
+                "¿Qué prácticas multiculturales podrían incorporarse a la educación "
+                "emprendedora?"
+            ),
+            QuestionLang.EN: (
+                "Which multicultural practices could be incorporated into "
+                "entrepreneurship education?"
+            ),
+        },
+    ),
+    (
+        "Quais desafios você observa para trabalhar a interculturalidade nas "
+        "organizações?",
+        {
+            QuestionLang.ES: (
+                "¿Qué desafíos observa para trabajar la interculturalidad en las "
+                "organizaciones?"
+            ),
+            QuestionLang.EN: (
+                "What challenges do you see in working on interculturality in "
+                "organizations?"
+            ),
+        },
+    ),
+    (
+        "Outras recomendações e sugestões.",
+        {
+            QuestionLang.ES: "Otras recomendaciones y sugerencias.",
+            QuestionLang.EN: "Other recommendations and suggestions.",
+        },
+    ),
+]
+
 
 class SeedError(Exception):
     """Faltou algo no ambiente para o seed poder rodar."""
@@ -1133,16 +1175,51 @@ async def _ensure_inventory_form(
             )
             criou = True
 
-        for lang, traducao in traducoes.items():
-            if await translations.get_by_question_and_lang(question.id, lang) is not None:
-                continue
-            await translations.insert(
-                QuestionTranslation(question_id=question.id, lang=lang, text=traducao)
+        if await _ensure_translations(translations, question.id, traducoes):
+            criou = True
+
+    for open_index, (text, traducoes) in enumerate(INVENTORY_OPEN_QUESTIONS):
+        order_index = len(INVENTORY_QUESTIONS) + open_index
+        question = await questions.get_by_form_and_order(INVENTORY_FORM_ID, order_index)
+        if question is None:
+            question = await questions.insert(
+                Question(
+                    form_id=INVENTORY_FORM_ID,
+                    text=text,
+                    order_index=order_index,
+                    type=QuestionType.DESCRIPTIVE,
+                    section=QuestionSection.CLOSING,
+                    required=False,
+                    prisma=None,
+                    dimensao=None,
+                )
             )
+            if question is None:
+                raise SeedError(f"posição {order_index} do inventário já ocupada.")
+            criou = True
+
+        if await _ensure_translations(translations, question.id, traducoes):
             criou = True
 
     situacao = "criado" if criou else "já estava no banco"
     print(f"inventário {INVENTORY_FORM_ID} {situacao}.")
+    return criou
+
+
+async def _ensure_translations(
+    translations: QuestionTranslationRepository,
+    question_id: uuid.UUID,
+    traducoes: dict[QuestionLang, str],
+) -> bool:
+    """Grava as traduções que a pergunta ainda não tem. Diz se criou alguma."""
+    criou = False
+    for lang, traducao in traducoes.items():
+        if await translations.get_by_question_and_lang(question_id, lang) is not None:
+            continue
+        await translations.insert(
+            QuestionTranslation(question_id=question_id, lang=lang, text=traducao)
+        )
+        criou = True
     return criou
 
 
