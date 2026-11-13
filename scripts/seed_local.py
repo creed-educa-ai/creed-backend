@@ -1,17 +1,22 @@
-"""Seed do ambiente local: cria o usuário de teste no realm (se faltar) e na tabela
-`user`, e um formulário de demonstração para ele responder.
+"""Seed do ambiente local: as organizações e as pessoas de teste, no realm (se
+faltarem) e no nosso banco.
 
 Por que isto existe: depois de o Keycloak aprovar a senha, o login ainda lê o
 usuário no **nosso** banco (decisão D2). Realm com usuário e banco vazio dá 401
 com a senha certa — que na tela aparece como "e-mail ou senha inválidos" e manda
 o time procurar um bug de senha que não existe.
 
-O usuário de teste **não** vem do `realm-creed.json`: o arquivo é público e é o
+As pessoas de teste **não** vêm do `realm-creed.json`: o arquivo é público e é o
 mesmo que a produção importa (ADR-0007), e lá não pode existir um admin com senha
-conhecida. Quem o cria é este seed, que só roda com `ENVIRONMENT=local`.
+conhecida. Quem as cria é este seed, que só roda com `ENVIRONMENT=local`.
+
+O ambiente fica como o de produção: a admin na organização da CREED, onde também
+estão os mentorandos (P-048), e as empresas com os seus membros. **Nenhum período**
+nasce aqui: quem abre é o gestor ou a admin, pelo painel, como em produção. As
+perguntas também não: são do instrumento CREED, que entra por migration de dados.
 
 O `sub` é perguntado ao Keycloak **a cada execução**, nunca fixado aqui: quem
-roda `docker compose down -v` ganha um usuário novo no realm (ver README).
+roda `docker compose down -v` ganha usuários novos no realm (ver README).
 
     python scripts/seed_local.py
 """
@@ -19,63 +24,141 @@ roda `docker compose down -v` ganha um usuário novo no realm (ver README).
 import asyncio
 import sys
 import uuid
-from datetime import UTC, datetime
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models  # noqa: F401  (registra todas as tabelas; ver app/models.py)
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal
 from app.domains.documents.models import DocType, Document
-from app.domains.forms.models import Form, FormStatus
-from app.domains.forms.repository import FormRepository
+from app.domains.forms.models import Form
 from app.domains.links.models import Link
 from app.domains.links.repository import LinkRepository
 from app.domains.organizacoes.models import Organization, OrganizationStatus
 from app.domains.organizacoes.repository import OrganizationRepository
 from app.domains.participants.models import Participant
 from app.domains.participants.repository import ParticipantRepository
+from app.domains.responses.models import Answer, FormResponse
 from app.domains.users.models import User
 from app.domains.users.repository import UserRepository
 from app.shared.enums import LinkType, RecordStatus, Roles
 
-EMAIL = "dev@creed.example.com"
-NAME = "Dev CREED"
-# Senha pública de propósito: este usuário só existe no ambiente local. Tem 8
-# caracteres ou mais porque a política do realm (`length(8)`, P-004 de 07/09) faz a
-# Admin API recusar a criação do usuário com senha mais curta.
+# Senha pública de propósito, a mesma para todas as pessoas de teste: elas só
+# existem no ambiente local. Tem 8 caracteres ou mais porque a política do realm
+# (`length(8)`, P-004 de 07/09) faz a Admin API recusar a criação com senha mais curta.
 PASSWORD = "dev-creed"  # noqa: S105
 
-# O papel de acesso é o do vínculo (CREED-32): `user` não guarda papel.
-LINK_ROLE = Roles.ADMIN
 
-# Fixos, e não aleatórios, para o seed continuar idempotente. O participante e a
-# organização são criados por este seed, porque `links` tem FK para os dois
-# (CREED-47 e CREED-38). A organização precisa de um documento (`document_id` é
-# obrigatório) e não há endpoint para criá-lo (P-022): o seed cria um sintético.
-PARTICIPANT_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
-ORGANIZATION_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
-ORGANIZATION_DOCUMENT_ID = uuid.UUID("00000000-0000-0000-0000-000000000004")
-ORGANIZATION_NAME = "[Demonstração] Organização de dev"
-ORGANIZATION_ADDRESS = "[Demonstração] Endereço de teste"
-# Valor sintético de propósito, com tipo `other`: não pode parecer um CNPJ real.
-ORGANIZATION_DOCUMENT_VALUE = "DEMO-ORG-0001"
+@dataclass(frozen=True)
+class OrganizacaoDeTeste:
+    id: uuid.UUID
+    document_id: uuid.UUID
+    # Valor sintético de propósito, com tipo `other`: não pode parecer um CNPJ real.
+    document_value: str
+    name: str
+    address: str
 
-# Formulário de demonstração (CREED-47), na organização do vínculo de dev: é o que
-# o `dev` abre, responde e envia. Fica em rascunho, que já pode ser respondido
-# (P-030). Id fixo pelo mesmo motivo do participante; as perguntas se reconhecem
-# por (formulário, posição), que já é único.
-DEMO_FORM_ID = uuid.UUID("00000000-0000-0000-0000-000000000003")
-DEMO_FORM_NAME = "[Demonstração] Formulário de teste"
-# Período longo, porque o back só aceita resposta dentro dele. Provisório: sai
-# quando o seed da Q-0 abrir o período com as perguntas do instrumento.
-DEMO_OPENS_AT = datetime(2026, 1, 1, tzinfo=UTC)
-DEMO_CLOSES_AT = datetime(2031, 1, 1, tzinfo=UTC)
 
-# O formulário de demonstração não tem perguntas próprias: aplica o instrumento CREED,
-# que entra por migration de dados (`alembic upgrade head`), e não por este seed.
+@dataclass(frozen=True)
+class PessoaDeTeste:
+    email: str
+    name: str
+    # O papel de acesso é o do vínculo (CREED-32): `user` não guarda papel.
+    role: Roles
+    type: LinkType
+    organization_id: uuid.UUID
+    participant_id: uuid.UUID
+
+
+# Os mesmos ids do `scripts/convidar_primeiro_admin.py`, que cria esta organização
+# nos outros ambientes: no local, a admin do seed fica onde a de produção fica.
+CREED = OrganizacaoDeTeste(
+    id=uuid.UUID("00000000-0000-0000-0001-000000000001"),
+    document_id=uuid.UUID("00000000-0000-0000-0001-000000000002"),
+    document_value="CREED-ORG-0001",
+    name="CREED.ai Educa",
+    address="[A informar] Endereço da CREED",
+)
+
+# Ids fixos, e não aleatórios, para o seed continuar idempotente. A empresa de
+# demonstração mantém os ids de antes, para bancos já semeados.
+EMPRESA = OrganizacaoDeTeste(
+    id=uuid.UUID("00000000-0000-0000-0000-000000000001"),
+    document_id=uuid.UUID("00000000-0000-0000-0000-000000000004"),
+    document_value="DEMO-ORG-0001",
+    name="[Demonstração] Organização de dev",
+    address="[Demonstração] Endereço de teste",
+)
+# Uma segunda empresa, para conferir que uma não vê o período da outra.
+OUTRA_EMPRESA = OrganizacaoDeTeste(
+    id=uuid.UUID("00000000-0000-0000-0000-000000000005"),
+    document_id=uuid.UUID("00000000-0000-0000-0000-000000000006"),
+    document_value="DEMO-ORG-0002",
+    name="[Demonstração] Outra empresa",
+    address="[Demonstração] Endereço de teste",
+)
+ORGANIZACOES = (CREED, EMPRESA, OUTRA_EMPRESA)
+
+ADMIN = PessoaDeTeste(
+    email="dev@creed.example.com",
+    name="Dev CREED",
+    role=Roles.ADMIN,
+    type=LinkType.EMPREGO,
+    organization_id=CREED.id,
+    participant_id=uuid.UUID("00000000-0000-0000-0000-000000000002"),
+)
+PESSOAS = (
+    ADMIN,
+    PessoaDeTeste(
+        email="gestora@creed.example.com",
+        name="[Demonstração] Gestora",
+        role=Roles.GESTOR,
+        type=LinkType.EMPREGO,
+        organization_id=EMPRESA.id,
+        participant_id=uuid.UUID("00000000-0000-0000-0002-000000000001"),
+    ),
+    PessoaDeTeste(
+        email="funcionario@creed.example.com",
+        name="[Demonstração] Funcionário",
+        role=Roles.RESPONDENTE,
+        type=LinkType.EMPREGO,
+        organization_id=EMPRESA.id,
+        participant_id=uuid.UUID("00000000-0000-0000-0002-000000000002"),
+    ),
+    PessoaDeTeste(
+        email="funcionario.outra@creed.example.com",
+        name="[Demonstração] Funcionário da outra empresa",
+        role=Roles.RESPONDENTE,
+        type=LinkType.EMPREGO,
+        organization_id=OUTRA_EMPRESA.id,
+        participant_id=uuid.UUID("00000000-0000-0000-0002-000000000003"),
+    ),
+    PessoaDeTeste(
+        email="mentorando1@creed.example.com",
+        name="[Demonstração] Mentorando 1",
+        role=Roles.RESPONDENTE,
+        type=LinkType.MENTORIA,
+        organization_id=CREED.id,
+        participant_id=uuid.UUID("00000000-0000-0000-0002-000000000004"),
+    ),
+    PessoaDeTeste(
+        email="mentorando2@creed.example.com",
+        name="[Demonstração] Mentorando 2",
+        role=Roles.RESPONDENTE,
+        type=LinkType.MENTORIA,
+        organization_id=CREED.id,
+        participant_id=uuid.UUID("00000000-0000-0000-0002-000000000005"),
+    ),
+)
+
+# O formulário de demonstração que versões anteriores deste seed criavam, aberto
+# até 2031 para a organização de dev. Ele fazia a admin e os mentorandos caírem
+# num questionário que em produção não existe: o seed agora o apaga.
+OLD_DEMO_FORM_ID = uuid.UUID("00000000-0000-0000-0000-000000000003")
 
 
 class SeedError(Exception):
@@ -98,18 +181,22 @@ async def _service_account_token(http: httpx.AsyncClient) -> str:
     return str(response.json()["access_token"])
 
 
-async def _keycloak_id(http: httpx.AsyncClient, token: str) -> uuid.UUID:
-    """O `sub` do usuário de teste, criando-o no realm na primeira vez."""
-    keycloak_id = await _buscar_no_realm(http, token)
+async def _keycloak_id(
+    http: httpx.AsyncClient, token: str, pessoa: PessoaDeTeste
+) -> uuid.UUID:
+    """O `sub` da pessoa, criando-a no realm na primeira vez."""
+    keycloak_id = await _buscar_no_realm(http, token, pessoa)
     if keycloak_id is None:
-        keycloak_id = await _criar_no_realm(http, token)
+        keycloak_id = await _criar_no_realm(http, token, pessoa)
     return keycloak_id
 
 
-async def _buscar_no_realm(http: httpx.AsyncClient, token: str) -> uuid.UUID | None:
+async def _buscar_no_realm(
+    http: httpx.AsyncClient, token: str, pessoa: PessoaDeTeste
+) -> uuid.UUID | None:
     response = await http.get(
         f"{_admin_url()}/users",
-        params={"email": EMAIL, "exact": "true"},
+        params={"email": pessoa.email, "exact": "true"},
         headers={"Authorization": f"Bearer {token}"},
     )
     if not response.is_success:
@@ -121,20 +208,22 @@ async def _buscar_no_realm(http: httpx.AsyncClient, token: str) -> uuid.UUID | N
     return uuid.UUID(encontrados[0]["id"])
 
 
-async def _criar_no_realm(http: httpx.AsyncClient, token: str) -> uuid.UUID:
+async def _criar_no_realm(
+    http: httpx.AsyncClient, token: str, pessoa: PessoaDeTeste
+) -> uuid.UUID:
     headers = {"Authorization": f"Bearer {token}"}
 
     response = await http.post(
-        f"{_admin_url()}/users", json=_usuario_de_teste(), headers=headers
+        f"{_admin_url()}/users", json=_usuario_de_teste(pessoa), headers=headers
     )
     if not response.is_success:
-        raise SeedError(f"Admin API recusou criar {EMAIL}: {response.text[:200]}")
+        raise SeedError(f"Admin API recusou criar {pessoa.email}: {response.text[:200]}")
     # A Admin API devolve o id do usuário criado só no cabeçalho Location.
     keycloak_id = uuid.UUID(response.headers["Location"].rsplit("/", 1)[-1])
 
     # O papel vai numa chamada à parte: o POST de usuário ignora `realmRoles`.
-    # É a cópia do papel do vínculo (decisão D4) — o mesmo valor do LINK_ROLE.
-    papel = await http.get(f"{_admin_url()}/roles/{LINK_ROLE.value}", headers=headers)
+    # É a cópia do papel do vínculo (decisão D4).
+    papel = await http.get(f"{_admin_url()}/roles/{pessoa.role.value}", headers=headers)
     if not papel.is_success:
         raise SeedError(f"Admin API recusou ler o papel: {papel.text[:200]}")
     response = await http.post(
@@ -145,21 +234,22 @@ async def _criar_no_realm(http: httpx.AsyncClient, token: str) -> uuid.UUID:
     if not response.is_success:
         raise SeedError(f"Admin API recusou dar o papel: {response.text[:200]}")
 
-    print(f"{EMAIL} criado no realm, papel {LINK_ROLE.value}.")
+    print(f"{pessoa.email} criado no realm, papel {pessoa.role.value}.")
     return keycloak_id
 
 
-def _usuario_de_teste() -> dict[str, Any]:
-    """O usuário de teste no formato que a Admin API recebe.
+def _usuario_de_teste(pessoa: PessoaDeTeste) -> dict[str, Any]:
+    """A pessoa de teste no formato que a Admin API recebe.
 
     Sem `requiredActions` vazia e sem `temporary: False`, o Direct Access Grant
     responde `invalid_grant: "Account is not fully set up"` — que na tela vira
     "senha inválida" e manda o time procurar um bug que não existe.
     """
     return {
-        "username": EMAIL,
-        "email": EMAIL,
-        "firstName": "Dev",
+        "username": pessoa.email,
+        "email": pessoa.email,
+        # O realm recusa colchetes no nome: o "[Demonstração]" fica só no nosso banco.
+        "firstName": pessoa.name.removeprefix("[Demonstração] "),
         "lastName": "Local",
         "enabled": True,
         "emailVerified": True,
@@ -181,152 +271,163 @@ async def semear() -> None:
 
     async with httpx.AsyncClient(timeout=settings.KEYCLOAK_TIMEOUT_SECONDS) as http:
         token = await _service_account_token(http)
-        keycloak_id = await _keycloak_id(http, token)
+        keycloak_ids = {
+            pessoa.email: await _keycloak_id(http, token, pessoa) for pessoa in PESSOAS
+        }
 
     async with AsyncSessionLocal() as session:
-        users = UserRepository(session)
-        links = LinkRepository(session)
+        # Antes das pessoas: a FK de `links` recusa vínculo sem participante e sem
+        # organização.
+        organizations = OrganizationRepository(session)
+        for organizacao in ORGANIZACOES:
+            await _ensure_organization(session, organizations, organizacao)
+        await _remove_old_demo_form(session)
+        await session.commit()
 
-        # Antes de tudo, inclusive do `return` abaixo: um banco que já tinha o
-        # usuário de dev também precisa do participante e da organização, senão a
-        # FK de `links` recusa o vínculo do seed. E do formulário de demonstração.
-        criou_participante = await _ensure_participant(ParticipantRepository(session))
-        criou_organizacao = await _ensure_organization(
-            session, OrganizationRepository(session)
-        )
-        criou_formulario = await _ensure_demo_form(FormRepository(session))
-        if criou_participante or criou_organizacao or criou_formulario:
+        for pessoa in PESSOAS:
+            await _ensure_pessoa(session, pessoa, keycloak_ids[pessoa.email])
             await session.commit()
 
-        existente = await users.get_user_by_email(EMAIL)
+    print(f"Pronto. Todas as pessoas de teste entram com a senha {PASSWORD!r}.")
 
-        if existente is not None:
-            # Com `user.link_id` NOT NULL o vínculo sempre existe — mas num banco
-            # ainda em `87beb54d929a`, que é onde a revisão `28e9a13197f4` para, o
-            # usuário pode estar sem ele. O seed não liga mais usuário a vínculo,
-            # então falha em vez de dizer que está tudo certo.
-            if await links.get_by_id(existente.link_id) is None:
-                raise SeedError(
-                    f"{EMAIL} está no banco sem vínculo: o schema ainda é o de antes "
-                    "da CREED-32/task 6. Rode `alembic upgrade head`, siga a "
-                    "mensagem dela e depois rode este seed de novo."
-                )
 
-            # Idempotente: rodar de novo depois de um `down -v` só reata o
-            # usuário ao `sub` novo, em vez de estourar na constraint única.
-            if existente.keycloak_id != keycloak_id:
-                print(f"keycloak_id mudou: {existente.keycloak_id} -> {keycloak_id}")
-                existente.keycloak_id = keycloak_id
-                await session.commit()
+async def _ensure_pessoa(
+    session: AsyncSession, pessoa: PessoaDeTeste, keycloak_id: uuid.UUID
+) -> None:
+    """Participante, vínculo e acesso da pessoa, o que faltar."""
+    users = UserRepository(session)
+    links = LinkRepository(session)
 
-            print(f"{EMAIL} já estava no banco, com o vínculo {existente.link_id}.")
-            return
+    await _ensure_participant(ParticipantRepository(session), pessoa)
+    existente = await users.get_user_by_email(pessoa.email)
 
-        link = await links.insert(_new_link())
+    if existente is None:
+        link = await links.insert(_new_link(pessoa))
         await users.create(
             User(
                 keycloak_id=keycloak_id,
-                name=NAME,
-                email=EMAIL,
+                name=pessoa.name,
+                email=pessoa.email,
                 status=RecordStatus.ACTIVE,
                 link_id=link.id,
             )
         )
-        await session.commit()
-        print(
-            f"{EMAIL} criado, keycloak_id={keycloak_id}, "
-            f"vínculo {link.id} ({LINK_ROLE.value})."
+        print(f"{pessoa.email} criado, vínculo {link.id} ({pessoa.role.value}).")
+        return
+
+    # Com `user.link_id` NOT NULL o vínculo sempre existe — mas num banco ainda em
+    # `87beb54d929a`, que é onde a revisão `28e9a13197f4` para, o usuário pode estar
+    # sem ele. O seed não liga usuário a vínculo, então falha em vez de dizer que
+    # está tudo certo.
+    vinculo = await links.get_by_id(existente.link_id)
+    if vinculo is None:
+        raise SeedError(
+            f"{pessoa.email} está no banco sem vínculo: o schema ainda é o de antes "
+            "da CREED-32/task 6. Rode `alembic upgrade head`, siga a mensagem dela e "
+            "depois rode este seed de novo."
         )
 
+    # Idempotente: rodar de novo depois de um `down -v` só reata o usuário ao `sub`
+    # novo, em vez de estourar na constraint única.
+    if existente.keycloak_id != keycloak_id:
+        print(f"keycloak_id mudou: {existente.keycloak_id} -> {keycloak_id}")
+        existente.keycloak_id = keycloak_id
 
-async def _ensure_participant(participants: ParticipantRepository) -> bool:
-    """Cria o participante de dev se ele ainda não existe. Diz se criou."""
-    if await participants.get_by_id(PARTICIPANT_ID) is not None:
+    # Bancos semeados antes tinham a admin na organização de dev, junto com o
+    # formulário de demonstração. Ela muda para a da CREED, como em produção.
+    if vinculo.organization_id != pessoa.organization_id:
+        print(
+            f"{pessoa.email}: vínculo {vinculo.id} mudou de organização, "
+            f"{vinculo.organization_id} -> {pessoa.organization_id}."
+        )
+        vinculo.organization_id = pessoa.organization_id
+
+    print(f"{pessoa.email} já estava no banco, com o vínculo {vinculo.id}.")
+
+
+async def _ensure_participant(
+    participants: ParticipantRepository, pessoa: PessoaDeTeste
+) -> bool:
+    """Cria o participante da pessoa se ele ainda não existe. Diz se criou."""
+    if await participants.get_by_id(pessoa.participant_id) is not None:
         return False
 
     await participants.create(
-        Participant(id=PARTICIPANT_ID, name=NAME, status=RecordStatus.ACTIVE)
+        Participant(
+            id=pessoa.participant_id, name=pessoa.name, status=RecordStatus.ACTIVE
+        )
     )
-    print(f"participante {PARTICIPANT_ID} criado.")
+    print(f"participante {pessoa.participant_id} criado.")
     return True
 
 
 async def _ensure_organization(
-    session: AsyncSession, organizations: OrganizationRepository
+    session: AsyncSession,
+    organizations: OrganizationRepository,
+    organizacao: OrganizacaoDeTeste,
 ) -> bool:
-    """Cria a organização de dev e o documento dela, o que faltar. Diz se criou.
+    """Cria a organização e o documento dela, o que faltar. Diz se criou.
 
     O documento vai direto pela sessão, sem repository: `documents` não tem `create`
     porque nenhuma rota cria documento (P-022), e o seed é o único que precisa.
     """
     criou = False
 
-    if await session.get(Document, ORGANIZATION_DOCUMENT_ID) is None:
+    if await session.get(Document, organizacao.document_id) is None:
         session.add(
             Document(
-                id=ORGANIZATION_DOCUMENT_ID,
+                id=organizacao.document_id,
                 type=DocType.OTHER,
-                value=ORGANIZATION_DOCUMENT_VALUE,
+                value=organizacao.document_value,
             )
         )
         await session.flush()
         criou = True
 
-    if await organizations.get_by_id(ORGANIZATION_ID) is None:
+    if await organizations.get_by_id(organizacao.id) is None:
         await organizations.create(
             Organization(
-                id=ORGANIZATION_ID,
-                name=ORGANIZATION_NAME,
-                address=ORGANIZATION_ADDRESS,
-                document_id=ORGANIZATION_DOCUMENT_ID,
+                id=organizacao.id,
+                name=organizacao.name,
+                address=organizacao.address,
+                document_id=organizacao.document_id,
                 status=OrganizationStatus.ACTIVE,
             )
         )
         criou = True
 
     situacao = "criada" if criou else "já estava no banco"
-    print(f"organização {ORGANIZATION_ID} {situacao}.")
+    print(f"organização {organizacao.name} ({organizacao.id}) {situacao}.")
     return criou
 
 
-async def _ensure_demo_form(forms: FormRepository) -> bool:
-    """Cria o formulário de demonstração, se faltar. Diz se criou.
+async def _remove_old_demo_form(session: AsyncSession) -> bool:
+    """Apaga o formulário de demonstração antigo e as respostas dele. Diz se apagou.
 
-    As perguntas são as do instrumento CREED, para onde o formulário aponta.
+    Só respostas de teste do ambiente local: o formulário nunca existiu fora dele.
     """
-    criou = False
+    if await session.get(Form, OLD_DEMO_FORM_ID) is None:
+        return False
 
-    form = await forms.get_by_id(DEMO_FORM_ID)
-
-    if form is None:
-        await forms.create(
-            Form(
-                id=DEMO_FORM_ID,
-                name=DEMO_FORM_NAME,
-                organization_id=ORGANIZATION_ID,
-                status=FormStatus.DRAFT,
-                opens_at=DEMO_OPENS_AT,
-                closes_at=DEMO_CLOSES_AT,
-            )
-        )
-        criou = True
-    elif form.opens_at is None or form.closes_at is None:
-        # Banco semeado antes de o período existir: quem grava é o commit do seed.
-        form.opens_at = DEMO_OPENS_AT
-        form.closes_at = DEMO_CLOSES_AT
-        criou = True
-
-    situacao = "criado" if criou else "já estava no banco"
-    print(f"formulário de demonstração {DEMO_FORM_ID} {situacao}.")
-    return criou
+    respostas = select(FormResponse.id).where(FormResponse.form_id == OLD_DEMO_FORM_ID)
+    await session.execute(delete(Answer).where(Answer.form_response_id.in_(respostas)))
+    await session.execute(
+        delete(FormResponse).where(FormResponse.form_id == OLD_DEMO_FORM_ID)
+    )
+    await session.execute(delete(Form).where(Form.id == OLD_DEMO_FORM_ID))
+    print(
+        f"formulário de demonstração antigo {OLD_DEMO_FORM_ID} apagado, com as "
+        "respostas de teste dele."
+    )
+    return True
 
 
-def _new_link() -> Link:
+def _new_link(pessoa: PessoaDeTeste) -> Link:
     return Link(
-        participant_id=PARTICIPANT_ID,
-        organization_id=ORGANIZATION_ID,
-        type=LinkType.EMPREGO,
-        role=LINK_ROLE,
+        participant_id=pessoa.participant_id,
+        organization_id=pessoa.organization_id,
+        type=pessoa.type,
+        role=pessoa.role,
     )
 
 
