@@ -12,6 +12,7 @@ from app.domains.prismas.utils import (
     NeuroinnovationPrism,
     calculate_all_prisms,
     dimension_averages,
+    scale_to_100,
 )
 from app.shared.enums import Dimension, Prisma
 from app.shared.exceptions import ForbiddenError, NotFoundError, ValidationError
@@ -98,8 +99,7 @@ class PrismaService:
         for neuro_prism, val in raw_prisms.items():
             prisma_enum = PRISMA_MAP[neuro_prism]
             scores[prisma_enum.value] = round(val, 2)
-            # Escala 0 a 100 baseada na pontuação de 1 a 5
-            scores_100[prisma_enum.value] = round((val / 5.0) * 100.0, 1)
+            scores_100[prisma_enum.value] = round(scale_to_100(val), 1)
 
         dim_scores: dict[str, float] = {
             dim.value: round(val, 2) for dim, val in dim_averages.items()
@@ -113,3 +113,22 @@ class PrismaService:
             scores_100=scores_100,
             dimensions=dim_scores,
         )
+
+    def scores_from_dimension_averages(
+        self, averages: dict[Dimension, float]
+    ) -> tuple[dict[Prisma, float], dict[Dimension, float]]:
+        """Os 5 prismas e as 7 dimensões de uma pessoa, na escala 0 a 100.
+
+        Recebe as médias de 1 a 5 de cada dimensão, já calculadas no banco. É o que
+        o domínio dashboards usa: ele agrega as respostas de todas as pessoas numa
+        consulta só e chama este método uma vez por pessoa. Sem arredondar: quem
+        mostra arredonda, depois de tirar a média do grupo.
+        """
+        prismas = {
+            PRISMA_MAP[prism]: scale_to_100(value)
+            for prism, value in calculate_all_prisms(averages).items()
+        }
+        dimensions = {
+            dimension: scale_to_100(value) for dimension, value in averages.items()
+        }
+        return prismas, dimensions
