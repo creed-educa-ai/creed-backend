@@ -33,6 +33,15 @@ PRISM_COMPOSITION: dict[NeuroinnovationPrism, tuple[Dimension, ...]] = {
 _ALL_DIMENSIONS = tuple(Dimension)
 
 
+def scale_to_100(value: float) -> float:
+    """Leva uma média de 1 a 5 para a escala 0 a 100 das telas: 1 é 0, 5 é 100.
+
+    Fórmula decidida em 2026-11-13 (tarefa dashboard-integracao): com `valor ÷ 5`,
+    ninguém ficava abaixo de 20, e o meio da escala (3) aparecia como 60.
+    """
+    return (value - 1) / 4 * 100
+
+
 def dimension_averages(
     answers: Iterable[tuple[Dimension, int | float]],
 ) -> dict[Dimension, float]:
