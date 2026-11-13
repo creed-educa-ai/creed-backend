@@ -20,7 +20,6 @@ from app.domains.organizacoes.dependencies import (
     ServiceDep as OrganizationServiceDep,
 )
 from app.domains.participants.dependencies import ServiceDep as ParticipantServiceDep
-from app.domains.questions.dependencies import ServiceDep as QuestionServiceDep
 from app.domains.responses.dependencies import ServiceDep as FormResponseServiceDep
 from app.domains.users.repository import UserRepository
 from app.domains.users.service import (
@@ -52,7 +51,6 @@ def get_member_removal_service(
     users: Annotated[UserService, Depends(get_service)],
     links: LinkServiceDep,
     forms: FormServiceDep,
-    questions: QuestionServiceDep,
     responses: FormResponseServiceDep,
     insights: InsightServiceDep,
     dashboards: DashboardServiceDep,
@@ -63,7 +61,6 @@ def get_member_removal_service(
         users,
         links,
         forms,
-        questions,
         responses,
         insights,
         dashboards,
@@ -82,7 +79,6 @@ def get_organization_removal_service(
     organizations: OrganizationServiceDep,
     links: LinkServiceDep,
     forms: FormServiceDep,
-    questions: QuestionServiceDep,
     responses: FormResponseServiceDep,
     insights: InsightServiceDep,
     dashboards: DashboardServiceDep,
@@ -95,7 +91,6 @@ def get_organization_removal_service(
         organizations,
         links,
         forms,
-        questions,
         responses,
         insights,
         dashboards,

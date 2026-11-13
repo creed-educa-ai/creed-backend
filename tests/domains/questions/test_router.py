@@ -60,10 +60,11 @@ class _FakeQuestionService:
     coberta em tests/domains/questions/test_service.py; aqui o que se prova é
     só a tradução ConflictError -> 409, que é trabalho do router.
 
-    `formulario_inexistente=True` faz as duas rotas recusarem como o service real
-    recusa um formulário que não existe: `ValidationError` no cadastro e
-    `NotFoundError` na listagem. `proibido=True` faz as duas levantarem
-    `ForbiddenError`, como o service real faz para formulário de outra organização.
+    `inexistente=True` faz as duas rotas recusarem como o service real recusa o
+    que não existe: `ValidationError` para o instrumento no cadastro e
+    `NotFoundError` para o formulário na listagem. `proibido=True` faz a listagem
+    levantar `ForbiddenError`, como o service real faz para formulário de outra
+    organização. No duble, o instrumento do formulário tem o id do formulário.
     """
 
     def __init__(
@@ -71,33 +72,30 @@ class _FakeQuestionService:
         existentes: list[Question] | None = None,
         *,
         conflito: bool = False,
-        formulario_inexistente: bool = False,
+        inexistente: bool = False,
         proibido: bool = False,
     ) -> None:
         self.itens: list[Question] = list(existentes or [])
         self.conflito = conflito
-        self.formulario_inexistente = formulario_inexistente
+        self.inexistente = inexistente
         self.proibido = proibido
         self.quem_pediu: tuple[str, uuid.UUID] | None = None
+        self.criada: QuestionCreate | None = None
         self.idioma_pedido: QuestionLang | str | None = "nao chamado"
 
-    async def create(
-        self, request: QuestionCreate, *, role: str, organization_id: uuid.UUID
-    ) -> Question:
-        self.quem_pediu = (role, organization_id)
-        if self.proibido:
-            raise ForbiddenError("Sem acesso a formulário de outra organização")
-        if self.formulario_inexistente:
-            raise ValidationError(f"Formulário {request.form_id} não encontrado")
+    async def create(self, request: QuestionCreate) -> Question:
+        self.criada = request
+        if self.inexistente:
+            raise ValidationError(f"Instrumento {request.instrument_id} não encontrado")
         if self.conflito:
             raise ConflictError(
                 f"Já existe pergunta na posição {request.order_index} "
-                f"do formulário {request.form_id}"
+                f"do instrumento {request.instrument_id}"
             )
 
         question = Question(
             id=uuid.uuid4(),
-            form_id=request.form_id,
+            instrument_id=request.instrument_id,
             text=request.text,
             order_index=request.order_index,
             type=request.type,
@@ -123,12 +121,12 @@ class _FakeQuestionService:
         self.idioma_pedido = lang
         if self.proibido:
             raise ForbiddenError("Sem acesso a formulário de outra organização")
-        if self.formulario_inexistente:
+        if self.inexistente:
             raise NotFoundError(f"Formulário {form_id} não encontrado")
         resultado = [
             q
             for q in self.itens
-            if q.form_id == form_id and (section is None or q.section == section)
+            if q.instrument_id == form_id and (section is None or q.section == section)
         ]
         return sorted(resultado, key=lambda q: q.order_index)
 
@@ -184,11 +182,11 @@ def _use_fake_service(app: FastAPI, fake_service: _FakeQuestionService) -> None:
 
 def _payload(**campos: object) -> dict[str, object]:
     padrao: dict[str, object] = {
-        "form_id": str(uuid.uuid4()),
+        "instrument_id": str(uuid.uuid4()),
         "text": "Como voce avalia sua adaptabilidade?",
         "order_index": 0,
         "type": "objective",
-        "section": "assessment",
+        "section": "S4",
     }
     return {**padrao, **campos}
 
@@ -205,7 +203,7 @@ class TestCriarPergunta:
         body = response.json()
         assert set(body) == {
             "id",
-            "form_id",
+            "instrument_id",
             "text",
             "order_index",
             "type",
@@ -215,7 +213,7 @@ class TestCriarPergunta:
             "prisma",
             "created_at",
         }
-        assert body["section"] == "assessment"
+        assert body["section"] == "S4"
         assert body["dimensao"] is None
 
     def test_com_dimensao_valida_devolve_a_dimensao(
@@ -243,17 +241,17 @@ class TestCriarPergunta:
 
         assert response.status_code == 409
 
-    def test_com_formulario_inexistente_devolve_422_com_detail_texto(
+    def test_com_instrumento_inexistente_devolve_422_com_detail_texto(
         self, app: FastAPI, client: TestClient
     ) -> None:
-        _use_fake_service(app, _FakeQuestionService(formulario_inexistente=True))
+        _use_fake_service(app, _FakeQuestionService(inexistente=True))
         payload = _payload()
 
         response = client.post("/questions", json=payload)
 
         assert response.status_code == 422
         assert response.json()["detail"] == (
-            f"Formulário {payload['form_id']} não encontrado"
+            f"Instrumento {payload['instrument_id']} não encontrado"
         )
 
     def test_com_texto_vazio_devolve_422(self, app: FastAPI, client: TestClient) -> None:
@@ -291,12 +289,12 @@ class TestCriarPergunta:
 
         assert response.status_code == 422
 
-    def test_com_form_id_que_nao_e_uuid_devolve_422(
+    def test_com_instrument_id_que_nao_e_uuid_devolve_422(
         self, app: FastAPI, client: TestClient
     ) -> None:
         _use_fake_service(app, _FakeQuestionService())
 
-        response = client.post("/questions", json=_payload(form_id="nao-e-uuid"))
+        response = client.post("/questions", json=_payload(instrument_id="nao-e-uuid"))
 
         assert response.status_code == 422
 
@@ -335,11 +333,11 @@ class TestListarPerguntasDoFormulario:
         form_id = uuid.uuid4()
         segunda = Question(
             id=uuid.uuid4(),
-            form_id=form_id,
+            instrument_id=form_id,
             text="Segunda",
             order_index=1,
             type=QuestionType.DESCRIPTIVE,
-            section=QuestionSection.PROFILE,
+            section=QuestionSection.S2,
             required=True,
             dimensao=None,
             prisma=None,
@@ -347,11 +345,11 @@ class TestListarPerguntasDoFormulario:
         )
         primeira = Question(
             id=uuid.uuid4(),
-            form_id=form_id,
+            instrument_id=form_id,
             text="Primeira",
             order_index=0,
             type=QuestionType.OBJECTIVE,
-            section=QuestionSection.ASSESSMENT,
+            section=QuestionSection.S4,
             required=True,
             dimensao=None,
             prisma=None,
@@ -378,7 +376,7 @@ class TestListarPerguntasDoFormulario:
     def test_formulario_inexistente_devolve_404(
         self, app: FastAPI, client: TestClient
     ) -> None:
-        _use_fake_service(app, _FakeQuestionService(formulario_inexistente=True))
+        _use_fake_service(app, _FakeQuestionService(inexistente=True))
 
         response = client.get(f"/forms/{uuid.uuid4()}/questions")
 
@@ -390,11 +388,11 @@ class TestListarPerguntasDoFormulario:
         form_id = uuid.uuid4()
         assessment_2 = Question(
             id=uuid.uuid4(),
-            form_id=form_id,
+            instrument_id=form_id,
             text="Assessment 2",
             order_index=2,
             type=QuestionType.OBJECTIVE,
-            section=QuestionSection.ASSESSMENT,
+            section=QuestionSection.S4,
             required=True,
             dimensao=None,
             prisma=None,
@@ -402,11 +400,11 @@ class TestListarPerguntasDoFormulario:
         )
         profile_1 = Question(
             id=uuid.uuid4(),
-            form_id=form_id,
+            instrument_id=form_id,
             text="Profile 1",
             order_index=1,
             type=QuestionType.DESCRIPTIVE,
-            section=QuestionSection.PROFILE,
+            section=QuestionSection.S2,
             required=True,
             dimensao=None,
             prisma=None,
@@ -414,11 +412,11 @@ class TestListarPerguntasDoFormulario:
         )
         assessment_0 = Question(
             id=uuid.uuid4(),
-            form_id=form_id,
+            instrument_id=form_id,
             text="Assessment 0",
             order_index=0,
             type=QuestionType.OBJECTIVE,
-            section=QuestionSection.ASSESSMENT,
+            section=QuestionSection.S4,
             required=True,
             dimensao=None,
             prisma=None,
@@ -428,7 +426,7 @@ class TestListarPerguntasDoFormulario:
             app, _FakeQuestionService([assessment_2, profile_1, assessment_0])
         )
 
-        response = client.get(f"/forms/{form_id}/questions?section=assessment")
+        response = client.get(f"/forms/{form_id}/questions?section=S4")
 
         assert response.status_code == 200
         textos = [item["text"] for item in response.json()]
@@ -462,7 +460,20 @@ class TestGuarda:
         response = client.post("/questions", json=_payload())
 
         assert response.status_code == 403
-        assert service.quem_pediu is None
+        assert service.criada is None
+
+    def test_gestor_criando_devolve_403_pela_guarda(
+        self, app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A pergunta é do instrumento, o mesmo para toda organização: só o admin."""
+        autenticar_como(app, monkeypatch, "gestor")
+        service = _FakeQuestionService()
+        _use_fake_service(app, service)
+
+        response = client.post("/questions", json=_payload())
+
+        assert response.status_code == 403
+        assert service.criada is None
 
     def test_respondente_listando_passa_papel_e_organizacao_ao_service(
         self, app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
@@ -476,13 +487,12 @@ class TestGuarda:
         assert response.status_code == 200
         assert service.quem_pediu == ("respondente", ORGANIZATION_ID)
 
-    def test_formulario_de_outra_organizacao_devolve_403_nas_duas_rotas(
+    def test_formulario_de_outra_organizacao_devolve_403_na_listagem(
         self, app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         autenticar_como(app, monkeypatch, "gestor")
         _use_fake_service(app, _FakeQuestionService(proibido=True))
 
-        assert client.post("/questions", json=_payload()).status_code == 403
         assert client.get(f"/forms/{uuid.uuid4()}/questions").status_code == 403
 
 
@@ -491,11 +501,11 @@ def _pergunta_com_alternativas(form_id: uuid.UUID) -> Question:
     question_id = uuid.uuid4()
     return Question(
         id=question_id,
-        form_id=form_id,
+        instrument_id=form_id,
         text="Você se adapta bem?",
         order_index=0,
         type=QuestionType.OBJECTIVE,
-        section=QuestionSection.ASSESSMENT,
+        section=QuestionSection.S4,
         required=True,
         dimensao=None,
         prisma=None,
@@ -597,22 +607,19 @@ OPTION_ID = uuid.UUID("00000000-0000-0000-0000-000000000003")
 
 class _FakeTranslationService:
     """Duble da service de tradução de pergunta: devolve a tradução ou levanta o
-    erro configurado. A regra (idioma repetido, acesso) é provada em test_service.py.
+    erro configurado. A regra (idioma repetido) é provada em test_service.py.
     """
 
     def __init__(self, erro: Exception | None = None) -> None:
         self.erro = erro
-        self.pedido: tuple[uuid.UUID, str, uuid.UUID] | None = None
+        self.pedido: uuid.UUID | None = None
 
     async def create(
         self,
         question_id: uuid.UUID,
         request: QuestionTranslationCreate,
-        *,
-        role: str,
-        organization_id: uuid.UUID,
     ) -> QuestionTranslation:
-        self.pedido = (question_id, role, organization_id)
+        self.pedido = question_id
         if self.erro is not None:
             raise self.erro
         return QuestionTranslation(
@@ -629,17 +636,14 @@ class _FakeOptionTranslationService:
 
     def __init__(self, erro: Exception | None = None) -> None:
         self.erro = erro
-        self.pedido: tuple[uuid.UUID, str, uuid.UUID] | None = None
+        self.pedido: uuid.UUID | None = None
 
     async def create(
         self,
         option_id: uuid.UUID,
         request: QuestionOptionTranslationCreate,
-        *,
-        role: str,
-        organization_id: uuid.UUID,
     ) -> QuestionOptionTranslation:
-        self.pedido = (option_id, role, organization_id)
+        self.pedido = option_id
         if self.erro is not None:
             raise self.erro
         return QuestionOptionTranslation(
@@ -680,7 +684,7 @@ class TestTraduzirPergunta:
         body = response.json()
         assert set(body) == {"id", "question_id", "lang", "text", "created_at"}
         assert (body["question_id"], body["lang"]) == (str(QUESTION_ID), "en")
-        assert service.pedido == (QUESTION_ID, "admin", ORGANIZATION_ID)
+        assert service.pedido == QUESTION_ID
 
     def test_pergunta_inexistente_devolve_404(
         self, app: FastAPI, client: TestClient
@@ -706,20 +710,17 @@ class TestTraduzirPergunta:
 
         assert response.status_code == 409
 
-    def test_pergunta_de_outra_organizacao_devolve_403(
+    def test_gestor_devolve_403_pela_guarda(
         self, app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         autenticar_como(app, monkeypatch, "gestor")
-        _use_fake_translation_service(
-            app,
-            _FakeTranslationService(
-                ForbiddenError("Sem acesso a formulário de outra organização")
-            ),
-        )
+        service = _FakeTranslationService()
+        _use_fake_translation_service(app, service)
 
         response = client.post(_URL_TRADUCAO_PERGUNTA, json=_TRADUCAO_PERGUNTA)
 
         assert response.status_code == 403
+        assert service.pedido is None
 
     def test_com_lang_pt_devolve_422_sem_chamar_o_service(
         self, app: FastAPI, client: TestClient
@@ -761,7 +762,7 @@ class TestTraduzirAlternativa:
         body = response.json()
         assert set(body) == {"id", "option_id", "lang", "label", "created_at"}
         assert (body["option_id"], body["lang"]) == (str(OPTION_ID), "es")
-        assert service.pedido == (OPTION_ID, "admin", ORGANIZATION_ID)
+        assert service.pedido == OPTION_ID
 
     def test_alternativa_inexistente_devolve_404(
         self, app: FastAPI, client: TestClient
@@ -787,20 +788,17 @@ class TestTraduzirAlternativa:
 
         assert response.status_code == 409
 
-    def test_alternativa_de_outra_organizacao_devolve_403(
+    def test_gestor_devolve_403_pela_guarda(
         self, app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         autenticar_como(app, monkeypatch, "gestor")
-        _use_fake_option_translation_service(
-            app,
-            _FakeOptionTranslationService(
-                ForbiddenError("Sem acesso a formulário de outra organização")
-            ),
-        )
+        service = _FakeOptionTranslationService()
+        _use_fake_option_translation_service(app, service)
 
         response = client.post(_URL_TRADUCAO_ALTERNATIVA, json=_TRADUCAO_ALTERNATIVA)
 
         assert response.status_code == 403
+        assert service.pedido is None
 
     def test_com_lang_pt_devolve_422_sem_chamar_o_service(
         self, app: FastAPI, client: TestClient

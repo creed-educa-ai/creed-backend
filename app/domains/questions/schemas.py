@@ -67,9 +67,9 @@ class QuestionLangQuery(enum.Enum):
 
 
 class QuestionBase(BaseModel):
-    form_id: uuid.UUID = Field(
-        description="Identificador do formulário ao qual a pergunta pertence.",
-        examples=["00000000-0000-0000-0000-000000000001"],
+    instrument_id: uuid.UUID = Field(
+        description="Identificador do instrumento ao qual a pergunta pertence.",
+        examples=["00000000-0000-0000-0000-00000000c4ed"],
     )
     text: str = Field(
         min_length=1,
@@ -78,12 +78,12 @@ class QuestionBase(BaseModel):
     )
     order_index: int = Field(
         ge=0,
-        description="Posição da pergunta no formulário, começando em 0.",
+        description="Posição da pergunta no instrumento, começando em 0.",
         examples=[0],
     )
     type: QuestionType = Field(description="Tipo de resposta esperado pela pergunta.")
     section: QuestionSection = Field(
-        description="Bloco do formulário em que a pergunta é desenhada na tela."
+        description="Seção do formulário original; o front desenha uma aba por seção."
     )
 
 
@@ -103,11 +103,11 @@ class QuestionCreate(QuestionBase):
         json_schema_extra={
             "examples": [
                 {
-                    "form_id": "00000000-0000-0000-0000-000000000001",
+                    "instrument_id": "00000000-0000-0000-0000-00000000c4ed",
                     "text": "Como você avalia sua adaptabilidade?",
                     "order_index": 0,
                     "type": "objective",
-                    "section": "assessment",
+                    "section": "S2",
                     "dimensao": "S2",
                 }
             ]
@@ -140,11 +140,11 @@ class QuestionResponse(QuestionBase):
             "examples": [
                 {
                     "id": "7ae21494-975f-46ab-97cc-4c42b5ae7aaa",
-                    "form_id": "00000000-0000-0000-0000-000000000001",
+                    "instrument_id": "00000000-0000-0000-0000-00000000c4ed",
                     "text": "Como você avalia sua adaptabilidade?",
                     "order_index": 0,
                     "type": "objective",
-                    "section": "assessment",
+                    "section": "S2",
                     "required": True,
                     "dimensao": "S2",
                     "prisma": "seguranca_psicologica",
@@ -327,11 +327,11 @@ class QuestionWithOptionsResponse(QuestionResponse):
             "examples": [
                 {
                     "id": "7ae21494-975f-46ab-97cc-4c42b5ae7aaa",
-                    "form_id": "00000000-0000-0000-0000-000000000001",
+                    "instrument_id": "00000000-0000-0000-0000-00000000c4ed",
                     "text": "Como você avalia sua adaptabilidade?",
                     "order_index": 0,
                     "type": "objective",
-                    "section": "assessment",
+                    "section": "S2",
                     "required": True,
                     "dimensao": "S2",
                     "prisma": "seguranca_psicologica",

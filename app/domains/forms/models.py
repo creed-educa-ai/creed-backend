@@ -13,6 +13,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
+from app.shared.instrument import CREED_INSTRUMENT_ID
 
 
 class FormStatus(enum.Enum):
@@ -60,6 +61,16 @@ class Form(Base):
         ForeignKey("links.id", name="fk_form_link_id_links"),
         nullable=True,
         index=True,
+    )
+
+    # As perguntas que o período aplica. Todo período nasce com o instrumento CREED,
+    # o único que existe; ninguém escolhe instrumento ao abrir período.
+    instrument_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("instruments.id", name="fk_form_instrument_id_instruments"),
+        nullable=False,
+        index=True,
+        default=CREED_INSTRUMENT_ID,
     )
 
     created_at: Mapped[datetime] = mapped_column(

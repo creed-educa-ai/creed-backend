@@ -51,9 +51,8 @@ def get_translation_service(
         QuestionTranslationRepository, Depends(get_translation_repository)
     ],
     questions: Annotated[QuestionService, Depends(get_service)],
-    forms: FormServiceDep,
 ) -> QuestionTranslationService:
-    return QuestionTranslationService(repository, questions, forms)
+    return QuestionTranslationService(repository, questions)
 
 
 QuestionTranslationServiceDep = Annotated[
@@ -70,9 +69,8 @@ def get_option_repository(
 def get_option_service(
     repository: Annotated[QuestionOptionRepository, Depends(get_option_repository)],
     questions: Annotated[QuestionService, Depends(get_service)],
-    forms: FormServiceDep,
 ) -> QuestionOptionService:
-    return QuestionOptionService(repository, questions, forms)
+    return QuestionOptionService(repository, questions)
 
 
 OptionServiceDep = Annotated[QuestionOptionService, Depends(get_option_service)]
@@ -90,10 +88,8 @@ def get_option_translation_service(
         Depends(get_option_translation_repository),
     ],
     options: Annotated[QuestionOptionService, Depends(get_option_service)],
-    questions: Annotated[QuestionService, Depends(get_service)],
-    forms: FormServiceDep,
 ) -> QuestionOptionTranslationService:
-    return QuestionOptionTranslationService(repository, options, questions, forms)
+    return QuestionOptionTranslationService(repository, options)
 
 
 QuestionOptionTranslationServiceDep = Annotated[

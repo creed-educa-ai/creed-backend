@@ -48,7 +48,6 @@ class World:
     )
     logins: dict[uuid.UUID, uuid.UUID] = field(default_factory=dict)  # vínculo -> kc
     forms: dict[uuid.UUID, uuid.UUID] = field(default_factory=dict)  # -> organização
-    questions: dict[uuid.UUID, uuid.UUID] = field(default_factory=dict)  # -> form
     # resposta -> formulário; as alternativas marcadas (`answer`) saem com ela
     responses: dict[uuid.UUID, uuid.UUID] = field(default_factory=dict)
     insights: dict[uuid.UUID, uuid.UUID] = field(default_factory=dict)  # -> resposta
@@ -151,24 +150,9 @@ class FakeFormService:
     async def delete_organization_forms(self, form_ids: list[uuid.UUID]) -> None:
         w = self.world
         for form_id in form_ids:
-            w.refuse_if(form_id in w.questions.values(), "formulário (pergunta)")
             w.refuse_if(form_id in w.responses.values(), "formulário (resposta)")
             del w.forms[form_id]
         w.log.append("forms.delete_organization_forms")
-
-
-class FakeQuestionService:
-    def __init__(self, world: World) -> None:
-        self.world = world
-
-    async def delete_for_forms(self, form_ids: list[uuid.UUID]) -> None:
-        w = self.world
-        for question_id, form_id in list(w.questions.items()):
-            if form_id in form_ids:
-                # As alternativas marcadas (`answer`) apontam para a pergunta.
-                w.refuse_if(form_id in w.responses.values(), "pergunta (resposta)")
-                del w.questions[question_id]
-        w.log.append("questions.delete_for_forms")
 
 
 class FakeFormResponseService:
@@ -281,7 +265,6 @@ def build(world: World) -> Setup:
         organizations,  # type: ignore[arg-type]
         FakeLinkService(world),  # type: ignore[arg-type]
         FakeFormService(world),  # type: ignore[arg-type]
-        FakeQuestionService(world),  # type: ignore[arg-type]
         FakeFormResponseService(world),  # type: ignore[arg-type]
         FakeInsightService(world),  # type: ignore[arg-type]
         dashboards,  # type: ignore[arg-type]
@@ -340,11 +323,10 @@ def add_member(
 
 
 def add_answered_form(world: World, organization: Organization) -> uuid.UUID:
-    """Um questionário "para todos" com uma pergunta e uma resposta que ainda
+    """Um questionário "para todos" com uma resposta que ainda
     aponta para ele, com insight e dashboard. Devolve a resposta."""
     form_id = uuid.uuid4()
     world.forms[form_id] = organization.id
-    world.questions[uuid.uuid4()] = form_id
     response_id = uuid.uuid4()
     world.responses[response_id] = form_id
     world.insights[uuid.uuid4()] = response_id
@@ -375,7 +357,6 @@ class TestRemoveOrganization:
         assert world.links == {}
         assert world.departments == {}
         assert world.forms == {}
-        assert world.questions == {}
         assert world.responses == {}
         assert world.insights == {}
         assert world.dashboards == {}
@@ -402,7 +383,6 @@ class TestRemoveOrganization:
             "insights.delete_for_form_responses",
             "dashboards.delete_for_member_removal",
             "responses.delete_with_answers",
-            "questions.delete_for_forms",
             "forms.delete_organization_forms",
             "departments.delete_for_organization",
             "organizations.delete_organization",

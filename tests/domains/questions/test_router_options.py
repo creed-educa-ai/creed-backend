@@ -5,7 +5,7 @@ verdade (so o `validate_token` e o `UserService` sao dubles) e o service de
 alternativas e trocado por um duble em memoria.
 
 O duble nao reimplementa regra: so devolve ou levanta o que o teste pedir. A regra
-(pergunta descritiva, posicao ocupada, acesso) e provada em test_service.py; aqui o
+(pergunta descritiva, posicao ocupada) e provada em test_service.py; aqui o
 que se prova e a traducao de cada erro em codigo HTTP, que e trabalho do router.
 """
 
@@ -25,7 +25,6 @@ from app.domains.users.dependencies import get_service as get_user_service
 from app.domains.users.service import UserAccess
 from app.shared.exceptions import (
     ConflictError,
-    ForbiddenError,
     NotFoundError,
     ValidationError,
 )
@@ -40,17 +39,12 @@ class _FakeQuestionOptionService:
 
     def __init__(self, error: Exception | None = None) -> None:
         self.error = error
-        self.asked: tuple[uuid.UUID, str, uuid.UUID] | None = None
+        self.asked: uuid.UUID | None = None
 
     async def create(
-        self,
-        question_id: uuid.UUID,
-        request: QuestionOptionCreate,
-        *,
-        role: str,
-        organization_id: uuid.UUID,
+        self, question_id: uuid.UUID, request: QuestionOptionCreate
     ) -> QuestionOption:
-        self.asked = (question_id, role, organization_id)
+        self.asked = question_id
         if self.error is not None:
             raise self.error
         return QuestionOption(
@@ -142,7 +136,7 @@ class TestCreateQuestionOption:
         assert body["question_id"] == str(QUESTION_ID)
         assert (body["label"], body["value"], body["order_index"]) == ("Sim", "sim", 0)
 
-    def test_passes_question_role_and_organization_to_the_service(
+    def test_passes_the_question_to_the_service(
         self, app: FastAPI, client: TestClient
     ) -> None:
         service = _FakeQuestionOptionService()
@@ -150,7 +144,7 @@ class TestCreateQuestionOption:
 
         client.post(_url(), json=_payload())
 
-        assert service.asked == (QUESTION_ID, "admin", ORGANIZATION_ID)
+        assert service.asked == QUESTION_ID
 
     def test_unknown_question_returns_404(self, app: FastAPI, client: TestClient) -> None:
         message = f"Pergunta {QUESTION_ID} não encontrada"
@@ -160,20 +154,6 @@ class TestCreateQuestionOption:
 
         assert response.status_code == 404
         assert response.json()["detail"] == message
-
-    def test_question_from_another_organization_returns_403(
-        self, app: FastAPI, client: TestClient
-    ) -> None:
-        _use_fake_service(
-            app,
-            _FakeQuestionOptionService(
-                ForbiddenError("Sem acesso a formulário de outra organização")
-            ),
-        )
-
-        response = client.post(_url(), json=_payload())
-
-        assert response.status_code == 403
 
     def test_descriptive_question_returns_422_with_text_detail(
         self, app: FastAPI, client: TestClient
@@ -256,14 +236,15 @@ class TestGuard:
         assert response.status_code == 403
         assert service.asked is None
 
-    def test_manager_is_allowed_and_the_service_receives_the_role(
+    def test_manager_returns_403_from_the_guard_without_calling_the_service(
         self, app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """A pergunta e do instrumento, o mesmo para toda organizacao: so o admin."""
         autenticar_como(app, monkeypatch, "gestor")
         service = _FakeQuestionOptionService()
         _use_fake_service(app, service)
 
         response = client.post(_url(), json=_payload())
 
-        assert response.status_code == 201
-        assert service.asked == (QUESTION_ID, "gestor", ORGANIZATION_ID)
+        assert response.status_code == 403
+        assert service.asked is None
