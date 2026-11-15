@@ -162,6 +162,7 @@ def _resultado_de_uma_linha(linha: tuple[Any, ...] | None) -> _SessaoFalsa:
         sessao.executados.append(query)
         resultado = MagicMock()
         resultado.one_or_none.return_value = linha
+        resultado.first.return_value = linha
         return resultado
 
     sessao.execute = execute  # type: ignore[method-assign]
@@ -210,3 +211,37 @@ async def test_get_response_insight_mostra_o_estado_que_a_tela_conhece(
     insight = await repository.get_response_insight(uuid.uuid4(), uuid.uuid4())
 
     assert insight == InsightText(visto, conteudo, pronto_em)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("only_done", [True, False])
+async def test_get_latest_company_insight_le_o_ultimo_pedido_da_empresa_no_periodo(
+    only_done: bool,
+) -> None:
+    sessao = _resultado_de_uma_linha(None)
+    repository = DashboardRepository(sessao)  # type: ignore[arg-type]
+
+    resultado = await repository.get_latest_company_insight(
+        uuid.uuid4(), uuid.uuid4(), only_done=only_done
+    )
+
+    assert resultado is None
+    sql = _sql(sessao)
+    assert "insights.organization_id =" in sql
+    assert "insights.form_id =" in sql
+    # Só o da empresa: o individual tem resposta.
+    assert "insights.form_response_id IS NULL" in sql
+    assert "ORDER BY insights.created_at DESC" in sql
+    assert "LIMIT" in sql
+    assert ("insights.status =" in sql) is only_done
+
+
+async def test_get_latest_company_insight_traduz_o_estado() -> None:
+    repository = DashboardRepository(
+        _resultado_de_uma_linha((InsightStatus.DISPATCHED, None, None))  # type: ignore[arg-type]
+    )
+
+    insight = await repository.get_latest_company_insight(
+        uuid.uuid4(), uuid.uuid4(), only_done=False
+    )
+
+    assert insight == InsightText("pending", None, None)

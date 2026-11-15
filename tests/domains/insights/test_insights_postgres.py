@@ -31,7 +31,7 @@ from app.domains.dashboards.repository import DashboardRepository
 from app.domains.dashboards.service import DashboardService
 from app.domains.documents.models import Document
 from app.domains.forms.models import Form
-from app.domains.insights.models import Insight, InsightStatus
+from app.domains.insights.models import Insight, InsightPrisma, InsightStatus
 from app.domains.insights.repository import (
     DescriptiveAnswer,
     FormScope,
@@ -223,6 +223,37 @@ async def test_exclusao_de_membro_apaga_o_pedido(cenario: Cenario) -> None:
     async with cenario.sessions() as session:
         restantes = (await session.scalars(select(Insight.form_response_id))).all()
     assert restantes == [cenario.response_ids[1]]
+
+
+async def test_exclusao_de_empresa_apaga_so_os_insights_da_empresa(
+    cenario: Cenario,
+) -> None:
+    """A E-6 apaga os da empresa (sem resposta) dos dois períodos, com os prismas
+    associados. Os individuais saem com as respostas, por outro caminho."""
+    async with cenario.sessions.begin() as session:
+        da_empresa = [
+            um_insight(
+                cenario, form_index=0, status=InsightStatus.DONE, content=CONTEUDO
+            ),
+            um_insight(cenario, form_index=1),
+        ]
+        session.add_all([*da_empresa, um_insight(cenario, response_index=0)])
+        await session.flush()
+        # A associação aponta para o insight: o banco recusaria apagá-lo antes.
+        session.add(
+            InsightPrisma(
+                insight_id=da_empresa[0].id, prisma=Prisma.SEGURANCA_PSICOLOGICA
+            )
+        )
+
+    async with cenario.sessions.begin() as session:
+        await InsightRepository(session).delete_by_organization(cenario.organization_id)
+
+    async with cenario.sessions() as session:
+        restantes = (await session.scalars(select(Insight.form_response_id))).all()
+        associacoes = (await session.scalars(select(InsightPrisma.insight_id))).all()
+    assert restantes == [cenario.response_ids[0]]
+    assert associacoes == []
 
 
 # --- As restrições da tabela --------------------------------------------------

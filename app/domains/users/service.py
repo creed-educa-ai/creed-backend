@@ -488,8 +488,9 @@ class OrganizationRemovalService:
 
         1. cada membro, pelo `delete_member_data` da M-3, que devolve o login;
         2. os questionários que sobraram (os "para todos"): antes, as respostas que
-           ainda apontam para eles, com os insights e os dashboards delas (as
-           perguntas são do instrumento e ficam);
+           ainda apontam para eles, com os insights e os dashboards delas, e os
+           insights da empresa, que apontam para o questionário (as perguntas são do
+           instrumento e ficam);
         3. os setores, para onde os vínculos apontavam;
         4. a organização;
         5. o documento dela, que é apontado pela organização e só sai depois dela;
@@ -530,6 +531,7 @@ class OrganizationRemovalService:
         form_ids = await self.forms.list_organization_form_ids(organization_id)
         response_ids = await self.responses.list_ids_for_forms(form_ids)
         await self.insights.delete_for_form_responses(response_ids)
+        await self.insights.delete_for_organization(organization_id)
         # Sem login: os logins dos membros já saíram, com os dashboards deles.
         await self.dashboards.delete_for_member_removal(response_ids, None)
         await self.responses.delete_with_answers(response_ids)

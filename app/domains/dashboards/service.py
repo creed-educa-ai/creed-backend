@@ -486,6 +486,11 @@ class DashboardService:
         destaque, oportunidade = highest_and_lowest(current.prismas)
         mais_comum = _most_common(view_people, current)
         rounded = _rounded(current.prismas)
+        # Só a empresa inteira tem texto: o recorte por setor ou por pessoa fica em
+        # `none` (P-089), e a gestora nunca lê o insight individual (P-086).
+        insight = None
+        if department is None and member_id is None:
+            insight = await self._company_insight(org_id, shown.id)
 
         return CompanyDashboardRead(
             organization_name=await self._organization_name(org_id),
@@ -508,7 +513,7 @@ class DashboardService:
                 member_id,
                 departments,
             ),
-            creed_summary=_creed_summary(current),
+            creed_summary=_creed_summary(current, insight),
             department=department,
             member_id=member_id,
             departments=departments,
@@ -530,6 +535,21 @@ class DashboardService:
             ),
             alignment=None if member_id is not None else _alignment(view_people),
             department_matrix=self._department_matrix(all_departments, shown_people),
+        )
+
+    async def _company_insight(
+        self, organization_id: uuid.UUID, form_id: uuid.UUID
+    ) -> "InsightText | None":
+        """O insight que o dashboard da empresa mostra no período (P-089): o último
+        pronto, mesmo com um novo em preparo; sem nenhum pronto, o mais recente, para
+        a tela saber se está em preparo ou se falhou."""
+        done = await self.repository.get_latest_company_insight(
+            organization_id, form_id, only_done=True
+        )
+        if done is not None:
+            return done
+        return await self.repository.get_latest_company_insight(
+            organization_id, form_id, only_done=False
         )
 
     async def company_period_numbers(

@@ -236,6 +236,17 @@ async def test_resposta_que_ja_tem_insight_vira_conflict() -> None:
         await service.request_individual(uuid.uuid4())
 
 
+async def test_exclusao_de_empresa_apaga_os_insights_da_organizacao() -> None:
+    """A E-6 pede ao dono da tabela; a consulta roda em `test_insights_postgres.py`."""
+    organizacao = uuid.uuid4()
+    repository = AsyncMock(spec=InsightRepository)
+    service = InsightService(repository, AsyncMock(spec=PrismaService))
+
+    await service.delete_for_organization(organizacao)
+
+    repository.delete_by_organization.assert_awaited_once_with(organizacao)
+
+
 # --- InsightService: o pedido que vai ao N8N (CREED-803) ------------------------
 
 
