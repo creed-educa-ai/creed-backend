@@ -23,6 +23,12 @@ class N8NClient:
         # os ciclos e o fecha no desligamento. Nunca criado em nível de módulo.
         self.http = http
 
+    @property
+    def is_configured(self) -> bool:
+        """Se há esteira para onde mandar. No ambiente local não há: a URL é vazia
+        e o N8N existe só na AWS (adendo A7 do ADR-0010)."""
+        return bool(settings.N8N_WEBHOOK_URL)
+
     async def dispatch(self, payload: IndividualInsightRequest) -> None:
         """Entrega o pedido ao webhook. Qualquer `2xx` é sucesso.
 

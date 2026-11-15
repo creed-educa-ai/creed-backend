@@ -1,6 +1,12 @@
-"""Sessão SQLAlchemy 2.0 async e base declarativa (ADR-002, secao 2.3)."""
+"""Sessão SQLAlchemy 2.0 async e base declarativa (ADR-002, secao 2.3).
 
-from collections.abc import AsyncGenerator
+O commit do projeto inteiro mora neste arquivo, na `unit_of_work`: a requisição a
+usa pelo `get_db`, e o worker da esteira (ADR-0010) a abre direto, porque não
+atende requisição. `tests/test_arquitetura.py` reprova `.commit()` em outro lugar.
+"""
+
+from collections.abc import AsyncGenerator, AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Annotated
 
 from fastapi import Depends
@@ -35,8 +41,9 @@ class Base(DeclarativeBase):
     """
 
 
-async def get_db() -> AsyncGenerator[AsyncSession, None]:
-    """Sessão da requisição. Os domínios a recebem por `SessionDep`, não direto."""
+@asynccontextmanager
+async def unit_of_work() -> AsyncIterator[AsyncSession]:
+    """Uma sessão que grava tudo no fim, ou nada se algo falhar no meio."""
     async with AsyncSessionLocal() as session:
         try:
             yield session
@@ -44,6 +51,12 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
         except Exception:
             await session.rollback()
             raise
+
+
+async def get_db() -> AsyncGenerator[AsyncSession, None]:
+    """Sessão da requisição. Os domínios a recebem por `SessionDep`, não direto."""
+    async with unit_of_work() as session:
+        yield session
 
 
 # `scope="function"`: o que vem depois do `yield` (o commit) roda quando a rota

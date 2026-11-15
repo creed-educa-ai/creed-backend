@@ -3,11 +3,16 @@
 Esta camada não conhece HTTP nem detalhes de ORM.
 """
 
+import logging
 import uuid
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 
-from app.domains.insights.models import Insight, InsightPrisma
+from app.domains.insights.models import Insight, InsightPrisma, InsightStatus
 from app.domains.insights.repository import InsightPrismaRepository, InsightRepository
 from app.domains.prismas.service import PrismaService, highest_and_lowest
+from app.external_services.n8n.client import N8NClient
+from app.external_services.n8n.exceptions import N8NUnavailableError
 from app.external_services.n8n.schemas import (
     DimensionScores,
     IndividualInsightRequest,
@@ -16,7 +21,26 @@ from app.external_services.n8n.schemas import (
     PrismaScores,
 )
 from app.shared.enums import Prisma
-from app.shared.exceptions import ConflictError, NotFoundError
+from app.shared.exceptions import ConflictError, NotFoundError, ValidationError
+
+logger = logging.getLogger(__name__)
+
+# A espera dobra a cada falha, a partir daqui: 30 s, 1 min, 2 min, 4 min (ADR-0010).
+FIRST_RETRY_DELAY = timedelta(seconds=30)
+
+
+@dataclass(frozen=True)
+class DispatchLimits:
+    """Os números do worker, que moram em `settings` (ADR-0010, item 3).
+
+    Chegam de quem chama, o worker, como os parâmetros de uma rota chegam do router:
+    nenhum domínio lê `settings` direto.
+    """
+
+    batch_size: int
+    max_in_flight: int
+    max_attempts: int
+    dispatch_timeout_seconds: int
 
 
 def _as_on_screen(score: float) -> float:
@@ -83,9 +107,17 @@ class InsightPrismaService:
 
 
 class InsightService:
-    def __init__(self, repository: InsightRepository, prismas: PrismaService) -> None:
+    def __init__(
+        self,
+        repository: InsightRepository,
+        prismas: PrismaService,
+        n8n: N8NClient | None = None,
+    ) -> None:
         self.repository = repository
         self.prismas = prismas
+        # Só o worker passa o client: o envio da resposta e a exclusão de membro
+        # usam este service sem falar com o N8N.
+        self.n8n = n8n
 
     async def request_individual(self, form_response_id: uuid.UUID) -> Insight:
         """Grava o pedido de insight de uma resposta que acabou de ser enviada.
@@ -139,8 +171,8 @@ class InsightService:
             contract_version="insight-v1",
             scope="individual",
             insight_id=insight.id,
-            # A tentativa que está saindo agora: `attempts` conta as que já saíram.
-            attempt=insight.attempts + 1,
+            # A reivindicação já contou esta tentativa (ADR-0010, item 3).
+            attempt=insight.attempts,
             language="pt-BR",  # P-092: o back ainda não guarda o idioma da pessoa
             result=InsightResult(
                 prismas=PrismaScores.model_validate(
@@ -165,3 +197,91 @@ class InsightService:
     async def delete_for_form_responses(self, form_response_ids: list[uuid.UUID]) -> None:
         """Apaga os insights das respostas que a exclusão de membro (M-3) remove."""
         await self.repository.delete_by_form_responses(form_response_ids)
+
+    # --- O ciclo do worker (CREED-804, ADR-0010 item 3) ----------------------------
+    # Dois passos, cada um na sua unidade de trabalho, que o worker abre: reivindicar
+    # (e gravar a reivindicação) e só depois disparar. Assim um pedido nunca sai sem
+    # estar marcado `dispatched`, e uma queda no meio cai na varredura.
+
+    async def claim_due_batch(
+        self, limits: DispatchLimits
+    ) -> list[IndividualInsightRequest]:
+        """Reivindica os pedidos que podem sair agora e devolve os payloads.
+
+        Devolve à fila os `dispatched` esquecidos, confere o teto de pedidos em voo,
+        reivindica até `batch_size` `pending` vencidos e os marca `dispatched`, com
+        `attempts + 1`. Sem esteira configurada, não mexe em nada.
+        """
+        if not self._n8n().is_configured:
+            logger.debug("Esteira de insights desligada: N8N_WEBHOOK_URL vazia.")
+            return []
+
+        await self.repository.lock_dispatch()
+
+        stale = await self.repository.list_stale(limits.dispatch_timeout_seconds)
+        for insight in stale:
+            self._retry_or_fail(
+                insight,
+                f"sem volta do N8N em {limits.dispatch_timeout_seconds} s",
+                limits.max_attempts,
+            )
+        # A contagem abaixo precisa enxergar os que a varredura acabou de soltar.
+        await self.repository.flush()
+
+        free_slots = limits.max_in_flight - await self.repository.count_dispatched()
+        if free_slots <= 0:
+            return []
+
+        claimed = await self.repository.claim_due(min(limits.batch_size, free_slots))
+        payloads = []
+        for insight in claimed:
+            insight.status = InsightStatus.DISPATCHED
+            insight.attempts += 1
+            insight.dispatched_at = datetime.now(UTC)
+            try:
+                payloads.append(await self.build_individual_payload(insight))
+            except (NotFoundError, ValidationError) as exc:
+                # A resposta não vira pedido, e tentar de novo não muda isso.
+                self._fail(insight, f"pedido não montado: {exc.message}")
+        return payloads
+
+    async def dispatch(
+        self, payload: IndividualInsightRequest, limits: DispatchLimits
+    ) -> None:
+        """Entrega ao N8N um pedido já reivindicado.
+
+        Se o N8N não recebe, o pedido volta à fila com espera, ou vira `failed` no
+        limite. Se recebe, nada muda aqui: o texto chega pela volta (CREED-805).
+        """
+        try:
+            await self._n8n().dispatch(payload)
+        except N8NUnavailableError as exc:
+            logger.warning(
+                "Insight %s não entregue ao N8N: %s", payload.insight_id, exc.message
+            )
+            insight = await self.repository.get_for_update(payload.insight_id)
+            # Se a volta chegou antes (o N8N recebeu e só a resposta HTTP se perdeu),
+            # ou se a varredura já o soltou, não há falha a registrar.
+            if insight is not None and insight.status is InsightStatus.DISPATCHED:
+                self._retry_or_fail(insight, exc.message, limits.max_attempts)
+
+    def _retry_or_fail(self, insight: Insight, error: str, max_attempts: int) -> None:
+        """A regra de falha da esteira: nova tentativa com espera, ou `failed` no
+        limite. `attempts` já conta a tentativa que falhou."""
+        if insight.attempts >= max_attempts:
+            self._fail(insight, error)
+            return
+        insight.status = InsightStatus.PENDING
+        insight.last_error = error
+        insight.next_attempt_at = datetime.now(UTC) + FIRST_RETRY_DELAY * 2 ** (
+            insight.attempts - 1
+        )
+
+    def _fail(self, insight: Insight, error: str) -> None:
+        insight.status = InsightStatus.FAILED
+        insight.last_error = error
+
+    def _n8n(self) -> N8NClient:
+        if self.n8n is None:
+            raise RuntimeError("N8NClient não configurado no InsightService")
+        return self.n8n
