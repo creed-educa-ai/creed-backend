@@ -396,6 +396,9 @@ LIMITES = DispatchLimits(
     batch_size=5, max_in_flight=5, max_attempts=5, dispatch_timeout_seconds=600
 )
 
+# A hora que o repository devolve como a do banco: as datas do ciclo saem dela.
+AGORA = datetime(2026, 11, 15, 12, 0, tzinfo=UTC)
+
 
 def _n8n(*, configurado: bool = True) -> AsyncMock:
     n8n = AsyncMock(spec=N8NClient)
@@ -422,6 +425,7 @@ def _service_do_ciclo(
     n8n: AsyncMock | None = None,
 ) -> tuple[InsightService, AsyncMock, AsyncMock]:
     repository = AsyncMock(spec=InsightRepository)
+    repository.database_now.return_value = AGORA
     repository.list_stale.return_value = esquecidos or []
     repository.count_dispatched.return_value = em_voo
     repository.claim_due.return_value = reivindicados or []
@@ -434,6 +438,13 @@ def _service_do_ciclo(
 def _payload_do_kit() -> IndividualInsightRequest:
     return IndividualInsightRequest.model_validate_json(
         (CONTRACT_DIR / "exemplo-ida-individual.json").read_text(encoding="utf-8")
+    )
+
+
+def _payload_de(insight: Insight) -> IndividualInsightRequest:
+    """O pedido que a reivindicação montou para este insight, nesta tentativa."""
+    return _payload_do_kit().model_copy(
+        update={"insight_id": insight.id, "attempt": insight.attempts}
     )
 
 
@@ -460,7 +471,7 @@ async def test_reivindica_marca_dispatched_e_conta_a_tentativa() -> None:
     assert [p.insight_id for p in payloads] == [novo.id, de_novo.id]
     assert [p.attempt for p in payloads] == [1, 3]
     assert novo.status is de_novo.status is InsightStatus.DISPATCHED
-    assert novo.dispatched_at is not None
+    assert novo.dispatched_at == AGORA  # a hora do banco, não a do worker
     # A trava vem antes de contar e reivindicar: é ela que segura o teto.
     chamadas = [nome for nome, *_ in repository.mock_calls]
     assert chamadas.index("lock_dispatch") < chamadas.index("count_dispatched")
@@ -500,17 +511,43 @@ async def test_pedido_que_nao_monta_vira_failed_e_nao_trava_os_outros() -> None:
     assert bom.status is InsightStatus.DISPATCHED
 
 
+@pytest.mark.parametrize("erro", ["pergunta sem texto", "insight da empresa"])
+async def test_pedido_que_quebra_fora_do_dominio_vira_failed_e_nao_trava_a_fila(
+    erro: str,
+) -> None:
+    """Sem isso, a exceção desfaria a reivindicação inteira, e o mesmo pedido voltaria
+    primeiro na fila a cada ciclo, travando todos os outros."""
+    quebrado, bom = _insight(InsightStatus.PENDING), _insight(InsightStatus.PENDING)
+    service, repository, _ = _service_do_ciclo(reivindicados=[quebrado, bom])
+    if erro == "pergunta sem texto":
+        # O `OpenAnswer` recusa a pergunta vazia com o `ValidationError` do Pydantic.
+        repository.list_descriptive_answers.side_effect = [
+            [DescriptiveAnswer("S9", "", "Uma resposta")],
+            [],
+        ]
+    else:
+        # O `ValueError` de `build_individual_payload`: não há pedido individual.
+        quebrado.form_response_id = None
+
+    payloads = await service.claim_due_batch(LIMITES)
+
+    assert [p.insight_id for p in payloads] == [bom.id]
+    assert quebrado.status is InsightStatus.FAILED
+    assert quebrado.last_error is not None
+    assert quebrado.last_error.startswith("pedido não montado:")
+    assert bom.status is InsightStatus.DISPATCHED
+
+
 async def test_varredura_solta_o_esquecido_antes_de_contar() -> None:
     esquecido = _insight(InsightStatus.DISPATCHED, attempts=2)
     service, repository, _ = _service_do_ciclo(esquecidos=[esquecido])
-    antes = datetime.now(UTC)
 
     await service.claim_due_batch(LIMITES)
 
     repository.list_stale.assert_awaited_once_with(600)
     assert esquecido.status is InsightStatus.PENDING
     assert esquecido.last_error == "sem volta do N8N em 600 s"
-    assert esquecido.next_attempt_at >= antes + timedelta(minutes=1)
+    assert esquecido.next_attempt_at == AGORA + timedelta(minutes=1)
     # Sem o flush, a contagem ainda enxergaria o esquecido como em voo.
     chamadas = [nome for nome, *_ in repository.mock_calls]
     assert chamadas.index("flush") < chamadas.index("count_dispatched")
@@ -550,14 +587,12 @@ async def test_falha_na_entrega_volta_a_fila_esperando_cada_vez_mais(
     n8n.dispatch.side_effect = N8NUnavailableError("N8N respondeu 503: fora")
     service, repository, _ = _service_do_ciclo(n8n=n8n)
     repository.get_for_update.return_value = insight
-    antes = datetime.now(UTC)
 
-    await service.dispatch(_payload_do_kit(), LIMITES)
+    await service.dispatch(_payload_de(insight), LIMITES)
 
-    depois = datetime.now(UTC)
     assert insight.status is InsightStatus.PENDING
     assert insight.last_error == "N8N respondeu 503: fora"
-    assert antes + espera <= insight.next_attempt_at <= depois + espera
+    assert insight.next_attempt_at == AGORA + espera
 
 
 async def test_quinta_falha_na_entrega_vira_failed() -> None:
@@ -567,10 +602,26 @@ async def test_quinta_falha_na_entrega_vira_failed() -> None:
     service, repository, _ = _service_do_ciclo(n8n=n8n)
     repository.get_for_update.return_value = insight
 
-    await service.dispatch(_payload_do_kit(), LIMITES)
+    await service.dispatch(_payload_de(insight), LIMITES)
 
     assert insight.status is InsightStatus.FAILED
     assert insight.last_error == "N8N não respondeu: ReadTimeout"
+
+
+async def test_falha_de_uma_tentativa_antiga_nao_mexe_na_tentativa_em_voo() -> None:
+    """A tentativa 1 demorou a falhar; nesse meio-tempo o pedido voltou à fila e
+    outro ciclo o reivindicou como tentativa 2, que está em voo."""
+    em_voo = _insight(InsightStatus.DISPATCHED, attempts=2)
+    tentativa_antiga = _payload_de(em_voo).model_copy(update={"attempt": 1})
+    n8n = _n8n()
+    n8n.dispatch.side_effect = N8NUnavailableError("N8N não respondeu: ReadTimeout")
+    service, repository, _ = _service_do_ciclo(n8n=n8n)
+    repository.get_for_update.return_value = em_voo
+
+    await service.dispatch(tentativa_antiga, LIMITES)
+
+    assert em_voo.status is InsightStatus.DISPATCHED
+    assert em_voo.last_error is None
 
 
 async def test_falha_na_entrega_nao_desfaz_a_volta_que_chegou_antes() -> None:

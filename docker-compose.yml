@@ -88,8 +88,13 @@ services:
       # Dentro da rede do compose o banco é `db:5432`, não a porta do host do .env.
       POSTGRES_HOST: db
       POSTGRES_PORT: '5432'
-      # O .env.example aponta para um N8N local que não existe: aqui fica vazia.
+      # Vazia mesmo que o .env tenha uma URL: um .env copiado do exemplo antigo
+      # apontava para um N8N local que não existe.
       N8N_WEBHOOK_URL: ''
+    # O SIGTERM deixa o ciclo em curso terminar. Com o N8N fora, um ciclo leva até
+    # INSIGHT_WORKER_BATCH_SIZE × N8N_TIMEOUT_SECONDS (5 × 10 s); com os 10 s padrão
+    # do Docker, o SIGKILL chegaria no meio. Mudou um dos dois, reveja este valor.
+    stop_grace_period: 1m
     depends_on:
       db: {condition: service_healthy}
 

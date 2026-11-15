@@ -10,7 +10,7 @@ gravado aqui.
 """
 
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import NamedTuple
 
 from sqlalchemy import delete, func, select
@@ -145,6 +145,12 @@ class InsightRepository:
         """
         await self.db.execute(select(func.pg_advisory_xact_lock(DISPATCH_LOCK_KEY)))
 
+    async def database_now(self) -> datetime:
+        """A hora do banco, a mesma `now()` com que `claim_due` e `list_stale`
+        comparam as datas. No Postgres, é a do início da transação."""
+        result = await self.db.execute(select(func.now()))
+        return result.scalar_one()
+
     async def count_dispatched(self) -> int:
         """Quantos pedidos foram ao N8N e ainda esperam a volta."""
         result = await self.db.execute(
@@ -155,16 +161,22 @@ class InsightRepository:
         return int(result.scalar_one())
 
     async def claim_due(self, limit: int) -> list[Insight]:
-        """Os `pending` vencidos, os mais antigos primeiro, travados nesta transação.
+        """Os `pending` individuais vencidos, os mais antigos primeiro, travados nesta
+        transação.
 
         `SKIP LOCKED` pula as linhas que outra transação já travou: dois workers
         nunca pegam o mesmo pedido. O "vencido" é pelo relógio do banco.
+
+        Só os individuais: o insight da empresa (`form_response_id` nulo) tem pedido
+        próprio, que nasce na CREED-8013. Até lá ele espera `pending`, em vez de ser
+        reivindicado por um worker que não sabe montá-lo.
         """
         result = await self.db.execute(
             select(Insight)
             .where(
                 Insight.status == InsightStatus.PENDING,
                 Insight.next_attempt_at <= func.now(),
+                Insight.form_response_id.is_not(None),
             )
             .order_by(Insight.next_attempt_at)
             .limit(limit)

@@ -456,6 +456,33 @@ async def test_pedido_em_espera_nao_e_reivindicado(cenario: Cenario) -> None:
         assert await InsightRepository(session).claim_due(5) == []
 
 
+async def test_reivindicacao_deixa_o_insight_da_empresa_esperando(
+    cenario: Cenario,
+) -> None:
+    """O worker não sabe montar o pedido da empresa (CREED-8013): se o pegasse, a
+    montagem falharia. Ele fica `pending` até lá."""
+    [individual] = await fila(cenario, 1)
+    async with cenario.sessions.begin() as session:
+        session.add(um_insight(cenario))  # da empresa: sem resposta
+
+    async with cenario.sessions.begin() as session:
+        reivindicados = await InsightRepository(session).claim_due(5)
+
+    assert [i.id for i in reivindicados] == [individual]
+
+
+async def test_hora_do_banco_e_a_do_inicio_da_transacao(cenario: Cenario) -> None:
+    async with cenario.sessions.begin() as session:
+        repository = InsightRepository(session)
+        primeira = await repository.database_now()
+        await asyncio.sleep(0.01)
+        segunda = await repository.database_now()
+
+    assert primeira == segunda
+    assert primeira.tzinfo is not None
+    assert abs(primeira - datetime.now(UTC)) < timedelta(minutes=1)
+
+
 async def test_varredura_acha_so_o_dispatched_antigo(cenario: Cenario) -> None:
     antigo, recente, _pendente = await fila(cenario, 3)
     agora = datetime.now(UTC)

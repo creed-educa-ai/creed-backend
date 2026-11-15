@@ -50,8 +50,14 @@ async def run_cycle(n8n: N8NClient, limits: DispatchLimits) -> None:
     async with unit_of_work() as session:
         payloads = await build_dispatch_service(session, n8n).claim_due_batch(limits)
     for payload in payloads:
-        async with unit_of_work() as session:
-            await build_dispatch_service(session, n8n).dispatch(payload, limits)
+        try:
+            async with unit_of_work() as session:
+                await build_dispatch_service(session, n8n).dispatch(payload, limits)
+        except Exception:
+            # Uma entrega que falha de um jeito inesperado não leva junto as outras
+            # do lote, já reivindicadas: este pedido fica `dispatched`, e a varredura
+            # o devolve à fila. O erro fica no log com o traceback.
+            logger.exception("Entrega do insight %s falhou", payload.insight_id)
 
 
 async def run(stop: asyncio.Event) -> None:
@@ -61,8 +67,9 @@ async def run(stop: asyncio.Event) -> None:
         n8n = N8NClient(http)
         if not n8n.is_configured:
             logger.info(
-                "Esteira de insights desligada: N8N_WEBHOOK_URL vazia. "
-                "O worker fica parado e não mexe em nenhum pedido."
+                "Esteira de insights desligada: N8N_WEBHOOK_URL ou "
+                "N8N_WEBHOOK_TOKEN vazio. O worker fica parado e não mexe em "
+                "nenhum pedido."
             )
         while not stop.is_set():
             try:

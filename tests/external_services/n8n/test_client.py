@@ -91,6 +91,32 @@ async def test_falha_de_rede_vira_n8n_indisponivel(
     assert isinstance(capturado.value.__cause__, erro)
 
 
+async def test_url_malformada_vira_n8n_indisponivel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`InvalidURL` não herda de `httpx.HTTPError`: sem tratamento próprio, vazaria."""
+    monkeypatch.setattr(settings, "N8N_WEBHOOK_URL", "http://[::1")
+
+    with pytest.raises(N8NUnavailableError, match="InvalidURL"):
+        await _despachar(lambda request: httpx.Response(202))
+
+
+@pytest.mark.parametrize(
+    ("url", "token", "configurado"),
+    [(URL, "token-de-teste", True), ("", "token-de-teste", False), (URL, "", False)],
+    ids=["url e token", "sem url", "sem token"],
+)
+def test_esteira_so_esta_configurada_com_url_e_token(
+    monkeypatch: pytest.MonkeyPatch, url: str, token: str, configurado: bool
+) -> None:
+    """Sem token, o webhook recusaria todo pedido, e cada um gastaria as tentativas
+    até virar `failed`. Desligada, a esteira só espera."""
+    monkeypatch.setattr(settings, "N8N_WEBHOOK_URL", url)
+    monkeypatch.setattr(settings, "N8N_WEBHOOK_TOKEN", token)
+
+    assert N8NClient(httpx.AsyncClient()).is_configured is configurado
+
+
 def test_n8n_indisponivel_e_servico_indisponivel_do_projeto() -> None:
     """Herdar de `ServiceUnavailableError` mantém o erro no vocabulário do projeto."""
     assert issubclass(N8NUnavailableError, ServiceUnavailableError)

@@ -6,7 +6,7 @@ Esta camada não conhece HTTP nem detalhes de ORM.
 import logging
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 
 from app.domains.insights.models import Insight, InsightPrisma, InsightStatus
 from app.domains.insights.repository import InsightPrismaRepository, InsightRepository
@@ -21,7 +21,7 @@ from app.external_services.n8n.schemas import (
     PrismaScores,
 )
 from app.shared.enums import Prisma
-from app.shared.exceptions import ConflictError, NotFoundError, ValidationError
+from app.shared.exceptions import ConflictError, DomainError, NotFoundError
 
 logger = logging.getLogger(__name__)
 
@@ -213,10 +213,16 @@ class InsightService:
         `attempts + 1`. Sem esteira configurada, não mexe em nada.
         """
         if not self._n8n().is_configured:
-            logger.debug("Esteira de insights desligada: N8N_WEBHOOK_URL vazia.")
+            logger.debug(
+                "Esteira de insights desligada: "
+                "N8N_WEBHOOK_URL ou N8N_WEBHOOK_TOKEN vazio."
+            )
             return []
 
         await self.repository.lock_dispatch()
+        # As datas gravadas aqui saem do relógio do banco, o mesmo com que
+        # `claim_due` e `list_stale` as comparam depois.
+        now = await self.repository.database_now()
 
         stale = await self.repository.list_stale(limits.dispatch_timeout_seconds)
         for insight in stale:
@@ -224,6 +230,7 @@ class InsightService:
                 insight,
                 f"sem volta do N8N em {limits.dispatch_timeout_seconds} s",
                 limits.max_attempts,
+                now,
             )
         # A contagem abaixo precisa enxergar os que a varredura acabou de soltar.
         await self.repository.flush()
@@ -237,12 +244,17 @@ class InsightService:
         for insight in claimed:
             insight.status = InsightStatus.DISPATCHED
             insight.attempts += 1
-            insight.dispatched_at = datetime.now(UTC)
+            insight.dispatched_at = now
             try:
                 payloads.append(await self.build_individual_payload(insight))
-            except (NotFoundError, ValidationError) as exc:
-                # A resposta não vira pedido, e tentar de novo não muda isso.
-                self._fail(insight, f"pedido não montado: {exc.message}")
+            except (DomainError, ValueError) as exc:
+                # A resposta não vira pedido, e tentar de novo não muda isso. O
+                # `ValueError` cobre também o `ValidationError` do Pydantic, que herda
+                # dele. Sem este `except`, a exceção desfaria a reivindicação inteira,
+                # e o mesmo pedido voltaria primeiro na fila a cada ciclo, travando os
+                # outros. Erro de banco não é pego: desfaz o ciclo, e o próximo tenta.
+                logger.warning("Pedido do insight %s não montado: %s", insight.id, exc)
+                self._fail(insight, f"pedido não montado: {exc}")
         return payloads
 
     async def dispatch(
@@ -260,22 +272,30 @@ class InsightService:
                 "Insight %s não entregue ao N8N: %s", payload.insight_id, exc.message
             )
             insight = await self.repository.get_for_update(payload.insight_id)
-            # Se a volta chegou antes (o N8N recebeu e só a resposta HTTP se perdeu),
-            # ou se a varredura já o soltou, não há falha a registrar.
-            if insight is not None and insight.status is InsightStatus.DISPATCHED:
-                self._retry_or_fail(insight, exc.message, limits.max_attempts)
+            # A falha só vale para a tentativa que falhou. Se a volta chegou antes (o
+            # N8N recebeu e só a resposta HTTP se perdeu), ou se a varredura já o
+            # soltou e outro ciclo o reivindicou de novo, o pedido já está em outra
+            # tentativa, e registrar a falha desta o devolveria à fila em pleno voo.
+            if (
+                insight is not None
+                and insight.status is InsightStatus.DISPATCHED
+                and insight.attempts == payload.attempt
+            ):
+                now = await self.repository.database_now()
+                self._retry_or_fail(insight, exc.message, limits.max_attempts, now)
 
-    def _retry_or_fail(self, insight: Insight, error: str, max_attempts: int) -> None:
+    def _retry_or_fail(
+        self, insight: Insight, error: str, max_attempts: int, now: datetime
+    ) -> None:
         """A regra de falha da esteira: nova tentativa com espera, ou `failed` no
-        limite. `attempts` já conta a tentativa que falhou."""
+        limite. `attempts` já conta a tentativa que falhou, e `now` é o relógio do
+        banco."""
         if insight.attempts >= max_attempts:
             self._fail(insight, error)
             return
         insight.status = InsightStatus.PENDING
         insight.last_error = error
-        insight.next_attempt_at = datetime.now(UTC) + FIRST_RETRY_DELAY * 2 ** (
-            insight.attempts - 1
-        )
+        insight.next_attempt_at = now + FIRST_RETRY_DELAY * 2 ** (insight.attempts - 1)
 
     def _fail(self, insight: Insight, error: str) -> None:
         insight.status = InsightStatus.FAILED

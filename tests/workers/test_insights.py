@@ -10,6 +10,7 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -71,6 +72,43 @@ async def test_ciclo_grava_a_reivindicacao_antes_de_entregar(
         "entrega p2 na 3",
         "grava a 3",
     ]
+
+
+async def test_entrega_que_quebra_nao_leva_as_outras_do_lote(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """As outras já foram reivindicadas: se o ciclo parasse aqui, elas ficariam
+    `dispatched`, ocupando o teto, até a varredura."""
+    entregues: list[str] = []
+
+    @dataclass
+    class Pedido:
+        insight_id: str
+
+    class ServiceQueQuebraNaPrimeira:
+        async def claim_due_batch(self, limits: DispatchLimits) -> list[Pedido]:
+            return [Pedido("p1"), Pedido("p2")]
+
+        async def dispatch(self, payload: Pedido, limits: DispatchLimits) -> None:
+            if payload.insight_id == "p1":
+                raise RuntimeError("erro inesperado na entrega")
+            entregues.append(payload.insight_id)
+
+    @asynccontextmanager
+    async def unidade_falsa() -> AsyncIterator[None]:
+        yield None
+
+    monkeypatch.setattr(worker, "unit_of_work", unidade_falsa)
+    monkeypatch.setattr(
+        worker, "build_dispatch_service", lambda *_: ServiceQueQuebraNaPrimeira()
+    )
+
+    async with httpx.AsyncClient() as http:
+        await worker.run_cycle(N8NClient(http), LIMITES)
+
+    assert entregues == ["p2"]
+    assert "Entrega do insight p1 falhou" in caplog.text
+    assert "erro inesperado na entrega" in caplog.text
 
 
 @pytest.fixture
