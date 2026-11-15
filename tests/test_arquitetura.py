@@ -34,7 +34,8 @@ LEITURA_ENTRE_DOMINIOS: dict[str, str] = {
     ),
     "insights": (
         "le form_responses e form por join para saber a organizacao e o periodo de "
-        "uma resposta; grava so em insights. Ver docstring do repository e a spec da "
+        "uma resposta, e answer e questions para as respostas descritivas do pedido "
+        "de insight; grava so em insights. Ver docstring do repository e a spec da "
         "CREED-80."
     ),
     "links": (
@@ -73,6 +74,10 @@ COMPOE_COM_SERVICE_DE: dict[str, str] = {
     "demographics": "le o participante do vinculo autenticado pelo LinkService",
     "department": "confere a organizacao pelo OrganizationService",
     "forms": "confere a organizacao pelo OrganizationService",
+    "insights": (
+        "calcula as notas do pedido de insight pelo PrismaService, com o destaque e "
+        "a oportunidade de highest_and_lowest do prismas.service (CREED-803)"
+    ),
     "links": (
         "confere participante, organizacao e setor pelo ParticipantService, "
         "OrganizationService e DepartmentService; escolhe o periodo do membro com "

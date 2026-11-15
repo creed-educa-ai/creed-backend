@@ -37,6 +37,9 @@ class Settings(BaseSettings):
 
     # --- Esteira de IA (N8N self-hosted, ADR-001 secao 2.1) ---
     N8N_WEBHOOK_URL: str = ""
+    # Vai no `Authorization: Bearer` da ida, para o webhook não atender a qualquer
+    # um que alcance a rede (spec da CREED-80, "Segurança na esteira").
+    N8N_WEBHOOK_TOKEN: str = ""
     N8N_CALLBACK_SECRET: str = ""
     N8N_TIMEOUT_SECONDS: int = 10
 

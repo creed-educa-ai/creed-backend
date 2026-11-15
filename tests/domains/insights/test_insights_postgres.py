@@ -27,14 +27,25 @@ from app.core.database import Base
 from app.domains.documents.models import Document
 from app.domains.forms.models import Form
 from app.domains.insights.models import Insight, InsightStatus
-from app.domains.insights.repository import FormScope, InsightRepository
+from app.domains.insights.repository import (
+    DescriptiveAnswer,
+    FormScope,
+    InsightRepository,
+)
 from app.domains.insights.service import InsightService
 from app.domains.links.models import Link
 from app.domains.organizacoes.models import Organization
 from app.domains.participants.models import Participant
-from app.domains.questions.models import Instrument
-from app.domains.responses.models import FormResponse
-from app.shared.enums import LinkType, Roles
+from app.domains.prismas.repository import PrismaRepository
+from app.domains.prismas.service import PrismaService
+from app.domains.questions.models import (
+    Instrument,
+    Question,
+    QuestionSection,
+    QuestionType,
+)
+from app.domains.responses.models import Answer, FormResponse, FormResponseStatus
+from app.shared.enums import Dimension, LinkType, Prisma, Roles
 from app.shared.exceptions import ConflictError
 from app.shared.instrument import CREED_INSTRUMENT_ID
 
@@ -117,6 +128,12 @@ async def cenario() -> AsyncIterator[Cenario]:
         await engine.dispose()
 
 
+def _service(session: AsyncSession) -> InsightService:
+    return InsightService(
+        InsightRepository(session), PrismaService(PrismaRepository(session))
+    )
+
+
 def um_insight(
     cenario: Cenario,
     *,
@@ -144,7 +161,7 @@ async def test_pedido_nasce_pending_com_organizacao_e_periodo_da_resposta(
     cenario: Cenario,
 ) -> None:
     async with cenario.sessions.begin() as session:
-        service = InsightService(InsightRepository(session))
+        service = _service(session)
         pedido = await service.request_individual(cenario.response_ids[2])
 
     assert pedido.status is InsightStatus.PENDING
@@ -159,15 +176,11 @@ async def test_pedido_nasce_pending_com_organizacao_e_periodo_da_resposta(
 async def test_segundo_pedido_da_mesma_resposta_vira_conflict(cenario: Cenario) -> None:
     """O `unique` de verdade, com o nome que o repository procura na mensagem."""
     async with cenario.sessions.begin() as session:
-        await InsightService(InsightRepository(session)).request_individual(
-            cenario.response_ids[0]
-        )
+        await _service(session).request_individual(cenario.response_ids[0])
 
     with pytest.raises(ConflictError):
         async with cenario.sessions.begin() as session:
-            await InsightService(InsightRepository(session)).request_individual(
-                cenario.response_ids[0]
-            )
+            await _service(session).request_individual(cenario.response_ids[0])
 
     async with cenario.sessions() as session:
         total = await session.scalar(select(func.count()).select_from(Insight))
@@ -275,3 +288,99 @@ async def test_o_indice_parcial_so_vale_para_empresa_pendente(cenario: Cenario) 
     async with cenario.sessions() as session:
         total = await session.scalar(select(func.count()).select_from(Insight))
     assert total == 7
+
+
+# --- O pedido que vai ao N8N (CREED-803) ---------------------------------------
+
+
+async def responder(session: AsyncSession, cenario: Cenario) -> None:
+    """A resposta 0 enviada: 4 nas sete objetivas e três descritivas, uma em branco.
+
+    A resposta 1 também escreve numa descritiva, para provar que o JOIN não mistura
+    respostas de pessoas diferentes.
+    """
+    objetivas = [
+        Question(
+            instrument_id=CREED_INSTRUMENT_ID,
+            text=f"Objetiva de {dimension.value}",
+            order_index=ordem,
+            type=QuestionType.OBJECTIVE,
+            section=QuestionSection(dimension.value),
+            dimensao=dimension,
+        )
+        for ordem, dimension in enumerate(Dimension, start=1)
+    ]
+    # Fora de ordem de propósito: quem ordena é o `order_index`.
+    segunda, primeira, em_branco = (
+        Question(
+            instrument_id=CREED_INSTRUMENT_ID,
+            text=texto,
+            order_index=ordem,
+            type=QuestionType.DESCRIPTIVE,
+            section=QuestionSection.S9,
+        )
+        for texto, ordem in [
+            ("Segunda aberta", 20),
+            ("Primeira aberta", 10),
+            ("Deixada em branco", 30),
+        ]
+    )
+    session.add_all([*objetivas, segunda, primeira, em_branco])
+    await session.flush()
+
+    resposta, outra = cenario.response_ids[0], cenario.response_ids[1]
+    session.add_all(
+        [
+            Answer(form_response_id=resposta, question_id=q.id, value="4")
+            for q in objetivas
+        ]
+        + [
+            Answer(form_response_id=resposta, question_id=segunda.id, value="Texto B"),
+            Answer(form_response_id=resposta, question_id=primeira.id, value="Texto A"),
+            Answer(form_response_id=resposta, question_id=em_branco.id, value=""),
+            Answer(form_response_id=outra, question_id=primeira.id, value="De outra"),
+        ]
+    )
+    enviada = await session.get(FormResponse, resposta)
+    assert enviada is not None
+    enviada.status = FormResponseStatus.SUBMITTED
+    await session.flush()
+
+
+async def test_descritivas_da_resposta_vem_do_join_na_ordem_do_questionario(
+    cenario: Cenario,
+) -> None:
+    async with cenario.sessions.begin() as session:
+        await responder(session, cenario)
+
+        respostas = await InsightRepository(session).list_descriptive_answers(
+            cenario.response_ids[0]
+        )
+
+    # Sem as objetivas e sem a da outra pessoa; a em branco vem, e o service a tira.
+    assert respostas == [
+        DescriptiveAnswer("S9", "Primeira aberta", "Texto A"),
+        DescriptiveAnswer("S9", "Segunda aberta", "Texto B"),
+        DescriptiveAnswer("S9", "Deixada em branco", ""),
+    ]
+
+
+async def test_pedido_montado_com_o_banco_de_verdade(cenario: Cenario) -> None:
+    """O caminho inteiro: cálculo do `PrismaService` e descritivas, pelo JOIN real."""
+    async with cenario.sessions.begin() as session:
+        await responder(session, cenario)
+        pedido = um_insight(cenario, response_index=0)
+        session.add(pedido)
+        await session.flush()
+
+        payload = await _service(session).build_individual_payload(pedido)
+
+    # Média 4 em tudo: (4 - 1) / 4 * 100 = 75 em cada nota.
+    assert payload.result.prismas.model_dump() == dict.fromkeys(
+        (prisma.value for prisma in Prisma), 75.0
+    )
+    assert payload.result.dimensions.S8 == 75.0
+    # Empate geral: a ordem dos prismas decide, como no dashboard.
+    assert payload.result.destaque is Prisma.SEGURANCA_PSICOLOGICA
+    assert [item.answer for item in payload.open_answers] == ["Texto A", "Texto B"]
+    assert payload.attempt == 1

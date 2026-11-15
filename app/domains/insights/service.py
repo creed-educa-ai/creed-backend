@@ -7,8 +7,24 @@ import uuid
 
 from app.domains.insights.models import Insight, InsightPrisma
 from app.domains.insights.repository import InsightPrismaRepository, InsightRepository
+from app.domains.prismas.service import PrismaService, highest_and_lowest
+from app.external_services.n8n.schemas import (
+    DimensionScores,
+    IndividualInsightRequest,
+    InsightResult,
+    OpenAnswer,
+    PrismaScores,
+)
 from app.shared.enums import Prisma
 from app.shared.exceptions import ConflictError, NotFoundError
+
+
+def _as_on_screen(score: float) -> float:
+    """A nota em número inteiro, como o dashboard mostra (o `_rounded` de lá).
+
+    O texto da IA não pode citar 61,3 para quem vê 61 na tela.
+    """
+    return float(round(score))
 
 
 class InsightPrismaService:
@@ -67,8 +83,9 @@ class InsightPrismaService:
 
 
 class InsightService:
-    def __init__(self, repository: InsightRepository) -> None:
+    def __init__(self, repository: InsightRepository, prismas: PrismaService) -> None:
         self.repository = repository
+        self.prismas = prismas
 
     async def request_individual(self, form_response_id: uuid.UUID) -> Insight:
         """Grava o pedido de insight de uma resposta que acabou de ser enviada.
@@ -96,6 +113,54 @@ class InsightService:
             raise ConflictError(f"A resposta {form_response_id} já tem insight")
 
         return created
+
+    async def build_individual_payload(
+        self, insight: Insight
+    ) -> IndividualInsightRequest:
+        """Monta o pedido `insight-v1` de um insight individual (CREED-803, P-087).
+
+        O payload é montado na hora do disparo, não no envio: a resposta enviada não
+        muda (P-032). As notas, o destaque e a oportunidade vêm do cálculo do back,
+        nunca da IA (princípio 1). O pedido não leva nada que identifique a pessoa
+        (P-091): só o id do insight, as notas e as respostas descritivas como foram
+        escritas.
+        """
+        form_response_id = insight.form_response_id
+        if form_response_id is None:
+            # Erro de quem chama: o insight da empresa tem pedido próprio (CREED-8013).
+            raise ValueError(f"O insight {insight.id} é da empresa, não de uma resposta")
+
+        prismas, dimensions = await self.prismas.calculate_for_dispatch(form_response_id)
+        # Sobre as notas sem arredondar, como o dashboard faz.
+        destaque, oportunidade = highest_and_lowest(prismas)
+        descriptive = await self.repository.list_descriptive_answers(form_response_id)
+
+        return IndividualInsightRequest(
+            contract_version="insight-v1",
+            scope="individual",
+            insight_id=insight.id,
+            # A tentativa que está saindo agora: `attempts` conta as que já saíram.
+            attempt=insight.attempts + 1,
+            language="pt-BR",  # P-092: o back ainda não guarda o idioma da pessoa
+            result=InsightResult(
+                prismas=PrismaScores.model_validate(
+                    {prisma.value: _as_on_screen(s) for prisma, s in prismas.items()}
+                ),
+                dimensions=DimensionScores.model_validate(
+                    {dim.value: _as_on_screen(s) for dim, s in dimensions.items()}
+                ),
+                destaque=destaque,
+                oportunidade=oportunidade,
+            ),
+            # Pergunta descritiva deixada em branco não é resposta: não vai.
+            open_answers=[
+                OpenAnswer(
+                    section=item.section, question=item.question, answer=item.answer
+                )
+                for item in descriptive
+                if item.answer is not None and item.answer.strip()
+            ],
+        )
 
     async def delete_for_form_responses(self, form_response_ids: list[uuid.UUID]) -> None:
         """Apaga os insights das respostas que a exclusão de membro (M-3) remove."""

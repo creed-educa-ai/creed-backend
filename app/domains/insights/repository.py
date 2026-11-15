@@ -4,7 +4,8 @@ Esta camada NÃO contém regra de negócio: só queries e operações de persist
 
 Leitura de outro domínio, declarada em `tests/test_arquitetura.py`
 (`LEITURA_ENTRE_DOMINIOS`): `get_form_scope` junta `form_responses` e `form` para
-saber a organização e o período de uma resposta. Só lê; nada fora de `insights` é
+saber a organização e o período de uma resposta, e `list_descriptive_answers` junta
+`answer` e `questions` para o pedido de insight. Só lê; nada fora de `insights` é
 gravado aqui.
 """
 
@@ -17,7 +18,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.forms.models import Form
 from app.domains.insights.models import Insight, InsightPrisma
-from app.domains.responses.models import FormResponse
+from app.domains.questions.models import Question, QuestionType
+from app.domains.responses.models import Answer, FormResponse
 from app.shared.enums import Prisma
 
 
@@ -26,6 +28,14 @@ class FormScope(NamedTuple):
 
     organization_id: uuid.UUID
     form_id: uuid.UUID
+
+
+class DescriptiveAnswer(NamedTuple):
+    """Uma pergunta descritiva e o que a pessoa escreveu nela (CREED-803)."""
+
+    section: str  # ex.: "S9"
+    question: str  # texto da pergunta, em pt-BR
+    answer: str | None  # como foi gravado; vazio quando a pessoa não escreveu
 
 
 class InsightPrismaRepository:
@@ -93,6 +103,31 @@ class InsightRepository:
         if row is None:
             return None
         return FormScope(organization_id=row.organization_id, form_id=row.form_id)
+
+    async def list_descriptive_answers(
+        self, form_response_id: uuid.UUID
+    ) -> list[DescriptiveAnswer]:
+        """As respostas às perguntas descritivas, na ordem do questionário.
+
+        Traz a resposta como foi gravada, inclusive vazia: quem decide o que conta
+        como respondida é o service.
+        """
+        result = await self.db.execute(
+            select(Question.section, Question.text, Answer.value)
+            .select_from(Answer)
+            .join(Question, Question.id == Answer.question_id)
+            .where(
+                Answer.form_response_id == form_response_id,
+                Question.type == QuestionType.DESCRIPTIVE,
+            )
+            .order_by(Question.section, Question.order_index)
+        )
+        return [
+            DescriptiveAnswer(
+                section=row.section.value, question=row.text, answer=row.value
+            )
+            for row in result.all()
+        ]
 
     async def create(self, insight: Insight) -> Insight | None:
         """Grava o pedido.
