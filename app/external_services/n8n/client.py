@@ -14,7 +14,7 @@ import httpx
 
 from app.core.config import settings
 from app.external_services.n8n.exceptions import N8NUnavailableError
-from app.external_services.n8n.schemas import IndividualInsightRequest
+from app.external_services.n8n.schemas import InsightRequest
 
 
 class N8NClient:
@@ -34,7 +34,7 @@ class N8NClient:
         """
         return bool(settings.N8N_WEBHOOK_URL and settings.N8N_WEBHOOK_TOKEN)
 
-    async def dispatch(self, payload: IndividualInsightRequest) -> None:
+    async def dispatch(self, payload: InsightRequest) -> None:
         """Entrega o pedido ao webhook. Qualquer `2xx` é sucesso.
 
         Levanta `N8NUnavailableError` para `4xx`, `5xx`, tempo esgotado, erro de

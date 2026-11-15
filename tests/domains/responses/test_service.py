@@ -223,11 +223,15 @@ class FakeInsightService:
     def __init__(self, *, falhar_com: Exception | None = None) -> None:
         self.falhar_com = falhar_com
         self.pedidos: list[uuid.UUID] = []
+        self.pedidos_da_empresa: list[uuid.UUID] = []
 
     async def request_individual(self, form_response_id: uuid.UUID) -> None:
         if self.falhar_com is not None:
             raise self.falhar_com
         self.pedidos.append(form_response_id)
+
+    async def request_organization(self, form_response_id: uuid.UUID) -> None:
+        self.pedidos_da_empresa.append(form_response_id)
 
 
 def servico(
@@ -334,6 +338,9 @@ class TestEnvioPedeOInsight:
         ).submit_form_response(form_response.id, link_id=form_response.vinculo_id)
 
         assert insights.pedidos == [form_response.id]
+        # O da empresa só é agendado se o período chegou ao piso: quem decide é o
+        # InsightService (CREED-8013). O envio pede sempre.
+        assert insights.pedidos_da_empresa == [form_response.id]
         assert resultado.status is FormResponseStatus.SUBMITTED
 
     async def test_falha_ao_gravar_o_pedido_deixa_a_resposta_em_andamento(self) -> None:
@@ -364,6 +371,7 @@ class TestEnvioPedeOInsight:
             )
 
         assert insights.pedidos == [form_response.id]
+        assert insights.pedidos_da_empresa == [form_response.id]
 
     async def test_resposta_de_outro_vinculo_nao_pede_insight(self) -> None:
         form_response = um_form_response()
@@ -375,6 +383,7 @@ class TestEnvioPedeOInsight:
             ).submit_form_response(form_response.id, link_id=uuid.uuid4())
 
         assert insights.pedidos == []
+        assert insights.pedidos_da_empresa == []
 
     async def test_obrigatoria_sem_resposta_nao_pede_insight(self) -> None:
         form_response = um_form_response()

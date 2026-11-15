@@ -5,16 +5,18 @@ Esta camada NÃO contém regra de negócio: só queries e operações de persist
 Leitura de outro domínio, declarada em `tests/test_arquitetura.py`
 (`LEITURA_ENTRE_DOMINIOS`): `get_form_scope` junta `form_responses` e `form` para
 saber a organização e o período de uma resposta, `list_descriptive_answers` junta
-`answer` e `questions` para o pedido de insight, e `get_response_owner` junta
-`form_responses` e `links` para saber de quem é uma resposta. Só lê; nada fora de
-`insights` é gravado aqui.
+`answer` e `questions` para o pedido de insight, `get_response_owner` junta
+`form_responses` e `links` para saber de quem é uma resposta, e
+`count_submitted_with` conta as respostas enviadas de um período. Só lê; nada fora
+de `insights` é gravado aqui.
 """
 
 import uuid
 from datetime import datetime, timedelta
 from typing import NamedTuple
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select, text
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,12 +24,16 @@ from app.domains.forms.models import Form
 from app.domains.insights.models import Insight, InsightPrisma, InsightStatus
 from app.domains.links.models import Link
 from app.domains.questions.models import Question, QuestionType
-from app.domains.responses.models import Answer, FormResponse
+from app.domains.responses.models import Answer, FormResponse, FormResponseStatus
 from app.shared.enums import LinkType, Prisma
 
 # Chave da trava de transação que serializa "contar os em voo e reivindicar" entre
 # workers (`lock_dispatch`). Qualquer número fixo serve, desde que só a esteira o use.
 DISPATCH_LOCK_KEY = 804
+
+# Primeira metade da chave da trava de um período (`lock_period`); a segunda vem do id
+# do formulário. Chave de dois números não colide com a de um número só acima.
+PERIOD_LOCK_NAMESPACE = 8013
 
 
 class FormScope(NamedTuple):
@@ -35,6 +41,9 @@ class FormScope(NamedTuple):
 
     organization_id: uuid.UUID
     form_id: uuid.UUID
+    # Questionário de uma pessoa só (o formulário tem `link_id`), como o do mentorando
+    # (P-048): não é um período da empresa.
+    individual_form: bool
 
 
 class ResponseOwner(NamedTuple):
@@ -109,7 +118,7 @@ class InsightRepository:
     async def get_form_scope(self, form_response_id: uuid.UUID) -> FormScope | None:
         """Organização e formulário da resposta, ou `None` se ela não existe."""
         result = await self.db.execute(
-            select(Form.organization_id, FormResponse.form_id)
+            select(Form.organization_id, FormResponse.form_id, Form.link_id)
             .select_from(FormResponse)
             .join(Form, Form.id == FormResponse.form_id)
             .where(FormResponse.id == form_response_id)
@@ -117,7 +126,79 @@ class InsightRepository:
         row = result.one_or_none()
         if row is None:
             return None
-        return FormScope(organization_id=row.organization_id, form_id=row.form_id)
+        return FormScope(
+            organization_id=row.organization_id,
+            form_id=row.form_id,
+            individual_form=row.link_id is not None,
+        )
+
+    # --- O insight da empresa (CREED-8013) ---------------------------------------
+
+    async def lock_period(self, form_id: uuid.UUID) -> None:
+        """Trava o agendamento do insight da empresa deste período até o fim da
+        transação.
+
+        Sem ela, dois envios ao mesmo tempo, no piso exato, contariam cada um as
+        enviadas de antes mais ele mesmo, nenhum chegaria ao piso, e o período ficaria
+        sem insight. Com ela, o segundo espera o commit do primeiro e conta os dois.
+        A trava se solta sozinha no commit ou no rollback.
+        """
+        await self.db.execute(
+            select(
+                func.pg_advisory_xact_lock(
+                    PERIOD_LOCK_NAMESPACE, func.hashtext(str(form_id))
+                )
+            )
+        )
+
+    async def count_submitted_with(
+        self, form_id: uuid.UUID, form_response_id: uuid.UUID
+    ) -> int:
+        """As respostas enviadas do período, contando também `form_response_id`.
+
+        O envio pede o insight antes de marcar a resposta como enviada, e a marcação
+        só chega ao banco no commit: sem o `OR`, a resposta que está sendo enviada
+        ficaria fora da conta.
+        """
+        result = await self.db.execute(
+            select(func.count())
+            .select_from(FormResponse)
+            .where(
+                FormResponse.form_id == form_id,
+                or_(
+                    FormResponse.status == FormResponseStatus.SUBMITTED,
+                    FormResponse.id == form_response_id,
+                ),
+            )
+        )
+        return int(result.scalar_one())
+
+    async def schedule_organization(
+        self, organization_id: uuid.UUID, form_id: uuid.UUID, delay: timedelta
+    ) -> bool:
+        """Grava o pedido da empresa para daqui a `delay`, pelo relógio do banco.
+
+        Devolve `False` se o período já tem um pedido da empresa esperando: quem
+        recusa o segundo é o índice parcial, com `ON CONFLICT DO NOTHING`, e o envio
+        segue sem erro.
+        """
+        result = await self.db.execute(
+            insert(Insight)
+            .values(
+                id=uuid.uuid4(),
+                organization_id=organization_id,
+                form_id=form_id,
+                form_response_id=None,
+                next_attempt_at=func.now() + delay,
+            )
+            .on_conflict_do_nothing(
+                index_elements=[Insight.organization_id, Insight.form_id],
+                # O predicado do índice `uq_insights_organization_pending_per_form`.
+                index_where=text("form_response_id IS NULL AND status = 'PENDING'"),
+            )
+            .returning(Insight.id)
+        )
+        return result.scalar_one_or_none() is not None
 
     async def get_response_owner(
         self, form_response_id: uuid.UUID
@@ -195,22 +276,17 @@ class InsightRepository:
         return int(result.scalar_one())
 
     async def claim_due(self, limit: int) -> list[Insight]:
-        """Os `pending` individuais vencidos, os mais antigos primeiro, travados nesta
-        transação.
+        """Os `pending` vencidos, individuais e da empresa, os mais antigos primeiro,
+        travados nesta transação.
 
         `SKIP LOCKED` pula as linhas que outra transação já travou: dois workers
         nunca pegam o mesmo pedido. O "vencido" é pelo relógio do banco.
-
-        Só os individuais: o insight da empresa (`form_response_id` nulo) tem pedido
-        próprio, que nasce na CREED-8013. Até lá ele espera `pending`, em vez de ser
-        reivindicado por um worker que não sabe montá-lo.
         """
         result = await self.db.execute(
             select(Insight)
             .where(
                 Insight.status == InsightStatus.PENDING,
                 Insight.next_attempt_at <= func.now(),
-                Insight.form_response_id.is_not(None),
             )
             .order_by(Insight.next_attempt_at)
             .limit(limit)

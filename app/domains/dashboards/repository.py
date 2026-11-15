@@ -207,6 +207,21 @@ class DashboardRepository:
         )
         return list(result.scalars().all())
 
+    async def get_company_form(
+        self, organization_id: uuid.UUID, form_id: uuid.UUID
+    ) -> Form | None:
+        """O período "para todos" desta organização, ou `None` se o formulário não é
+        um deles (não existe, é de outra organização ou é individual)."""
+        result = await self.db.execute(
+            select(Form).where(
+                Form.id == form_id,
+                Form.organization_id == organization_id,
+                Form.link_id.is_(None),
+                Form.opens_at.is_not(None),
+            )
+        )
+        return result.scalar_one_or_none()
+
     async def list_invited_links(self, form: Form) -> list[InvitedLink]:
         """O público do período (`_eligible_link_conditions`), com o setor de cada um.
 

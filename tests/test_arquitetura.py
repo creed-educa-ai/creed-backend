@@ -76,7 +76,9 @@ COMPOE_COM_SERVICE_DE: dict[str, str] = {
     "forms": "confere a organizacao pelo OrganizationService",
     "insights": (
         "calcula as notas do pedido de insight pelo PrismaService, com o destaque e "
-        "a oportunidade de highest_and_lowest do prismas.service (CREED-803)"
+        "a oportunidade de highest_and_lowest do prismas.service (CREED-803); pede "
+        "os numeros do pedido da empresa ao DashboardService (CREED-8013). O "
+        "dashboards nunca importa o insights.service: seria um ciclo"
     ),
     "links": (
         "confere participante, organizacao e setor pelo ParticipantService, "
@@ -242,6 +244,20 @@ def test_dominio_nao_importa_dominio(dominio: Path) -> None:
         f"{dominio.name} importa outro domínio: {invasores}. "
         "Passe pelo service do dono, ou declare a leitura em LEITURA_ENTRE_DOMINIOS."
     )
+
+
+def test_dashboards_nao_importa_o_service_de_insights() -> None:
+    """O `insights` pede ao `DashboardService` os números do pedido da empresa
+    (CREED-8013). Se o `dashboards` importasse o `InsightService`, o import viraria
+    um ciclo. O `test_dominio_nao_importa_dominio` não pega isso: o `dashboards` está
+    em `COMPOE_COM_SERVICE_DE` e pode compor com o service de qualquer domínio."""
+    proibidos = [
+        f"{arquivo.name}: {linha}"
+        for arquivo in sorted((APP / "domains" / "dashboards").glob("*.py"))
+        for linha in _imports(_codigo(arquivo))
+        if any(f"app.domains.insights.{sub}" in linha for sub in SUBMODULOS_DE_COMPOSICAO)
+    ]
+    assert not proibidos, f"dashboards importa o service de insights: {proibidos}"
 
 
 def test_commit_so_no_get_db() -> None:

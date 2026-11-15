@@ -11,16 +11,18 @@ chegam prontas, e quem as calcula e monta o pedido é o `InsightService` (CREED-
 
 Todos os modelos recusam campo a mais (`extra="forbid"`). O que não está no
 contrato não sai do back, e o schema exportado diz isso ao N8N com
-`additionalProperties: false`. Só existe o escopo `individual` por enquanto: o da
-empresa entra na CREED-8013.
+`additionalProperties: false`. Há dois escopos, e o `scope` diz qual: o
+`individual`, de uma resposta, e o `organization`, de uma empresa num período
+(CREED-8013).
 """
 
 import uuid
+from datetime import datetime
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.shared.enums import Prisma
+from app.shared.enums import DepartmentType, Prisma
 
 # Notas na escala de 0 a 100, a mesma da tela: o texto nunca cita uma escala que a
 # pessoa não vê.
@@ -111,3 +113,101 @@ class IndividualInsightRequest(BaseModel):
     open_answers: list[OpenAnswer] = Field(
         description="Perguntas descritivas respondidas. Vazia se a pessoa não respondeu."
     )
+
+
+class Period(BaseModel):
+    """O período do questionário que a empresa respondeu."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    opens_at: datetime = Field(description="Abertura do período.")
+    closes_at: datetime | None = Field(
+        description="Fechamento do período. Nulo se o período não tem data para fechar."
+    )
+
+
+class Participation(BaseModel):
+    """Quantas pessoas responderam, de quantas eram do público do período."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    submitted: int = Field(ge=1, description="Pessoas com resposta enviada.")
+    invited: int = Field(ge=1, description="Pessoas do público do período.")
+
+
+class DepartmentScores(BaseModel):
+    """A nota de um setor. Só vem setor com o piso de respostas (P-089)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    department: DepartmentType
+    submitted: int = Field(ge=1, description="Pessoas do setor com resposta enviada.")
+    prismas: PrismaScores
+
+
+class AlignmentBands(BaseModel):
+    """Quantas pessoas estão em cada faixa de nota de um prisma (P-061)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    baixa: int = Field(ge=0)
+    media: int = Field(ge=0)
+    alta: int = Field(ge=0)
+
+
+class PrismaAlignment(BaseModel):
+    """As faixas de um prisma e a leitura delas (P-062)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    bands: AlignmentBands
+    level: Literal["alinhado", "moderado", "dividido"]
+
+
+class AlignmentByPrisma(BaseModel):
+    """O alinhamento do grupo em cada um dos cinco prismas. Os cinco vêm sempre."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    seguranca_psicologica: PrismaAlignment
+    lideranca_adaptativa: PrismaAlignment
+    cultura_empreendedora: PrismaAlignment
+    adaptabilidade_cognitiva: PrismaAlignment
+    neuroinovacao_prisma: PrismaAlignment
+
+
+class OrganizationInsightRequest(BaseModel):
+    """Pedido de insight da empresa: o resultado agregado de um período.
+
+    São os números do dashboard da empresa, sem recorte. Não leva nenhuma resposta
+    aberta (P-090), nem nome de pessoa ou da organização: o texto fala do grupo.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    contract_version: Literal["insight-v1"]
+    scope: Literal["organization"]
+    insight_id: uuid.UUID = Field(
+        description="Id do pedido. O callback devolve o mesmo valor."
+    )
+    attempt: int = Field(
+        ge=1,
+        description="Tentativa de disparo, a partir de 1. Só para o log do N8N.",
+    )
+    language: Literal["pt-BR"] = Field(
+        description="Idioma do texto, sempre pt-BR nesta versão (P-092)."
+    )
+    period: Period
+    participation: Participation
+    result: InsightResult
+    departments: list[DepartmentScores] = Field(
+        description="Setores com o piso de respostas. Vazia se nenhum chega a ele."
+    )
+    alignment: AlignmentByPrisma
+
+
+# O pedido é um dos dois, e o `scope` diz qual.
+InsightRequest = Annotated[
+    IndividualInsightRequest | OrganizationInsightRequest,
+    Field(discriminator="scope"),
+]

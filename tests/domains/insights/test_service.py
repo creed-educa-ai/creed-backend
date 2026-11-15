@@ -12,7 +12,14 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+from pydantic import TypeAdapter
 
+from app.domains.dashboards.schemas import (
+    AlignmentBandsRead,
+    DepartmentRowRead,
+    PrismaAlignmentRead,
+)
+from app.domains.dashboards.service import CompanyPeriodNumbers, DashboardService
 from app.domains.insights.models import Insight, InsightPrisma, InsightStatus
 from app.domains.insights.repository import (
     DescriptiveAnswer,
@@ -30,9 +37,14 @@ from app.domains.insights.service import (
 from app.domains.prismas.service import PrismaService
 from app.external_services.n8n.client import N8NClient
 from app.external_services.n8n.exceptions import N8NUnavailableError
-from app.external_services.n8n.schemas import IndividualInsightRequest, OpenAnswer
+from app.external_services.n8n.schemas import (
+    IndividualInsightRequest,
+    InsightRequest,
+    OpenAnswer,
+    OrganizationInsightRequest,
+)
 from app.shared.authorization import AuthenticatedUser
-from app.shared.enums import Dimension, LinkType, Prisma
+from app.shared.enums import DepartmentType, Dimension, LinkType, Prisma
 from app.shared.exceptions import (
     ConflictError,
     ForbiddenError,
@@ -185,7 +197,7 @@ async def test_colisao_no_flush_vira_conflict_error() -> None:
 async def test_pedido_individual_leva_organizacao_e_periodo_da_resposta() -> None:
     resposta, organizacao, formulario = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
     repository = AsyncMock(spec=InsightRepository)
-    repository.get_form_scope.return_value = FormScope(organizacao, formulario)
+    repository.get_form_scope.return_value = FormScope(organizacao, formulario, False)
     repository.create.side_effect = lambda insight: insight
     service = InsightService(repository, AsyncMock(spec=PrismaService))
 
@@ -216,7 +228,7 @@ async def test_pedido_de_resposta_inexistente_vira_not_found() -> None:
 async def test_resposta_que_ja_tem_insight_vira_conflict() -> None:
     """P-042: uma resposta, um insight. O repository devolve `None` na corrida."""
     repository = AsyncMock(spec=InsightRepository)
-    repository.get_form_scope.return_value = FormScope(uuid.uuid4(), uuid.uuid4())
+    repository.get_form_scope.return_value = FormScope(uuid.uuid4(), uuid.uuid4(), False)
     repository.create.return_value = None
     service = InsightService(repository, AsyncMock(spec=PrismaService))
 
@@ -431,6 +443,7 @@ def _service_do_ciclo(
     esquecidos: list[Insight] | None = None,
     em_voo: int = 0,
     n8n: AsyncMock | None = None,
+    dashboards: AsyncMock | None = None,
 ) -> tuple[InsightService, AsyncMock, AsyncMock]:
     repository = AsyncMock(spec=InsightRepository)
     repository.database_now.return_value = AGORA
@@ -440,7 +453,8 @@ def _service_do_ciclo(
     repository.list_descriptive_answers.return_value = []
     prismas = AsyncMock(spec=PrismaService)
     prismas.calculate_for_dispatch.return_value = _notas()
-    return InsightService(repository, prismas, n8n or _n8n()), repository, prismas
+    service = InsightService(repository, prismas, n8n or _n8n(), dashboards)
+    return service, repository, prismas
 
 
 def _payload_do_kit() -> IndividualInsightRequest:
@@ -519,23 +533,16 @@ async def test_pedido_que_nao_monta_vira_failed_e_nao_trava_os_outros() -> None:
     assert bom.status is InsightStatus.DISPATCHED
 
 
-@pytest.mark.parametrize("erro", ["pergunta sem texto", "insight da empresa"])
-async def test_pedido_que_quebra_fora_do_dominio_vira_failed_e_nao_trava_a_fila(
-    erro: str,
-) -> None:
+async def test_pedido_que_quebra_fora_do_dominio_vira_failed_e_nao_trava_a_fila() -> None:
     """Sem isso, a exceção desfaria a reivindicação inteira, e o mesmo pedido voltaria
     primeiro na fila a cada ciclo, travando todos os outros."""
     quebrado, bom = _insight(InsightStatus.PENDING), _insight(InsightStatus.PENDING)
     service, repository, _ = _service_do_ciclo(reivindicados=[quebrado, bom])
-    if erro == "pergunta sem texto":
-        # O `OpenAnswer` recusa a pergunta vazia com o `ValidationError` do Pydantic.
-        repository.list_descriptive_answers.side_effect = [
-            [DescriptiveAnswer("S9", "", "Uma resposta")],
-            [],
-        ]
-    else:
-        # O `ValueError` de `build_individual_payload`: não há pedido individual.
-        quebrado.form_response_id = None
+    # O `OpenAnswer` recusa a pergunta vazia com o `ValidationError` do Pydantic.
+    repository.list_descriptive_answers.side_effect = [
+        [DescriptiveAnswer("S9", "", "Uma resposta")],
+        [],
+    ]
 
     payloads = await service.claim_due_batch(LIMITES)
 
@@ -943,3 +950,262 @@ async def test_resposta_sem_insight_e_not_found() -> None:
         await service.get_status(
             uuid.uuid4(), user=_usuario("respondente", dono, OUTRA_ORG)
         )
+
+
+# --- O insight da empresa: o gatilho no envio (CREED-8013) ------------------------
+
+
+def _service_do_gatilho(
+    enviadas: int, *, individual: bool = False
+) -> tuple[InsightService, AsyncMock, FormScope]:
+    """`enviadas`: o que o repository conta, já com a resposta que está sendo enviada."""
+    escopo = FormScope(uuid.uuid4(), uuid.uuid4(), individual)
+    repository = AsyncMock(spec=InsightRepository)
+    repository.get_form_scope.return_value = escopo
+    repository.count_submitted_with.return_value = enviadas
+    repository.schedule_organization.return_value = True
+    service = InsightService(repository, AsyncMock(spec=PrismaService))
+    return service, repository, escopo
+
+
+async def test_com_4_enviadas_o_insight_da_empresa_nao_e_agendado() -> None:
+    service, repository, escopo = _service_do_gatilho(4)
+    resposta = uuid.uuid4()
+
+    await service.request_organization(resposta)
+
+    # A conta inclui a resposta que está sendo enviada: ela só vira `submitted` no
+    # commit.
+    repository.count_submitted_with.assert_awaited_once_with(escopo.form_id, resposta)
+    repository.schedule_organization.assert_not_awaited()
+
+
+@pytest.mark.parametrize("enviadas", [5, 6, 15])
+async def test_do_piso_em_diante_agenda_para_daqui_a_30_minutos(enviadas: int) -> None:
+    service, repository, escopo = _service_do_gatilho(enviadas)
+
+    await service.request_organization(uuid.uuid4())
+
+    repository.schedule_organization.assert_awaited_once_with(
+        escopo.organization_id, escopo.form_id, timedelta(minutes=30)
+    )
+
+
+async def test_a_trava_do_periodo_vem_antes_da_contagem() -> None:
+    """É a trava que faz o segundo de dois envios simultâneos contar o primeiro."""
+    service, repository, escopo = _service_do_gatilho(5)
+
+    await service.request_organization(uuid.uuid4())
+
+    repository.lock_period.assert_awaited_once_with(escopo.form_id)
+    chamadas = [nome for nome, *_ in repository.mock_calls]
+    assert chamadas.index("lock_period") < chamadas.index("count_submitted_with")
+
+
+async def test_periodo_que_ja_tem_pedido_esperando_segue_sem_erro() -> None:
+    """O índice parcial recusa o segundo pedido, e o envio não falha por isso."""
+    service, repository, _ = _service_do_gatilho(7)
+    repository.schedule_organization.return_value = False
+
+    await service.request_organization(uuid.uuid4())
+
+    repository.schedule_organization.assert_awaited_once()
+
+
+async def test_questionario_individual_de_mentorando_nunca_agenda() -> None:
+    """Formulário de uma pessoa só (P-048): não há grupo para o texto ler."""
+    service, repository, _ = _service_do_gatilho(50, individual=True)
+
+    await service.request_organization(uuid.uuid4())
+
+    repository.lock_period.assert_not_awaited()
+    repository.count_submitted_with.assert_not_awaited()
+    repository.schedule_organization.assert_not_awaited()
+
+
+async def test_gatilho_de_resposta_inexistente_vira_not_found() -> None:
+    service, repository, _ = _service_do_gatilho(5)
+    repository.get_form_scope.return_value = None
+
+    with pytest.raises(NotFoundError):
+        await service.request_organization(uuid.uuid4())
+
+    repository.schedule_organization.assert_not_awaited()
+
+
+# --- O insight da empresa: o pedido que vai ao N8N (CREED-8013) -------------------
+
+
+def _numeros_da_empresa() -> CompanyPeriodNumbers:
+    """Seis pessoas no período: Marketing tem o piso; Financeiro, uma pessoa só."""
+    return CompanyPeriodNumbers(
+        opens_at=datetime(2026, 11, 1, tzinfo=UTC),
+        closes_at=datetime(2026, 11, 30, 23, 59, 59, tzinfo=UTC),
+        submitted=6,
+        invited=10,
+        scores=dict.fromkeys(Prisma, 60.0)
+        | {Prisma.SEGURANCA_PSICOLOGICA: 71.0, Prisma.ADAPTABILIDADE_COGNITIVA: 49.0},
+        dimensions=dict.fromkeys(Dimension, 55.0),
+        destaque=Prisma.SEGURANCA_PSICOLOGICA,
+        oportunidade=Prisma.ADAPTABILIDADE_COGNITIVA,
+        departments=[
+            DepartmentRowRead(
+                department=DepartmentType.MARKETING,
+                respondents=5,
+                scores=dict.fromkeys(Prisma, 70.0),
+                difference=dict.fromkeys(Prisma, 10.0),
+            ),
+            DepartmentRowRead(
+                department=DepartmentType.FINANCEIRO,
+                respondents=1,
+                scores=dict.fromkeys(Prisma, 30.0),
+                difference=dict.fromkeys(Prisma, -30.0),
+            ),
+        ],
+        alignment={
+            prisma: PrismaAlignmentRead(
+                bands=AlignmentBandsRead(baixa=1, media=4, alta=1), level="moderado"
+            )
+            for prisma in Prisma
+        },
+    )
+
+
+def _insight_da_empresa(attempts: int = 1) -> Insight:
+    return Insight(
+        id=uuid.uuid4(),
+        organization_id=uuid.uuid4(),
+        form_id=uuid.uuid4(),
+        form_response_id=None,
+        status=InsightStatus.PENDING,
+        attempts=attempts,
+    )
+
+
+def _dashboards(numeros: CompanyPeriodNumbers | None) -> AsyncMock:
+    dashboards = AsyncMock(spec=DashboardService)
+    dashboards.company_period_numbers.return_value = numeros
+    return dashboards
+
+
+def _service_da_empresa(
+    numeros: CompanyPeriodNumbers | None,
+) -> tuple[InsightService, AsyncMock, AsyncMock]:
+    repository = AsyncMock(spec=InsightRepository)
+    dashboards = _dashboards(numeros)
+    service = InsightService(
+        repository, AsyncMock(spec=PrismaService), dashboards=dashboards
+    )
+    return service, repository, dashboards
+
+
+async def test_pedido_da_empresa_tem_a_forma_do_exemplo_do_kit() -> None:
+    """O ramo da empresa no N8N (CREED-8015) roda com o `exemplo-ida-empresa.json`
+    fixado: o back tem que mandar a mesma forma, campo a campo e tipo a tipo."""
+    service, _, dashboards = _service_da_empresa(_numeros_da_empresa())
+    pedido = _insight_da_empresa()
+
+    payload = await service.build_organization_payload(pedido)
+
+    dashboards.company_period_numbers.assert_awaited_once_with(
+        pedido.organization_id, pedido.form_id
+    )
+    corpo = payload.model_dump(mode="json")
+    exemplo = json.loads(
+        (CONTRACT_DIR / "exemplo-ida-empresa.json").read_text(encoding="utf-8")
+    )
+    assert _forma(corpo) == _forma(exemplo)
+    assert TypeAdapter(InsightRequest).validate_python(corpo) == payload
+    assert payload.insight_id == pedido.id
+    assert payload.attempt == 1
+
+
+async def test_pedido_da_empresa_leva_os_numeros_do_dashboard() -> None:
+    numeros = _numeros_da_empresa()
+    service, _, _ = _service_da_empresa(numeros)
+
+    payload = await service.build_organization_payload(_insight_da_empresa())
+
+    assert payload.result.prismas.seguranca_psicologica == 71.0
+    assert payload.result.prismas.adaptabilidade_cognitiva == 49.0
+    assert payload.result.dimensions.S8 == 55.0
+    assert payload.result.destaque is Prisma.SEGURANCA_PSICOLOGICA
+    assert payload.result.oportunidade is Prisma.ADAPTABILIDADE_COGNITIVA
+    assert payload.participation.submitted == 6
+    assert payload.participation.invited == 10
+    assert payload.period.opens_at == numeros.opens_at
+    assert payload.period.closes_at == numeros.closes_at
+    assert payload.alignment.neuroinovacao_prisma.bands.media == 4
+    assert payload.alignment.neuroinovacao_prisma.level == "moderado"
+
+
+async def test_pedido_da_empresa_so_leva_setor_com_o_piso() -> None:
+    """P-089: o Financeiro, com uma pessoa só, identificaria quem respondeu."""
+    service, _, _ = _service_da_empresa(_numeros_da_empresa())
+
+    payload = await service.build_organization_payload(_insight_da_empresa())
+
+    assert [row.department for row in payload.departments] == [DepartmentType.MARKETING]
+    assert payload.departments[0].submitted == 5
+    assert payload.departments[0].prismas.cultura_empreendedora == 70.0
+
+
+async def test_pedido_da_empresa_nao_leva_texto_livre() -> None:
+    """P-090: nenhuma resposta aberta entra, e o service nem as busca."""
+    service, repository, _ = _service_da_empresa(_numeros_da_empresa())
+
+    payload = await service.build_organization_payload(_insight_da_empresa())
+
+    repository.list_descriptive_answers.assert_not_awaited()
+    assert "open_answers" not in payload.model_dump()
+
+
+async def test_periodo_sem_resultado_nao_vira_pedido_da_empresa() -> None:
+    service, _, _ = _service_da_empresa(None)
+
+    with pytest.raises(ValidationError, match="não tem resultado"):
+        await service.build_organization_payload(_insight_da_empresa())
+
+
+async def test_insight_de_uma_resposta_nao_tem_pedido_da_empresa() -> None:
+    service, _, dashboards = _service_da_empresa(_numeros_da_empresa())
+
+    with pytest.raises(ValueError, match="é de uma resposta"):
+        await service.build_organization_payload(_pedido())
+
+    dashboards.company_period_numbers.assert_not_awaited()
+
+
+async def test_ciclo_monta_cada_pedido_pelo_escopo() -> None:
+    individual = _insight(InsightStatus.PENDING)
+    da_empresa = _insight_da_empresa(attempts=0)
+    service, _, _ = _service_do_ciclo(
+        reivindicados=[individual, da_empresa],
+        dashboards=_dashboards(_numeros_da_empresa()),
+    )
+
+    payloads = await service.claim_due_batch(LIMITES)
+
+    assert [type(payload) for payload in payloads] == [
+        IndividualInsightRequest,
+        OrganizationInsightRequest,
+    ]
+    assert payloads[1].insight_id == da_empresa.id
+    assert payloads[1].attempt == 1
+    assert da_empresa.status is InsightStatus.DISPATCHED
+
+
+async def test_pedido_da_empresa_sem_resultado_vira_failed_e_nao_trava_a_fila() -> None:
+    """Todas as pessoas do período foram excluídas, por exemplo: tentar de novo não
+    muda isso."""
+    da_empresa, individual = _insight_da_empresa(0), _insight(InsightStatus.PENDING)
+    service, _, _ = _service_do_ciclo(
+        reivindicados=[da_empresa, individual], dashboards=_dashboards(None)
+    )
+
+    payloads = await service.claim_due_batch(LIMITES)
+
+    assert [payload.insight_id for payload in payloads] == [individual.id]
+    assert da_empresa.status is InsightStatus.FAILED
+    assert da_empresa.last_error is not None
+    assert da_empresa.last_error.startswith("pedido não montado:")

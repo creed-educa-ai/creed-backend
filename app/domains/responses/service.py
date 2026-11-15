@@ -170,6 +170,7 @@ class FormResponseService:
         # Antes de marcar como enviada: se o pedido falhar, a resposta continua em
         # andamento também aqui na memória, e não só depois do rollback.
         await self.insights.request_individual(form_response.id)
+        await self.insights.request_organization(form_response.id)
         form_response.status = FormResponseStatus.SUBMITTED
         form_response.submitted_at = datetime.now(UTC)
 

@@ -23,16 +23,21 @@ from app.domains.insights.schemas import (
     InsightCallbackFailed,
 )
 from app.external_services.n8n.schemas import (
+    AlignmentByPrisma,
+    DepartmentScores,
     DimensionScores,
     IndividualInsightRequest,
+    InsightRequest,
     InsightResult,
     OpenAnswer,
+    OrganizationInsightRequest,
     PrismaScores,
 )
 from app.shared.enums import Dimension, Prisma
 from scripts.exportar_contrato_n8n import CONTRACT_DIR, contract_schemas
 
 CALLBACK: TypeAdapter[InsightCallback] = TypeAdapter(InsightCallback)
+REQUEST: TypeAdapter[InsightRequest] = TypeAdapter(InsightRequest)
 
 
 def _load(file_name: str) -> Any:
@@ -127,6 +132,66 @@ def test_ida_sem_respostas_abertas_e_aceita() -> None:
     request = IndividualInsightRequest.model_validate(payload)
 
     assert request.open_answers == []
+
+
+# --- Ida da empresa (CREED-8013) --------------------------------------------
+
+
+def test_ida_da_empresa_leva_so_numeros_agregados() -> None:
+    """P-090: nenhum texto livre de quem respondeu, e nada que identifique uma pessoa
+    ou a organização. A lista é dos campos que PODEM ir, como na ida individual."""
+    assert set(OrganizationInsightRequest.model_fields) == {
+        "contract_version",
+        "scope",
+        "insight_id",
+        "attempt",
+        "language",
+        "period",
+        "participation",
+        "result",
+        "departments",
+        "alignment",
+    }
+    assert set(DepartmentScores.model_fields) == {"department", "submitted", "prismas"}
+
+
+def test_alinhamento_da_ida_tem_um_campo_por_prisma() -> None:
+    assert set(AlignmentByPrisma.model_fields) == {prisma.value for prisma in Prisma}
+
+
+def test_exemplo_de_ida_da_empresa_vale_pelo_modelo() -> None:
+    request = REQUEST.validate_python(_load("exemplo-ida-empresa.json"))
+
+    assert isinstance(request, OrganizationInsightRequest)
+    assert request.result.oportunidade is Prisma.ADAPTABILIDADE_COGNITIVA
+    # O exemplo respeita o piso de setor que o back aplica (P-089).
+    assert all(department.submitted >= 5 for department in request.departments)
+
+
+def test_o_scope_escolhe_o_modelo_da_ida() -> None:
+    individual = REQUEST.validate_python(_load("exemplo-ida-individual.json"))
+    assert isinstance(individual, IndividualInsightRequest)
+
+    payload = _load("exemplo-ida-empresa.json")
+    payload["scope"] = "individual"
+    with pytest.raises(ValidationError):
+        REQUEST.validate_python(payload)
+
+
+def test_ida_da_empresa_com_resposta_aberta_e_recusada() -> None:
+    payload = _load("exemplo-ida-empresa.json")
+    payload["open_answers"] = []
+
+    with pytest.raises(ValidationError, match="open_answers"):
+        OrganizationInsightRequest.model_validate(payload)
+
+
+def test_ida_da_empresa_com_alinhamento_de_leitura_desconhecida_e_recusada() -> None:
+    payload = _load("exemplo-ida-empresa.json")
+    payload["alignment"]["seguranca_psicologica"]["level"] = "polarizado"
+
+    with pytest.raises(ValidationError, match="level"):
+        OrganizationInsightRequest.model_validate(payload)
 
 
 # --- Volta ------------------------------------------------------------------
