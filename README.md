@@ -110,16 +110,33 @@ curl -s -X POST http://localhost:8080/realms/creed/protocol/openid-connect/token
 
 O seed deixa o ambiente como o de produção: a admin na organização da CREED, junto
 com os mentorandos, e duas empresas de demonstração com os seus membros. **Nenhum
-período nasce do seed**: quem abre é a gestora (para a empresa toda) ou a admin (para
-um mentorando), pelo painel. Todas as pessoas entram com a senha `dev-creed`.
+período aberto nasce do seed**: quem abre é a gestora (para a empresa toda) ou a admin
+(para um mentorando), pelo painel. Todas as pessoas entram com a senha `dev-creed`.
 
 | E-mail | Papel | Organização |
 |---|---|---|
 | `dev@creed.example.com` | `admin` | CREED.ai Educa |
 | `mentorando1@creed.example.com` · `mentorando2@creed.example.com` | `respondente` (vínculo `mentoria`) | CREED.ai Educa |
 | `gestora@creed.example.com` | `gestor` | [Demonstração] Organização de dev |
-| `funcionario@creed.example.com` | `respondente` | [Demonstração] Organização de dev |
+| `funcionario@creed.example.com` | `respondente`, Marketing | [Demonstração] Organização de dev |
+| `ana.marketing@` · `bruno.marketing@` | `respondente`, Marketing | [Demonstração] Organização de dev |
+| `carla.financeiro@` · `diego.financeiro@` | `respondente`, Financeiro | [Demonstração] Organização de dev |
+| `elisa.ti@` · `fabio.ti@` · `gabriela.ti@` | `respondente`, TI | [Demonstração] Organização de dev |
+| `helena@` | `respondente`, sem setor | [Demonstração] Organização de dev |
 | `funcionario.outra@creed.example.com` | `respondente` | [Demonstração] Outra empresa |
+
+Para os dashboards terem o que mostrar, o seed também grava **períodos já encerrados
+e respondidos**, com notas de uma fórmula fixa (`nota_de_demonstracao`):
+
+| Período | Público | Respostas |
+|---|---|---|
+| 01/09 a 15/09/2026 | toda a organização de dev | os 9 respondentes e a gestora |
+| 01/10 a 15/10/2026 | toda a organização de dev | 9 (a `gabriela.ti@` não respondeu), notas um pouco melhores |
+| 01/10 a 15/10/2026 | só o `mentorando1@` | 1 |
+
+Eles não aparecem como questionário aberto e não impedem abrir um período novo. O seed
+também devolve o setor de cada pessoa ao da tabela acima: troca de setor feita pelo
+painel some na próxima execução.
 
 Banco semeado antes desta versão: o seed muda a admin para a organização da CREED e
 apaga o formulário de demonstração antigo (aberto até 2031), com as respostas de teste

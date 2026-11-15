@@ -83,103 +83,68 @@ async def test_buscar_dashboard_inexistente_devolve_none() -> None:
     assert resultado is None
 
 
-async def test_count_invited_respondents_filtra_vinculos_apos_fechamento() -> None:
+def _sql(sessao: _SessaoFalsa) -> str:
+    return str(sessao.executados[0].compile(dialect=postgresql.dialect()))
+
+
+def _resultado_de_tuplas(linhas: list[tuple[Any, ...]]) -> _SessaoFalsa:
+    sessao = _SessaoFalsa()
+
+    async def execute(query: Any) -> MagicMock:
+        sessao.executados.append(query)
+        resultado = MagicMock()
+        resultado.all.return_value = linhas
+        return resultado
+
+    sessao.execute = execute  # type: ignore[method-assign]
+    return sessao
+
+
+async def test_list_invited_links_filtra_vinculos_apos_fechamento() -> None:
     """O público do período exclui vínculos criados/iniciados após o fechamento."""
-    sessao = _SessaoFalsa(scalar_val=5)
+    link_id = uuid.uuid4()
+    sessao = _resultado_de_tuplas([(link_id, None)])
     repository = DashboardRepository(sessao)  # type: ignore[arg-type]
 
-    org_id = uuid.uuid4()
     form = Form(
         id=uuid.uuid4(),
-        organization_id=org_id,
+        organization_id=uuid.uuid4(),
         name="Ciclo 2026.1",
         status=FormStatus.CLOSED,
         opens_at=datetime(2026, 10, 1, tzinfo=UTC),
         closes_at=datetime(2026, 10, 31, 23, 59, 59, tzinfo=UTC),
     )
 
-    total = await repository.count_invited_respondents(form)
-    assert total == 5
+    convidados = await repository.list_invited_links(form)
 
-    assert len(sessao.executados) == 1
-    query_str = str(
-        sessao.executados[0].compile(
-            dialect=postgresql.dialect(), compile_kwargs={"literal_binds": False}
-        )
-    )
-    # Deve filtrar por organização, papel de respondente, e corte no fechamento
-    assert "links.organization_id =" in query_str
-    assert "links.role =" in query_str
-    assert "links.created_at <=" in query_str
-    assert "links.start_at <=" in query_str
-    assert "links.end_at IS NULL OR links.end_at >=" in query_str
+    assert [c.link_id for c in convidados] == [link_id]
+    sql = _sql(sessao)
+    # Organização, papel de respondente e corte no fechamento.
+    assert "links.organization_id =" in sql
+    # Respondentes e gestores: a gestora também responde.
+    assert "links.role IN" in sql
+    assert "links.created_at <=" in sql
+    assert "links.start_at <=" in sql
+    assert "links.end_at IS NULL OR links.end_at >=" in sql
+    # O setor vem junto, para o recorte por setor.
+    assert "LEFT OUTER JOIN departments" in sql
 
 
-async def test_count_invited_respondents_com_publico_individual() -> None:
-    """Quando o formulário tem link_id, restringe a contagem àquele vínculo específico."""
-    sessao = _SessaoFalsa(scalar_val=1)
+async def test_list_invited_links_com_publico_individual() -> None:
+    """Quando o formulário tem link_id, o público é só aquele vínculo."""
+    sessao = _resultado_de_tuplas([])
     repository = DashboardRepository(sessao)  # type: ignore[arg-type]
 
-    link_especifico = uuid.uuid4()
     form = Form(
         id=uuid.uuid4(),
         organization_id=uuid.uuid4(),
         name="Ciclo Individual",
-        link_id=link_especifico,
+        link_id=uuid.uuid4(),
         status=FormStatus.PUBLISHED,
         opens_at=datetime(2026, 11, 1, tzinfo=UTC),
         closes_at=datetime(2026, 11, 30, tzinfo=UTC),
     )
 
-    total = await repository.count_invited_respondents(form)
-    assert total == 1
+    await repository.list_invited_links(form)
 
-    query_str = str(sessao.executados[0].compile(dialect=postgresql.dialect()))
-    assert "links.id =" in query_str
-
-
-async def test_count_invited_respondents_sem_fechamento_usa_momento_atual() -> None:
-    """Formulário sem closes_at avalia vínculos ativos no momento da consulta."""
-    sessao = _SessaoFalsa(scalar_val=8)
-    repository = DashboardRepository(sessao)  # type: ignore[arg-type]
-
-    form = Form(
-        id=uuid.uuid4(),
-        organization_id=uuid.uuid4(),
-        name="Demonstracao",
-        status=FormStatus.PUBLISHED,
-        opens_at=None,
-        closes_at=None,
-    )
-
-    total = await repository.count_invited_respondents(form)
-    assert total == 8
-
-    query_str = str(sessao.executados[0].compile(dialect=postgresql.dialect()))
-    assert "links.end_at IS NULL OR links.end_at > now()" in query_str
-
-
-async def test_get_submitted_form_response_ids_aplica_mesma_regra_do_publico() -> None:
-    """Concluídos aplicam a mesma regra de elegibilidade do público com JOIN em links."""
-    resp_id = uuid.uuid4()
-    sessao = _SessaoFalsa(scalars_val=[resp_id])
-    repository = DashboardRepository(sessao)  # type: ignore[arg-type]
-
-    form = Form(
-        id=uuid.uuid4(),
-        organization_id=uuid.uuid4(),
-        name="Ciclo Passado",
-        status=FormStatus.CLOSED,
-        opens_at=datetime(2026, 9, 1, tzinfo=UTC),
-        closes_at=datetime(2026, 9, 30, tzinfo=UTC),
-    )
-
-    result = await repository.get_submitted_form_response_ids(form)
-    assert result == [resp_id]
-
-    query_str = str(sessao.executados[0].compile(dialect=postgresql.dialect()))
-    # Deve dar JOIN em links e filtrar papel de respondente e período
-    assert "JOIN links ON form_responses.vinculo_id = links.id" in query_str
-    assert "form_responses.status =" in query_str
-    assert "links.created_at <=" in query_str
-    assert "links.start_at <=" in query_str
+    assert "links.id =" in _sql(sessao)

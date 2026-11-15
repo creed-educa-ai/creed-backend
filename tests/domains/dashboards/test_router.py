@@ -1,6 +1,7 @@
 """Testes de app/domains/dashboards/router.py."""
 
 import uuid
+from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -10,11 +11,19 @@ from fastapi.testclient import TestClient
 
 from app.domains.dashboards.dependencies import get_service as get_dashboard_service
 from app.domains.dashboards.router import router
-from app.domains.dashboards.schemas import CompanySummaryRead, MetricCardRead
+from app.domains.dashboards.schemas import (
+    CompanyDashboardRead,
+    CompanySummaryRead,
+    ComparisonOptionsRead,
+    CreedSummaryRead,
+    HighlightRead,
+    PeriodOptionRead,
+    UserDashboardRead,
+)
 from app.domains.users.dependencies import get_service as get_user_service
 from app.domains.users.service import UserAccess
-from app.shared.enums import Prisma
-from app.shared.exceptions import ForbiddenError, NotFoundError
+from app.shared.enums import DepartmentType, Dimension, Prisma
+from app.shared.exceptions import ForbiddenError, NotFoundError, ValidationError
 
 ORGANIZATION_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 TOKEN = {"Authorization": "Bearer valido"}
@@ -62,103 +71,297 @@ def autenticar_como(
     app.dependency_overrides[get_user_service] = lambda: _FakeUserService(access)
 
 
-def test_get_company_dashboard_requires_authentication(client: TestClient) -> None:
-    resp = client.get(f"/dashboards/company/{uuid.uuid4()}")
-    assert resp.status_code == 401
+# ---------------------------------------------------------------------------
+# GET /dashboards/me
+# ---------------------------------------------------------------------------
 
 
-def test_get_company_dashboard_returns_200_and_payload(
+def _user_dashboard(period: uuid.UUID) -> UserDashboardRead:
+    return UserDashboardRead(
+        organization_name="Empresa Exemplo",
+        periods=[
+            PeriodOptionRead(
+                id=period,
+                opens_at=datetime(2026, 10, 1, 12, tzinfo=UTC),
+                closes_at=datetime(2026, 10, 15, 12, tzinfo=UTC),
+            )
+        ],
+        period=period,
+        scores=dict.fromkeys(Prisma, 62.5),
+        dimensions=dict.fromkeys(Dimension, 62.5),
+        comparison_options=ComparisonOptionsRead(
+            periods=[period], departments=[], default_period=None
+        ),
+        comparisons=[],
+        creed_summary=CreedSummaryRead(
+            analiseTexto=[],
+            recomendacaoTexto=[],
+            prismas={},
+            destaque=Prisma.SEGURANCA_PSICOLOGICA,
+            oportunidade=Prisma.NEUROINOVACAO_PRISMA,
+        ),
+    )
+
+
+def test_me_exige_autenticacao(client: TestClient) -> None:
+    assert client.get("/dashboards/me").status_code == 401
+
+
+def test_me_devolve_o_resultado_com_os_nomes_do_contrato(
+    app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    autenticar_como(app, monkeypatch, "respondente")
+    period = uuid.uuid4()
+    service = AsyncMock()
+    service.get_user_dashboard.return_value = _user_dashboard(period)
+    app.dependency_overrides[get_dashboard_service] = lambda: service
+
+    resp = client.get("/dashboards/me", params={"period": str(period)}, headers=TOKEN)
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["period"] == str(period)
+    assert data["scores"]["seguranca_psicologica"] == 62.5
+    assert data["dimensions"]["S2"] == 62.5
+    # Os nomes em português do contrato do front (decisão D5).
+    assert data["creed_summary"]["analiseTexto"] == []
+    assert data["creed_summary"]["destaque"] == "seguranca_psicologica"
+    assert service.get_user_dashboard.await_args.kwargs["period"] == period
+
+
+def test_me_sem_period_pede_o_mais_recente(
+    app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    autenticar_como(app, monkeypatch, "respondente")
+    service = AsyncMock()
+    service.get_user_dashboard.return_value = _user_dashboard(uuid.uuid4())
+    app.dependency_overrides[get_dashboard_service] = lambda: service
+
+    client.get("/dashboards/me", headers=TOKEN)
+
+    assert service.get_user_dashboard.await_args.kwargs["period"] is None
+
+
+def test_me_sem_resultado_e_404(
+    app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    autenticar_como(app, monkeypatch, "respondente")
+    service = AsyncMock()
+    service.get_user_dashboard.side_effect = NotFoundError("Você ainda não tem resultado")
+    app.dependency_overrides[get_dashboard_service] = lambda: service
+
+    resp = client.get("/dashboards/me", headers=TOKEN)
+
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "Você ainda não tem resultado"
+
+
+def test_me_period_que_nao_e_uuid_e_422(
+    app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    autenticar_como(app, monkeypatch, "respondente")
+    app.dependency_overrides[get_dashboard_service] = lambda: AsyncMock()
+
+    resp = client.get("/dashboards/me", params={"period": "2026/1"}, headers=TOKEN)
+
+    assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# GET /dashboards/company
+# ---------------------------------------------------------------------------
+
+
+def _company_dashboard(period: uuid.UUID) -> CompanyDashboardRead:
+    destaque = HighlightRead(prisma=Prisma.SEGURANCA_PSICOLOGICA, valor=70)
+    return CompanyDashboardRead(
+        **_user_dashboard(period).model_dump(),
+        department=None,
+        member_id=None,
+        departments=[DepartmentType.MARKETING],
+        members=[],
+        company_summary=CompanySummaryRead(
+            concluidos=8,
+            convidados=9,
+            destaque=destaque,
+            oportunidade=destaque,
+            maisComum=destaque,
+        ),
+        alignment=None,
+        department_matrix=[],
+    )
+
+
+def _servico_da_empresa(app: FastAPI, **comportamento: Any) -> AsyncMock:
+    service = AsyncMock()
+    service.get_company_dashboard.configure_mock(**comportamento)
+    app.dependency_overrides[get_dashboard_service] = lambda: service
+    return service
+
+
+def test_empresa_exige_autenticacao(client: TestClient) -> None:
+    assert client.get("/dashboards/company").status_code == 401
+
+
+def test_empresa_repassa_os_filtros_e_devolve_o_contrato(
     app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     autenticar_como(app, monkeypatch, "gestor")
-    form_id = uuid.uuid4()
+    period, member = uuid.uuid4(), uuid.uuid4()
+    service = _servico_da_empresa(app, return_value=_company_dashboard(period))
 
-    destaque = MetricCardRead(
-        rotulo="Destaque",
-        titulo="Segurança Psicológica",
-        valor=85.0,
-        descricao="Ambiente de confiança",
-        prisma=Prisma.SEGURANCA_PSICOLOGICA,
-    )
-    oportunidade = MetricCardRead(
-        rotulo="Oportunidade",
-        titulo="Liderança Adaptativa",
-        valor=65.0,
-        descricao="Espaço para melhoria",
-        prisma=Prisma.LIDERANCA_ADAPTATIVA,
-    )
-    mais_comum = MetricCardRead(
-        rotulo="Mais Comum",
-        titulo="Cultura Empreendedora",
-        valor=75.0,
-        descricao="Comportamento padrão",
-        prisma=Prisma.CULTURA_EMPREENDEDORA,
+    resp = client.get(
+        "/dashboards/company",
+        params={"period": str(period), "member_id": str(member)},
+        headers=TOKEN,
     )
 
-    fake_service = AsyncMock()
-    fake_service.calculate_company_summary.return_value = CompanySummaryRead(
-        form_id=form_id,
-        organization_id=ORGANIZATION_ID,
-        nome_empresa="Acme Corp",
-        concluidos=10,
-        convidados=12,
-        taxa_conclusao=83,
-        destaque=destaque,
-        oportunidade=oportunidade,
-        mais_comum=mais_comum,
-        scores={p.value: 3.5 for p in Prisma},
-        scores_100={p.value: 70.0 for p in Prisma},
-    )
-    app.dependency_overrides[get_dashboard_service] = lambda: fake_service
-
-    response = client.get(f"/dashboards/company/{form_id}", headers=TOKEN)
-    assert response.status_code == 200
-    data = response.json()
-    assert data["nome_empresa"] == "Acme Corp"
-    assert data["taxa_conclusao"] == 83
-    assert data["destaque"]["rotulo"] == "Destaque"
-    assert data["destaque"]["prisma"] == Prisma.SEGURANCA_PSICOLOGICA.value
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["company_summary"]["maisComum"]["prisma"] == "seguranca_psicologica"
+    # Sem título nem descrição: são do i18n do front (D2).
+    assert set(data["company_summary"]["destaque"]) == {"prisma", "valor"}
+    kwargs = service.get_company_dashboard.await_args.kwargs
+    assert kwargs["period"] == period
+    assert kwargs["member_id"] == member
+    assert kwargs["department"] is None
+    assert kwargs["organization_id"] is None
 
 
-def test_get_company_dashboard_returns_404_when_missing(
+def test_empresa_setor_vai_pelo_valor_do_enum(
     app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     autenticar_como(app, monkeypatch, "gestor")
-    fake_service = AsyncMock()
-    fake_service.calculate_company_summary.side_effect = NotFoundError(
-        "Formulário não encontrado"
-    )
-    app.dependency_overrides[get_dashboard_service] = lambda: fake_service
+    service = _servico_da_empresa(app, return_value=_company_dashboard(uuid.uuid4()))
 
-    response = client.get(f"/dashboards/company/{uuid.uuid4()}", headers=TOKEN)
-    assert response.status_code == 404
+    client.get("/dashboards/company", params={"department": "Marketing"}, headers=TOKEN)
+
+    kwargs = service.get_company_dashboard.await_args.kwargs
+    assert kwargs["department"] is DepartmentType.MARKETING
 
 
-def test_get_company_dashboard_returns_403_when_forbidden(
+def test_empresa_setor_fora_do_enum_e_422(
     app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     autenticar_como(app, monkeypatch, "gestor")
-    fake_service = AsyncMock()
-    fake_service.calculate_company_summary.side_effect = ForbiddenError(
-        "Sem acesso ao dashboard de outra organização"
+    _servico_da_empresa(app)
+
+    resp = client.get(
+        "/dashboards/company", params={"department": "Vendas"}, headers=TOKEN
     )
-    app.dependency_overrides[get_dashboard_service] = lambda: fake_service
 
-    response = client.get(f"/dashboards/company/{uuid.uuid4()}", headers=TOKEN)
-    assert response.status_code == 403
+    assert resp.status_code == 422
 
 
-def test_get_company_dashboard_returns_403_for_respondent_on_empty_form(
+@pytest.mark.parametrize(
+    ("erro", "codigo"),
+    [
+        (NotFoundError("Ainda não há resultados"), 404),
+        (ForbiddenError("Sem acesso ao dashboard de outra organização"), 403),
+        (ValidationError("A administradora precisa informar a organização"), 422),
+    ],
+)
+def test_empresa_erros_do_service_viram_codigos_http(
+    app: FastAPI,
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    erro: Exception,
+    codigo: int,
+) -> None:
+    autenticar_como(app, monkeypatch, "gestor")
+    _servico_da_empresa(app, side_effect=erro)
+
+    resp = client.get("/dashboards/company", headers=TOKEN)
+
+    assert resp.status_code == codigo
+    assert resp.json()["detail"] == str(erro.message)  # type: ignore[attr-defined]
+
+
+# ---------------------------------------------------------------------------
+# GET /dashboards/overview
+# ---------------------------------------------------------------------------
+
+
+def test_retrato_exige_o_tipo(
     app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from app.domains.dashboards.service import DashboardService
+    autenticar_como(app, monkeypatch, "admin")
+    app.dependency_overrides[get_dashboard_service] = lambda: AsyncMock()
 
-    autenticar_como(app, monkeypatch, "respondente", organization_id=ORGANIZATION_ID)
-    fake_repo = AsyncMock()
-    # Mesmo com o formulário sem submissões, o respondente é barrado com 403
-    real_service = DashboardService(fake_repo, AsyncMock())
-    app.dependency_overrides[get_dashboard_service] = lambda: real_service
+    assert client.get("/dashboards/overview", headers=TOKEN).status_code == 422
+    assert (
+        client.get(
+            "/dashboards/overview", params={"kind": "setores"}, headers=TOKEN
+        ).status_code
+        == 422
+    )
 
-    response = client.get(f"/dashboards/company/{uuid.uuid4()}", headers=TOKEN)
-    assert response.status_code == 403
-    assert "Apenas administradores e gestores" in response.json()["detail"]
+
+@pytest.mark.parametrize(
+    ("erro", "codigo"),
+    [
+        (NotFoundError("Ainda não há resultados"), 404),
+        (ForbiddenError("Só a administradora vê o retrato de todos"), 403),
+    ],
+)
+def test_retrato_erros_viram_codigos_http(
+    app: FastAPI,
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    erro: Exception,
+    codigo: int,
+) -> None:
+    autenticar_como(app, monkeypatch, "gestor")
+    service = AsyncMock()
+    service.get_overview.side_effect = erro
+    app.dependency_overrides[get_dashboard_service] = lambda: service
+
+    resp = client.get("/dashboards/overview", params={"kind": "companies"}, headers=TOKEN)
+
+    assert resp.status_code == codigo
+    assert service.get_overview.await_args.kwargs["kind"] == "companies"
+
+
+def test_admin_ve_o_dashboard_de_um_mentorando(
+    app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    autenticar_como(app, monkeypatch, "admin")
+    mentorando, period = uuid.uuid4(), uuid.uuid4()
+    service = AsyncMock()
+    service.get_member_dashboard.return_value = _user_dashboard(period).model_copy(
+        update={"member_name": "Mentorando 1"}
+    )
+    app.dependency_overrides[get_dashboard_service] = lambda: service
+
+    resp = client.get(
+        f"/dashboards/members/{mentorando}",
+        params={"period": str(period)},
+        headers=TOKEN,
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["member_name"] == "Mentorando 1"
+    kwargs = service.get_member_dashboard.await_args.kwargs
+    assert kwargs["member_id"] == mentorando
+    assert kwargs["period"] == period
+
+
+@pytest.mark.parametrize(
+    ("erro", "codigo"),
+    [(ForbiddenError("Só a administradora"), 403), (NotFoundError("Sem resultado"), 404)],
+)
+def test_dashboard_de_mentorando_traduz_os_erros(
+    app: FastAPI,
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    erro: Exception,
+    codigo: int,
+) -> None:
+    autenticar_como(app, monkeypatch, "gestor")
+    service = AsyncMock()
+    service.get_member_dashboard.side_effect = erro
+    app.dependency_overrides[get_dashboard_service] = lambda: service
+
+    resp = client.get(f"/dashboards/members/{uuid.uuid4()}", headers=TOKEN)
+
+    assert resp.status_code == codigo
