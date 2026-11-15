@@ -11,16 +11,17 @@ import uuid
 from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app import models  # noqa: F401 — registra todas as FKs
 from app.core.config import settings
 from app.core.database import Base
-from app.domains.dashboards.repository import DashboardRepository
+from app.domains.dashboards.repository import DashboardRepository, InsightText
 from app.domains.department.models import Department
 from app.domains.documents.models import Document
 from app.domains.forms.models import Form
+from app.domains.insights.models import Insight, InsightStatus
 from app.domains.links.models import Link
 from app.domains.organizacoes.models import Organization
 from app.domains.participants.models import Participant
@@ -319,12 +320,12 @@ async def test_publico_do_periodo_com_o_setor(cenario) -> None:  # type: ignore[
     sessions, ids = cenario
     async with sessions() as session:
         repository = DashboardRepository(session)
-        setembro = await repository.list_invited_links(
-            await session.get(Form, ids["setembro"])  # type: ignore[arg-type]
-        )
-        individual = await repository.list_invited_links(
-            await session.get(Form, ids["individual"])  # type: ignore[arg-type]
-        )
+        form_setembro = await session.get(Form, ids["setembro"])
+        form_individual = await session.get(Form, ids["individual"])
+        assert form_setembro is not None
+        assert form_individual is not None
+        setembro = await repository.list_invited_links(form_setembro)
+        individual = await repository.list_invited_links(form_individual)
 
     assert {(c.link_id, c.department) for c in setembro} == {
         (ids["marketing"], DepartmentType.MARKETING),
@@ -373,3 +374,60 @@ async def test_retrato_empresas_periodos_e_vinculos_por_tipo(cenario) -> None:  
     assert nenhum == []
     assert set(emprego) == {ids["marketing"], ids["sem_setor"]}
     assert mentoria == []
+
+
+async def test_insight_da_resposta_enviada_do_vinculo_no_periodo(cenario) -> None:  # type: ignore[no-untyped-def]
+    sessions, ids = cenario
+    pronto_em = datetime(2026, 10, 8, 13, 30, tzinfo=UTC)
+    conteudo = {"analise": ["Um", "Dois"], "recomendacao": ["Uma"]}
+
+    async with sessions.begin() as session:
+        respostas = {
+            (form_id, vinculo_id): resposta_id
+            for resposta_id, form_id, vinculo_id in (
+                await session.execute(
+                    select(FormResponse.id, FormResponse.form_id, FormResponse.vinculo_id)
+                )
+            ).all()
+        }
+        # `marketing` em setembro: pronto. `sem_setor` em setembro: já foi ao N8N.
+        # `sem_setor` em outubro: enviou, mas sem insight (como uma resposta de antes
+        # da esteira).
+        session.add_all(
+            [
+                Insight(
+                    organization_id=ids["empresa"],
+                    form_id=ids["setembro"],
+                    form_response_id=respostas[(ids["setembro"], ids["marketing"])],
+                    status=InsightStatus.DONE,
+                    content=conteudo,
+                    completed_at=pronto_em,
+                ),
+                Insight(
+                    organization_id=ids["empresa"],
+                    form_id=ids["setembro"],
+                    form_response_id=respostas[(ids["setembro"], ids["sem_setor"])],
+                    status=InsightStatus.DISPATCHED,
+                ),
+            ]
+        )
+
+    async with sessions() as session:
+        repository = DashboardRepository(session)
+        pronto = await repository.get_response_insight(ids["marketing"], ids["setembro"])
+        em_preparo = await repository.get_response_insight(
+            ids["sem_setor"], ids["setembro"]
+        )
+        sem_insight = await repository.get_response_insight(
+            ids["sem_setor"], ids["outubro"]
+        )
+        # O período de outra organização, que o vínculo não respondeu.
+        de_outro_periodo = await repository.get_response_insight(
+            ids["marketing"], ids["da_outra"]
+        )
+
+    assert pronto == InsightText("done", conteudo, pronto_em)
+    # `dispatched` aparece como `pending`, e o texto de uma pessoa não vaza para a outra.
+    assert em_preparo == InsightText("pending", None, None)
+    assert sem_insight is None
+    assert de_outro_periodo is None

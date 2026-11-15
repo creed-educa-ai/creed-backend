@@ -2,7 +2,7 @@
 
 import uuid
 from datetime import UTC, datetime
-from typing import cast
+from typing import Literal, cast
 from unittest.mock import AsyncMock
 
 import pytest
@@ -11,6 +11,7 @@ from app.domains.dashboards.models import Dashboard
 from app.domains.dashboards.repository import (
     DashboardRepository,
     DimensionAverage,
+    InsightText,
     InvitedLink,
 )
 from app.domains.dashboards.schemas import CompanyDashboardRead, DashboardCreate
@@ -126,6 +127,8 @@ def _servico_do_me(
     repo.list_answered_forms.return_value = forms
     repo.list_dimension_averages.return_value = linhas
     repo.get_organization_name.return_value = "Empresa Exemplo"
+    # Sem insight, a menos que o teste diga o contrário.
+    repo.get_response_insight.return_value = None
     return DashboardService(repo, PrismaService(AsyncMock())), repo
 
 
@@ -246,16 +249,11 @@ async def test_me_resposta_sem_todas_as_dimensoes_nao_vira_periodo(
     assert result.comparisons == []
 
 
-@pytest.mark.asyncio
-async def test_me_textos_do_creed_vem_vazios_e_os_cards_marcam_os_prismas(
-    fake_respondente: AuthenticatedUser,
-) -> None:
-    outubro = _periodo(10)
-    link = fake_respondente.link_uuid
-    # S6 e S7 altos puxam Segurança Psicológica; S5A e S5B baixos derrubam
-    # Adaptabilidade Cognitiva.
-    linhas = [
-        DimensionAverage(outubro.id, link, None, dimension, media)
+def _linhas_com_destaque(form: Form, link_id: uuid.UUID) -> list[DimensionAverage]:
+    """S6 e S7 altos puxam Segurança Psicológica; S5A e S5B baixos derrubam
+    Adaptabilidade Cognitiva."""
+    return [
+        DimensionAverage(form.id, link_id, None, dimension, media)
         for dimension, media in {
             Dimension.S2: 3.0,
             Dimension.S4: 3.0,
@@ -266,7 +264,17 @@ async def test_me_textos_do_creed_vem_vazios_e_os_cards_marcam_os_prismas(
             Dimension.S8: 3.0,
         }.items()
     ]
-    service, _ = _servico_do_me(fake_respondente, [outubro], linhas)
+
+
+@pytest.mark.asyncio
+async def test_me_sem_insight_tem_status_none_e_os_cards_marcam_os_prismas(
+    fake_respondente: AuthenticatedUser,
+) -> None:
+    outubro = _periodo(10)
+    link = fake_respondente.link_uuid
+    service, _ = _servico_do_me(
+        fake_respondente, [outubro], _linhas_com_destaque(outubro, link)
+    )
 
     summary = (
         await service.get_user_dashboard(user=fake_respondente, period=None)
@@ -275,8 +283,90 @@ async def test_me_textos_do_creed_vem_vazios_e_os_cards_marcam_os_prismas(
     assert summary.analiseTexto == []
     assert summary.recomendacaoTexto == []
     assert summary.prismas == {}
+    assert summary.insight_status == "none"
+    assert summary.generated_at is None
     assert summary.destaque is Prisma.SEGURANCA_PSICOLOGICA
     assert summary.oportunidade is Prisma.ADAPTABILIDADE_COGNITIVA
+
+
+# O que o `InsightContent` grava no banco: as chaves dos prismas são os valores do enum.
+CONTEUDO_DO_INSIGHT = {
+    "analise": ["Primeiro parágrafo.", "Segundo parágrafo."],
+    "prismas": {prisma.value: f"Texto de {prisma.value}." for prisma in Prisma},
+    "recomendacao": ["Uma recomendação."],
+}
+PRONTO_EM = datetime(2026, 10, 8, 13, 30, tzinfo=UTC)
+
+
+@pytest.mark.asyncio
+async def test_me_com_insight_pronto_mostra_os_textos_e_a_data(
+    fake_respondente: AuthenticatedUser,
+) -> None:
+    outubro = _periodo(10)
+    link = fake_respondente.link_uuid
+    service, repo = _servico_do_me(
+        fake_respondente, [outubro], _linhas_com_destaque(outubro, link)
+    )
+    repo.get_response_insight.return_value = InsightText(
+        "done", CONTEUDO_DO_INSIGHT, PRONTO_EM
+    )
+
+    summary = (
+        await service.get_user_dashboard(user=fake_respondente, period=None)
+    ).creed_summary
+
+    repo.get_response_insight.assert_awaited_once_with(link, outubro.id)
+    assert summary.insight_status == "done"
+    assert summary.generated_at == PRONTO_EM
+    assert summary.analiseTexto == ["Primeiro parágrafo.", "Segundo parágrafo."]
+    assert summary.recomendacaoTexto == ["Uma recomendação."]
+    assert summary.prismas == {prisma: f"Texto de {prisma.value}." for prisma in Prisma}
+    # Destaque e oportunidade seguem do cálculo, e não do texto (P-088).
+    assert summary.destaque is Prisma.SEGURANCA_PSICOLOGICA
+    assert summary.oportunidade is Prisma.ADAPTABILIDADE_COGNITIVA
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["pending", "failed"])
+async def test_me_com_insight_que_nao_esta_pronto_vem_sem_texto(
+    fake_respondente: AuthenticatedUser, status: Literal["pending", "failed"]
+) -> None:
+    outubro = _periodo(10)
+    link = fake_respondente.link_uuid
+    service, repo = _servico_do_me(
+        fake_respondente, [outubro], _linhas_com_destaque(outubro, link)
+    )
+    repo.get_response_insight.return_value = InsightText(status, None, None)
+
+    summary = (
+        await service.get_user_dashboard(user=fake_respondente, period=None)
+    ).creed_summary
+
+    assert summary.insight_status == status
+    assert summary.generated_at is None
+    assert summary.analiseTexto == []
+    assert summary.recomendacaoTexto == []
+    assert summary.prismas == {}
+    # Os cards de destaque e oportunidade não esperam pela IA.
+    assert summary.destaque is Prisma.SEGURANCA_PSICOLOGICA
+    assert summary.oportunidade is Prisma.ADAPTABILIDADE_COGNITIVA
+
+
+@pytest.mark.asyncio
+async def test_me_busca_o_insight_do_periodo_que_a_tela_mostra(
+    fake_respondente: AuthenticatedUser,
+) -> None:
+    outubro, setembro = _periodo(10), _periodo(9)
+    link = fake_respondente.link_uuid
+    service, repo = _servico_do_me(
+        fake_respondente,
+        [outubro, setembro],
+        _linhas(outubro, link, 4.0) + _linhas(setembro, link, 3.0),
+    )
+
+    await service.get_user_dashboard(user=fake_respondente, period=setembro.id)
+
+    repo.get_response_insight.assert_awaited_once_with(link, setembro.id)
 
 
 # ---------------------------------------------------------------------------
@@ -442,6 +532,22 @@ async def test_empresa_inteira_media_so_do_publico_e_resumo() -> None:
     # A gestora (de `_empresa`) não respondeu: não vê ninguém no filtro.
     assert result.members == []
     assert result.departments == [DepartmentType.MARKETING, DepartmentType.FINANCEIRO]
+
+
+@pytest.mark.asyncio
+async def test_empresa_segue_sem_texto_do_creed_ate_a_leitura_da_empresa() -> None:
+    """Enquanto a CREED-8014 não chega, a empresa não lê insight: texto vazio e
+    `none`, e nem consulta o insight individual de ninguém."""
+    service, _, _ = _cenario()
+
+    summary = (await _empresa(service)).creed_summary
+
+    assert summary.insight_status == "none"
+    assert summary.generated_at is None
+    assert summary.analiseTexto == []
+    assert summary.recomendacaoTexto == []
+    assert summary.prismas == {}
+    service.repository.get_response_insight.assert_not_awaited()  # type: ignore[attr-defined]
 
 
 @pytest.mark.asyncio
@@ -791,6 +897,26 @@ async def test_admin_ve_o_dashboard_individual_do_mentorando() -> None:
     )
     assert result.member_name == "Mentorando 1"
     assert result.scores[Prisma.SEGURANCA_PSICOLOGICA] == 75.0
+
+
+@pytest.mark.asyncio
+async def test_admin_ve_o_insight_do_mentorando() -> None:
+    mentorando = uuid.uuid4()
+    service, repo = _mentoria(mentorando)
+    repo.get_response_insight.return_value = InsightText(
+        "done", CONTEUDO_DO_INSIGHT, PRONTO_EM
+    )
+
+    result = await service.get_member_dashboard(
+        user=_admin(), member_id=mentorando, period=None
+    )
+
+    # O insight é o da resposta do mentorando, e não o da administradora (P-086).
+    repo.get_response_insight.assert_awaited_once()
+    assert repo.get_response_insight.await_args.args[0] == mentorando
+    assert result.creed_summary.insight_status == "done"
+    assert result.creed_summary.generated_at == PRONTO_EM
+    assert result.creed_summary.analiseTexto == CONTEUDO_DO_INSIGHT["analise"]
 
 
 @pytest.mark.asyncio

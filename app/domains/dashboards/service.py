@@ -39,7 +39,11 @@ from app.shared.enums import DepartmentType, Dimension, LinkType, Prisma
 from app.shared.exceptions import ForbiddenError, NotFoundError, ValidationError
 
 if TYPE_CHECKING:
-    from app.domains.dashboards.repository import DashboardRepository, DimensionAverage
+    from app.domains.dashboards.repository import (
+        DashboardRepository,
+        DimensionAverage,
+        InsightText,
+    )
     from app.domains.forms.models import Form
     from app.domains.prismas.service import PrismaService
     from app.shared.authorization import AuthenticatedUser
@@ -167,15 +171,32 @@ def _alignment(people: list[PersonScores]) -> TeamAlignmentRead:
     return TeamAlignmentRead(respondents=total, prismas=prismas)
 
 
-def _creed_summary(group: GroupScores) -> CreedSummaryRead:
-    """Textos vazios até a esteira de IA existir (D3); só as marcas dos cards."""
+def _creed_summary(
+    group: GroupScores, insight: "InsightText | None" = None
+) -> CreedSummaryRead:
+    """O resumo do Creed.ai. Destaque e oportunidade são sempre do cálculo (P-088);
+    os textos são os do insight, e só vêm com ele `done`. Sem insight (`None`), o
+    status é `none` e os textos ficam vazios, como nos recortes que não têm texto."""
     destaque, oportunidade = highest_and_lowest(group.prismas)
+
+    analysis: list[str] = []
+    recommendation: list[str] = []
+    prismas: dict[Prisma, str] = {}
+    generated_at = None
+    if insight is not None and insight.status == "done" and insight.content is not None:
+        analysis = insight.content["analise"]
+        recommendation = insight.content["recomendacao"]
+        prismas = {Prisma(key): text for key, text in insight.content["prismas"].items()}
+        generated_at = insight.completed_at
+
     return CreedSummaryRead(
-        analiseTexto=[],
-        recomendacaoTexto=[],
-        prismas={},
+        analiseTexto=analysis,
+        recomendacaoTexto=recommendation,
+        prismas=prismas,
         destaque=destaque,
         oportunidade=oportunidade,
+        insight_status="none" if insight is None else insight.status,
+        generated_at=generated_at,
     )
 
 
@@ -342,6 +363,8 @@ class DashboardService:
 
         current = by_form[shown.id]
         group = GroupScores(current.prismas, current.dimensions)
+        # O texto é o da resposta que a tela mostra: o do período exibido.
+        insight = await self.repository.get_response_insight(link_id, shown.id)
 
         return UserDashboardRead(
             organization_name=await self._organization_name(organization_id),
@@ -365,7 +388,7 @@ class DashboardService:
                 for form in answered
                 if form.id != shown.id
             ],
-            creed_summary=_creed_summary(group),
+            creed_summary=_creed_summary(group, insight),
         )
 
     async def get_company_dashboard(

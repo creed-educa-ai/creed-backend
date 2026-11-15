@@ -3,13 +3,14 @@
 Esta camada NÃO contém regra de negócio: só queries e operações de persistência.
 
 Domínio de leitura (ADR-0004, item 4): lê por join `form`, `form_responses`,
-`answer`, `questions`, `question_options`, `links`, `departments` e
-`organizations`, e só escreve na própria tabela `dashboards`.
+`answer`, `questions`, `question_options`, `links`, `departments`,
+`organizations` e `insights` (o texto do Creed.ai), e só escreve na própria tabela
+`dashboards`.
 """
 
 import uuid
 from datetime import datetime
-from typing import NamedTuple
+from typing import Any, Literal, NamedTuple
 
 from sqlalchemy import ColumnElement, Integer, cast, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.domains.dashboards.models import Dashboard
 from app.domains.department.models import Department
 from app.domains.forms.models import Form
+from app.domains.insights.models import Insight, InsightStatus
 from app.domains.links.models import Link
 from app.domains.organizacoes.models import Organization, OrganizationStatus
 from app.domains.participants.models import Participant
@@ -27,6 +29,15 @@ from app.shared.enums import DepartmentType, Dimension, LinkType, Roles
 # As alternativas da escala (P-040). Valor fora daqui não entra na média, e o
 # filtro vem antes do CAST para um valor estranho não derrubar a consulta.
 _LIKERT = ("1", "2", "3", "4", "5")
+
+# O que a tela vê de cada estado do insight: o pedido que já foi ao N8N e espera a
+# volta (`dispatched`) aparece como `pending`, como na rota de status do insights.
+_INSIGHT_SHOWN: dict[InsightStatus, Literal["pending", "done", "failed"]] = {
+    InsightStatus.PENDING: "pending",
+    InsightStatus.DISPATCHED: "pending",
+    InsightStatus.DONE: "done",
+    InsightStatus.FAILED: "failed",
+}
 
 
 class InvitedLink(NamedTuple):
@@ -44,6 +55,15 @@ class DimensionAverage(NamedTuple):
     department: DepartmentType | None
     dimension: Dimension
     average: float
+
+
+class InsightText(NamedTuple):
+    """O insight de uma resposta, do jeito que o dashboard o lê."""
+
+    status: Literal["pending", "done", "failed"]
+    # O `InsightContent` gravado; nulo fora do `done`.
+    content: dict[str, Any] | None
+    completed_at: datetime | None
 
 
 class DashboardRepository:
@@ -189,6 +209,30 @@ class DashboardRepository:
             DimensionAverage(form_id, link, department, dimension, float(average))
             for form_id, link, department, dimension, average in result.all()
         ]
+
+    async def get_response_insight(
+        self, link_id: uuid.UUID, form_id: uuid.UUID
+    ) -> InsightText | None:
+        """O insight da resposta enviada deste vínculo neste período, ou `None` se a
+        resposta não tem insight (por exemplo, uma de antes da esteira).
+
+        Um vínculo tem uma resposta por período (`uq_form_responses_form_id_vinculo_id`)
+        e uma resposta tem um insight (P-042): a consulta devolve no máximo uma linha.
+        """
+        result = await self.db.execute(
+            select(Insight.status, Insight.content, Insight.completed_at)
+            .join(FormResponse, FormResponse.id == Insight.form_response_id)
+            .where(
+                FormResponse.vinculo_id == link_id,
+                FormResponse.form_id == form_id,
+                FormResponse.status == FormResponseStatus.SUBMITTED,
+            )
+        )
+        row = result.one_or_none()
+        if row is None:
+            return None
+        status, content, completed_at = row
+        return InsightText(_INSIGHT_SHOWN[status], content, completed_at)
 
     async def list_company_forms(
         self, organization_id: uuid.UUID, now: datetime

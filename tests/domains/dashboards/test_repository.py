@@ -9,11 +9,13 @@ from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 from sqlalchemy.dialects import postgresql
 
 from app.domains.dashboards.models import Dashboard
-from app.domains.dashboards.repository import DashboardRepository
+from app.domains.dashboards.repository import DashboardRepository, InsightText
 from app.domains.forms.models import Form, FormStatus
+from app.domains.insights.models import InsightStatus
 
 
 class _SessaoFalsa:
@@ -84,7 +86,10 @@ async def test_buscar_dashboard_inexistente_devolve_none() -> None:
 
 
 def _sql(sessao: _SessaoFalsa) -> str:
-    return str(sessao.executados[0].compile(dialect=postgresql.dialect()))
+    # No ambiente do hook do mypy, o `dialect` do SQLAlchemy não tem tipo; no .venv,
+    # tem. O `unused-ignore` deixa a mesma linha passar nos dois.
+    dialect = postgresql.dialect()  # type: ignore[no-untyped-call, unused-ignore]
+    return str(sessao.executados[0].compile(dialect=dialect))
 
 
 def _resultado_de_tuplas(linhas: list[tuple[Any, ...]]) -> _SessaoFalsa:
@@ -148,3 +153,60 @@ async def test_list_invited_links_com_publico_individual() -> None:
     await repository.list_invited_links(form)
 
     assert "links.id =" in _sql(sessao)
+
+
+def _resultado_de_uma_linha(linha: tuple[Any, ...] | None) -> _SessaoFalsa:
+    sessao = _SessaoFalsa()
+
+    async def execute(query: Any) -> MagicMock:
+        sessao.executados.append(query)
+        resultado = MagicMock()
+        resultado.one_or_none.return_value = linha
+        return resultado
+
+    sessao.execute = execute  # type: ignore[method-assign]
+    return sessao
+
+
+async def test_get_response_insight_le_a_resposta_enviada_do_vinculo_no_periodo() -> None:
+    sessao = _resultado_de_uma_linha(None)
+    repository = DashboardRepository(sessao)  # type: ignore[arg-type]
+
+    await repository.get_response_insight(uuid.uuid4(), uuid.uuid4())
+
+    sql = _sql(sessao)
+    assert "JOIN form_responses ON form_responses.id = insights.form_response_id" in sql
+    assert "form_responses.vinculo_id =" in sql
+    assert "form_responses.form_id =" in sql
+    # Resposta em andamento não tem insight que a tela mostre.
+    assert "form_responses.status =" in sql
+
+
+async def test_get_response_insight_sem_insight_devolve_none() -> None:
+    repository = DashboardRepository(_resultado_de_uma_linha(None))  # type: ignore[arg-type]
+
+    assert await repository.get_response_insight(uuid.uuid4(), uuid.uuid4()) is None
+
+
+@pytest.mark.parametrize(
+    ("gravado", "visto"),
+    [
+        (InsightStatus.PENDING, "pending"),
+        # O pedido que já foi ao N8N aparece como em preparo.
+        (InsightStatus.DISPATCHED, "pending"),
+        (InsightStatus.DONE, "done"),
+        (InsightStatus.FAILED, "failed"),
+    ],
+)
+async def test_get_response_insight_mostra_o_estado_que_a_tela_conhece(
+    gravado: InsightStatus, visto: str
+) -> None:
+    pronto_em = datetime(2026, 10, 8, 13, 30, tzinfo=UTC)
+    conteudo = {"analise": ["Um", "Dois"]}
+    repository = DashboardRepository(
+        _resultado_de_uma_linha((gravado, conteudo, pronto_em))  # type: ignore[arg-type]
+    )
+
+    insight = await repository.get_response_insight(uuid.uuid4(), uuid.uuid4())
+
+    assert insight == InsightText(visto, conteudo, pronto_em)  # type: ignore[arg-type]
