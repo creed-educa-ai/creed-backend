@@ -1,4 +1,4 @@
-"""Testes do InsightPrismaService.
+"""Testes dos services do domínio insights.
 
 O repository é simulado para testar as regras de negócio
 sem acessar o banco de dados.
@@ -10,8 +10,12 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.domains.insights.models import Insight, InsightPrisma
-from app.domains.insights.repository import InsightPrismaRepository
-from app.domains.insights.service import InsightPrismaService
+from app.domains.insights.repository import (
+    FormScope,
+    InsightPrismaRepository,
+    InsightRepository,
+)
+from app.domains.insights.service import InsightPrismaService, InsightService
 from app.shared.enums import Prisma
 from app.shared.exceptions import ConflictError, NotFoundError
 
@@ -151,3 +155,48 @@ async def test_colisao_no_flush_vira_conflict_error() -> None:
         await service.associate(insight_id, Prisma.SEGURANCA_PSICOLOGICA)
 
     repository.insert.assert_awaited_once()
+
+
+# --- InsightService: o pedido que o envio da resposta grava (CREED-802) --------
+
+
+async def test_pedido_individual_leva_organizacao_e_periodo_da_resposta() -> None:
+    resposta, organizacao, formulario = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    repository = AsyncMock(spec=InsightRepository)
+    repository.get_form_scope.return_value = FormScope(organizacao, formulario)
+    repository.create.side_effect = lambda insight: insight
+    service = InsightService(repository)
+
+    resultado = await service.request_individual(resposta)
+
+    repository.get_form_scope.assert_awaited_once_with(resposta)
+    enviado = repository.create.await_args.args[0]
+    assert isinstance(enviado, Insight)
+    assert enviado.organization_id == organizacao
+    assert enviado.form_id == formulario
+    assert enviado.form_response_id == resposta
+    # Sem texto e sem estado escolhido aqui: o `pending` é o padrão do model.
+    assert enviado.content is None
+    assert resultado is enviado
+
+
+async def test_pedido_de_resposta_inexistente_vira_not_found() -> None:
+    repository = AsyncMock(spec=InsightRepository)
+    repository.get_form_scope.return_value = None
+    service = InsightService(repository)
+
+    with pytest.raises(NotFoundError):
+        await service.request_individual(uuid.uuid4())
+
+    repository.create.assert_not_awaited()
+
+
+async def test_resposta_que_ja_tem_insight_vira_conflict() -> None:
+    """P-042: uma resposta, um insight. O repository devolve `None` na corrida."""
+    repository = AsyncMock(spec=InsightRepository)
+    repository.get_form_scope.return_value = FormScope(uuid.uuid4(), uuid.uuid4())
+    repository.create.return_value = None
+    service = InsightService(repository)
+
+    with pytest.raises(ConflictError):
+        await service.request_individual(uuid.uuid4())

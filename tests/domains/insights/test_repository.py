@@ -1,10 +1,13 @@
-"""Testes do InsightPrismaRepository.
+"""Testes dos repositories do domínio insights.
 
 Sem banco: a sessão é um dublê que simula as operações
-de persistência e consulta do repository.
+de persistência e consulta do repository. O SQL de verdade (o JOIN que acha a
+organização e o período, as restrições da tabela) roda em
+`test_insights_postgres.py`.
 """
 
 import uuid
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -12,7 +15,11 @@ import pytest
 from sqlalchemy.exc import IntegrityError
 
 from app.domains.insights.models import Insight, InsightPrisma
-from app.domains.insights.repository import InsightPrismaRepository
+from app.domains.insights.repository import (
+    FormScope,
+    InsightPrismaRepository,
+    InsightRepository,
+)
 from app.shared.enums import Prisma
 
 
@@ -24,9 +31,11 @@ class _SessaoFalsa:
         resultado: object | None = None,
         lista: list[InsightPrisma] | None = None,
         erro_no_flush: Exception | None = None,
+        linha: object | None = None,
     ) -> None:
         self.resultado = resultado
         self.lista = lista or []
+        self.linha = linha
         self.add = MagicMock()
         self.flush = AsyncMock(side_effect=erro_no_flush)
         self.refresh = AsyncMock()
@@ -36,6 +45,7 @@ class _SessaoFalsa:
         resultado = MagicMock()
         resultado.scalar_one_or_none.return_value = self.resultado
         resultado.scalars.return_value.all.return_value = self.lista
+        resultado.one_or_none.return_value = self.linha
         return resultado
 
 
@@ -174,3 +184,77 @@ async def test_buscar_insight_inexistente_devolve_none() -> None:
     resultado = await repository.get_insight(uuid.uuid4())
 
     assert resultado is None
+
+
+# --- InsightRepository: o pedido de insight que o envio grava (CREED-802) ------
+
+
+def _um_pedido() -> Insight:
+    return Insight(
+        organization_id=uuid.uuid4(),
+        form_id=uuid.uuid4(),
+        form_response_id=uuid.uuid4(),
+    )
+
+
+async def test_escopo_da_resposta_traz_organizacao_e_formulario() -> None:
+    organizacao, formulario = uuid.uuid4(), uuid.uuid4()
+    sessao = _SessaoFalsa(
+        linha=SimpleNamespace(organization_id=organizacao, form_id=formulario)
+    )
+    repository = InsightRepository(sessao)  # type: ignore[arg-type]
+
+    escopo = await repository.get_form_scope(uuid.uuid4())
+
+    assert escopo == FormScope(organization_id=organizacao, form_id=formulario)
+
+
+async def test_escopo_de_resposta_inexistente_devolve_none() -> None:
+    """A camada de banco não decide: devolve nada e o service levanta o 404."""
+    repository = InsightRepository(_SessaoFalsa(linha=None))  # type: ignore[arg-type]
+
+    assert await repository.get_form_scope(uuid.uuid4()) is None
+
+
+async def test_criar_pedido_grava_e_traz_o_que_o_banco_preenche() -> None:
+    sessao = _SessaoFalsa()
+    repository = InsightRepository(sessao)  # type: ignore[arg-type]
+    pedido = _um_pedido()
+
+    resultado = await repository.create(pedido)
+
+    sessao.add.assert_called_once_with(pedido)
+    sessao.flush.assert_awaited_once()
+    sessao.refresh.assert_awaited_once_with(pedido)
+    assert resultado is pedido
+
+
+async def test_segundo_pedido_da_mesma_resposta_devolve_none() -> None:
+    """Corrida: dois envios passam juntos pela checagem e só se esbarram no banco."""
+    sessao = _SessaoFalsa(
+        erro_no_flush=_erro_de_integridade(
+            "duplicate key value violates unique constraint "
+            '"uq_insights_form_response_id"'
+        )
+    )
+    repository = InsightRepository(sessao)  # type: ignore[arg-type]
+
+    resultado = await repository.create(_um_pedido())
+
+    assert resultado is None
+    sessao.refresh.assert_not_awaited()
+
+
+async def test_outra_violacao_ao_criar_o_pedido_sobe() -> None:
+    """Só o `unique` da resposta vira `None`. Organização inexistente, por exemplo,
+    é erro de verdade e não pode ser tratado como "já tem insight"."""
+    sessao = _SessaoFalsa(
+        erro_no_flush=_erro_de_integridade(
+            "insert or update violates foreign key constraint "
+            '"fk_insights_organization_id_organizations"'
+        )
+    )
+    repository = InsightRepository(sessao)  # type: ignore[arg-type]
+
+    with pytest.raises(IntegrityError):
+        await repository.create(_um_pedido())

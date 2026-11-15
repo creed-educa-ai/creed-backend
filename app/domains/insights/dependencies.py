@@ -1,7 +1,7 @@
 """Wiring de injeção de dependência do domínio insights.
 
-Só o `InsightService`, que a exclusão de membro (M-3) usa. O domínio ainda não tem
-rota.
+Só o `InsightService`, que a exclusão de membro (M-3) e o envio da resposta
+(`responses`) usam. O domínio ainda não tem rota.
 """
 
 from typing import Annotated

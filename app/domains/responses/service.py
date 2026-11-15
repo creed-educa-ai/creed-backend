@@ -4,14 +4,15 @@ Esta camada não conhece HTTP nem detalhes de ORM. É onde ficam
 as regras próprias das entidades FormResponse e Answer. Formulário é de
 outro domínio: a pergunta "ele existe?" e a conferência de organização vão ao
 `FormService` (CREED-47). Pergunta também: "existe?" e "é descritiva?" vão ao
-`QuestionService`. E a alternativa marcada numa objetiva, ao
-`QuestionOptionService`.
+`QuestionOptionService`. E o pedido de insight que nasce no envio, ao
+`InsightService` (CREED-802).
 """
 
 import uuid
 from datetime import UTC, datetime
 
 from app.domains.forms.service import FormService
+from app.domains.insights.service import InsightService
 from app.domains.questions.service import QuestionOptionService, QuestionService
 from app.domains.responses.models import Answer, FormResponse, FormResponseStatus
 from app.domains.responses.repository import AnswerRepository, FormResponseRepository
@@ -69,11 +70,13 @@ class FormResponseService:
         forms: FormService,
         questions: QuestionService,
         answers: AnswerRepository,
+        insights: InsightService,
     ) -> None:
         self.repository = repository
         self.forms = forms
         self.questions = questions
         self.answers = answers
+        self.insights = insights
 
     async def get_current(
         self, *, link_id: uuid.UUID, organization_id: uuid.UUID
@@ -139,6 +142,13 @@ class FormResponseService:
 
         Ordem: existe (404), é do dono (403), em andamento (409), público (403),
         período (423), obrigatórias (422).
+
+        O pedido de insight é gravado na mesma transação do envio (a da requisição,
+        que o `get_db` fecha): se ele falhar, a exceção sobe, o `get_db` desfaz tudo
+        e a resposta não fica enviada. Só entra depois de todas as conferências
+        acima, para uma resposta recusada não deixar pedido para trás. A chamada ao
+        N8N não acontece aqui, é do worker (ADR-0010), e por isso o envio não espera
+        a esteira.
         """
         form_response = await _own_form_response(
             self.repository, form_response_id, link_id=link_id
@@ -157,6 +167,9 @@ class FormResponseService:
             )
             raise ValidationError(f"Perguntas obrigatórias sem resposta: {listed}")
 
+        # Antes de marcar como enviada: se o pedido falhar, a resposta continua em
+        # andamento também aqui na memória, e não só depois do rollback.
+        await self.insights.request_individual(form_response.id)
         form_response.status = FormResponseStatus.SUBMITTED
         form_response.submitted_at = datetime.now(UTC)
 

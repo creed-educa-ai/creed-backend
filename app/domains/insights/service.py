@@ -5,7 +5,7 @@ Esta camada não conhece HTTP nem detalhes de ORM.
 
 import uuid
 
-from app.domains.insights.models import InsightPrisma
+from app.domains.insights.models import Insight, InsightPrisma
 from app.domains.insights.repository import InsightPrismaRepository, InsightRepository
 from app.shared.enums import Prisma
 from app.shared.exceptions import ConflictError, NotFoundError
@@ -69,6 +69,33 @@ class InsightPrismaService:
 class InsightService:
     def __init__(self, repository: InsightRepository) -> None:
         self.repository = repository
+
+    async def request_individual(self, form_response_id: uuid.UUID) -> Insight:
+        """Grava o pedido de insight de uma resposta que acabou de ser enviada.
+
+        Quem chama é o envio da resposta, na transação dele: se a gravação falhar,
+        a resposta não fica enviada. O pedido nasce `pending`, e o worker o
+        despacha ao N8N (ADR-0010). Receber só o id, e não o `FormResponse`, evita
+        importar o model de `responses`: organização e período saem do banco.
+
+        🟡 Premissa P-042 — uma resposta enviada, um insight. Confirmar na próxima
+        reunião.
+        """
+        scope = await self.repository.get_form_scope(form_response_id)
+        if scope is None:
+            raise NotFoundError(f"FormResponse {form_response_id} não encontrado")
+
+        insight = Insight(
+            organization_id=scope.organization_id,
+            form_id=scope.form_id,
+            form_response_id=form_response_id,
+        )
+        created = await self.repository.create(insight)
+
+        if created is None:
+            raise ConflictError(f"A resposta {form_response_id} já tem insight")
+
+        return created
 
     async def delete_for_form_responses(self, form_response_ids: list[uuid.UUID]) -> None:
         """Apaga os insights das respostas que a exclusão de membro (M-3) remove."""
