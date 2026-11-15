@@ -4,9 +4,10 @@ Esta camada NÃO contém regra de negócio: só queries e operações de persist
 
 Leitura de outro domínio, declarada em `tests/test_arquitetura.py`
 (`LEITURA_ENTRE_DOMINIOS`): `get_form_scope` junta `form_responses` e `form` para
-saber a organização e o período de uma resposta, e `list_descriptive_answers` junta
-`answer` e `questions` para o pedido de insight. Só lê; nada fora de `insights` é
-gravado aqui.
+saber a organização e o período de uma resposta, `list_descriptive_answers` junta
+`answer` e `questions` para o pedido de insight, e `get_response_owner` junta
+`form_responses` e `links` para saber de quem é uma resposta. Só lê; nada fora de
+`insights` é gravado aqui.
 """
 
 import uuid
@@ -19,9 +20,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.forms.models import Form
 from app.domains.insights.models import Insight, InsightPrisma, InsightStatus
+from app.domains.links.models import Link
 from app.domains.questions.models import Question, QuestionType
 from app.domains.responses.models import Answer, FormResponse
-from app.shared.enums import Prisma
+from app.shared.enums import LinkType, Prisma
 
 # Chave da trava de transação que serializa "contar os em voo e reivindicar" entre
 # workers (`lock_dispatch`). Qualquer número fixo serve, desde que só a esteira o use.
@@ -33,6 +35,14 @@ class FormScope(NamedTuple):
 
     organization_id: uuid.UUID
     form_id: uuid.UUID
+
+
+class ResponseOwner(NamedTuple):
+    """O vínculo que respondeu, e a organização e o tipo dele (CREED-805)."""
+
+    link_id: uuid.UUID
+    link_type: LinkType
+    organization_id: uuid.UUID
 
 
 class DescriptiveAnswer(NamedTuple):
@@ -108,6 +118,30 @@ class InsightRepository:
         if row is None:
             return None
         return FormScope(organization_id=row.organization_id, form_id=row.form_id)
+
+    async def get_response_owner(
+        self, form_response_id: uuid.UUID
+    ) -> ResponseOwner | None:
+        """Quem respondeu, ou `None` se a resposta não existe."""
+        result = await self.db.execute(
+            select(Link.id, Link.type, Link.organization_id)
+            .select_from(FormResponse)
+            .join(Link, Link.id == FormResponse.vinculo_id)
+            .where(FormResponse.id == form_response_id)
+        )
+        row = result.one_or_none()
+        if row is None:
+            return None
+        return ResponseOwner(
+            link_id=row.id, link_type=row.type, organization_id=row.organization_id
+        )
+
+    async def get_by_form_response(self, form_response_id: uuid.UUID) -> Insight | None:
+        """O insight de uma resposta (P-042: no máximo um)."""
+        result = await self.db.execute(
+            select(Insight).where(Insight.form_response_id == form_response_id)
+        )
+        return result.scalar_one_or_none()
 
     async def list_descriptive_answers(
         self, form_response_id: uuid.UUID

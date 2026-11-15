@@ -34,7 +34,9 @@ from app.domains.insights.repository import (
     DescriptiveAnswer,
     FormScope,
     InsightRepository,
+    ResponseOwner,
 )
+from app.domains.insights.schemas import InsightCallbackDone
 from app.domains.insights.service import DispatchLimits, InsightService
 from app.domains.links.models import Link
 from app.domains.organizacoes.models import Organization
@@ -53,6 +55,7 @@ from app.external_services.n8n.schemas import IndividualInsightRequest
 from app.shared.enums import Dimension, LinkType, Prisma, Roles
 from app.shared.exceptions import ConflictError
 from app.shared.instrument import CREED_INSTRUMENT_ID
+from scripts.exportar_contrato_n8n import CONTRACT_DIR
 
 pytestmark = pytest.mark.skipif(
     os.getenv("RUN_POSTGRES_TESTS") != "1", reason="Requer PostgreSQL de teste"
@@ -558,3 +561,80 @@ async def test_dois_ciclos_ao_mesmo_tempo_despacham_cada_pedido_uma_vez(
 
     assert sorted(entregues) == sorted(ids)  # cada um uma vez, nenhum perdido
     assert maior_em_voo == limites.max_in_flight  # o teto foi atingido, nunca passado
+
+
+# --- A volta do N8N e a leitura do estado (CREED-805) -------------------------
+
+
+def _done_para(insight: Insight, *, model_id: str) -> InsightCallbackDone:
+    kit = InsightCallbackDone.model_validate_json(
+        (CONTRACT_DIR / "exemplo-volta-done.json").read_text(encoding="utf-8")
+    )
+    return kit.model_copy(update={"insight_id": insight.id, "model_id": model_id})
+
+
+async def test_dono_da_resposta_vem_do_join(cenario: Cenario) -> None:
+    async with cenario.sessions() as session:
+        vinculo = await session.scalar(
+            select(FormResponse.vinculo_id).where(
+                FormResponse.id == cenario.response_ids[0]
+            )
+        )
+
+        dono = await InsightRepository(session).get_response_owner(
+            cenario.response_ids[0]
+        )
+        inexistente = await InsightRepository(session).get_response_owner(uuid.uuid4())
+
+    assert vinculo is not None
+    assert dono == ResponseOwner(vinculo, LinkType.EMPREGO, cenario.organization_id)
+    assert inexistente is None
+
+
+async def test_done_grava_o_texto_em_jsonb_e_passa_pelo_check(cenario: Cenario) -> None:
+    """O `CHECK` entre `done` e `content` e o `jsonb` só se provam com o banco."""
+    async with cenario.sessions.begin() as session:
+        insight = um_insight(cenario, response_index=0, status=InsightStatus.DISPATCHED)
+        session.add(insight)
+    done = _done_para(insight, model_id="anthropic.claude-opus-5-5")
+
+    async with cenario.sessions.begin() as session:
+        await _service(session).complete(done, max_attempts=5)
+
+    async with cenario.sessions() as session:
+        gravado = await session.get(Insight, insight.id)
+    assert gravado is not None
+    assert gravado.status is InsightStatus.DONE
+    assert gravado.content == done.content.model_dump(mode="json")
+    assert gravado.model_id == "anthropic.claude-opus-5-5"
+    assert gravado.prompt_version == "individual-v1+dossie-v1"
+    assert gravado.completed_at is not None
+
+
+async def test_primeiro_done_vence_mesmo_com_dois_callbacks_ao_mesmo_tempo(
+    cenario: Cenario,
+) -> None:
+    """O segundo callback espera a trava do primeiro e, ao entrar, já vê `done`."""
+    async with cenario.sessions.begin() as session:
+        insight = um_insight(cenario, response_index=0, status=InsightStatus.DISPATCHED)
+        session.add(insight)
+    primeiro = _done_para(insight, model_id="modelo-do-primeiro")
+    segundo = _done_para(insight, model_id="modelo-do-segundo")
+
+    async def completar_o_segundo() -> None:
+        async with cenario.sessions.begin() as session:
+            await _service(session).complete(segundo, max_attempts=5)
+
+    async with cenario.sessions() as session_do_primeiro:
+        await _service(session_do_primeiro).complete(primeiro, max_attempts=5)
+        # O primeiro gravou e segura a trava, sem commit.
+        tarefa_do_segundo = asyncio.create_task(completar_o_segundo())
+        await asyncio.sleep(0.5)  # tempo de o segundo chegar à trava
+        assert not tarefa_do_segundo.done()
+        await session_do_primeiro.commit()
+    await tarefa_do_segundo
+
+    async with cenario.sessions() as session:
+        gravado = await session.get(Insight, insight.id)
+    assert gravado is not None
+    assert gravado.model_id == "modelo-do-primeiro"

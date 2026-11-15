@@ -71,6 +71,8 @@ def test_all_endpoints_have_method_summary_description_and_operation_id() -> Non
         ("/api/v1/organizations/sign-up", "post"),
         ("/api/v1/organizations/{organization_id}", "delete"),
         ("/api/v1/organizations/{organization_id}/approval", "post"),
+        ("/api/v1/insights/callback", "post"),
+        ("/api/v1/form-responses/{form_response_id}/insight", "get"),
     }
 
     documented_operations = {
@@ -355,3 +357,42 @@ def test_success_error_and_bearer_authentication_responses_are_documented() -> N
     )["responses"]["409"]
     assert conflict_response["description"]
     assert conflict_response["content"]["application/json"]["example"]
+
+
+def test_insight_routes_are_documented_with_their_own_protection() -> None:
+    schema = app.openapi()
+
+    # A volta do N8N: protegida pela assinatura, não pelo login. 404 é insight
+    # desconhecido, 422 é corpo fora do contrato `insight-v1` (CREED-805).
+    callback = _operation(schema, "/api/v1/insights/callback", "post")
+    assert set(callback["responses"]) >= {"204", "401", "404", "422"}
+    assert "security" not in callback
+    headers = {
+        parameter["name"]: parameter
+        for parameter in callback["parameters"]
+        if parameter["in"] == "header"
+    }
+    assert set(headers) == {"X-Creed-Timestamp", "X-Creed-Signature"}
+    assert all(header["description"] for header in headers.values())
+    assert callback["requestBody"]["content"]["application/json"]["schema"]
+
+    # A leitura do estado: login do respondente, 403 de outro vínculo (P-086).
+    status_read = _operation(
+        schema, "/api/v1/form-responses/{form_response_id}/insight", "get"
+    )
+    assert set(status_read["responses"]) >= {"200", "401", "403", "404", "422"}
+    assert status_read["security"] == [{"BearerAuth": []}]
+    form_response_id = status_read["parameters"][0]
+    assert form_response_id["name"] == "form_response_id"
+    assert form_response_id["description"]
+    assert form_response_id["schema"]["examples"]
+
+    # Quem lê não vê `dispatched`: o contrato da rota tem três estados.
+    status_schema = schema["components"]["schemas"]["InsightStatusRead"]
+    assert status_schema["properties"]["status"]["enum"] == [
+        "pending",
+        "done",
+        "failed",
+    ]
+    for field in status_schema["properties"].values():
+        assert field["description"]

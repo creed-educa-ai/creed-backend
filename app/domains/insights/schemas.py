@@ -19,7 +19,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.domains.insights.models import Insight
+from app.domains.insights.models import Insight, InsightStatus
 
 
 class InsightCreate(BaseModel):
@@ -164,3 +164,52 @@ class InsightCallbackFailed(BaseModel):
 InsightCallback = Annotated[
     InsightCallbackDone | InsightCallbackFailed, Field(discriminator="status")
 ]
+
+
+class InsightStatusRead(BaseModel):
+    """Em que ponto está o insight de uma resposta, para a tela fazer polling.
+
+    Só três estados: quem lê não precisa saber se o pedido já saiu para o N8N, então
+    `dispatched` aparece como `pending` (spec da CREED-80, "Leitura").
+    """
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {"status": "pending", "content": None, "completed_at": None},
+            ]
+        }
+    )
+
+    status: Literal["pending", "done", "failed"] = Field(
+        description=(
+            "`pending` enquanto o texto está em preparo, `done` quando está pronto e "
+            "`failed` quando as tentativas se esgotaram (P-044)."
+        )
+    )
+    content: InsightContent | None = Field(
+        description="O texto do insight. Nulo enquanto não estiver `done`."
+    )
+    completed_at: datetime | None = Field(
+        description="Quando o texto ficou pronto, para a tela mostrar a data."
+    )
+
+    @classmethod
+    def de_model(cls, insight: Insight) -> "InsightStatusRead":
+        """Monta a saída a partir do model."""
+        status: Literal["pending", "done", "failed"]
+        if insight.status is InsightStatus.DONE:
+            status = "done"
+        elif insight.status is InsightStatus.FAILED:
+            status = "failed"
+        else:
+            status = "pending"
+        return cls(
+            status=status,
+            content=(
+                InsightContent.model_validate(insight.content)
+                if insight.content is not None
+                else None
+            ),
+            completed_at=insight.completed_at,
+        )

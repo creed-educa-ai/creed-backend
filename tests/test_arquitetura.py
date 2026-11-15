@@ -34,9 +34,9 @@ LEITURA_ENTRE_DOMINIOS: dict[str, str] = {
     ),
     "insights": (
         "le form_responses e form por join para saber a organizacao e o periodo de "
-        "uma resposta, e answer e questions para as respostas descritivas do pedido "
-        "de insight; grava so em insights. Ver docstring do repository e a spec da "
-        "CREED-80."
+        "uma resposta, answer e questions para as respostas descritivas do pedido "
+        "de insight, e links para saber de quem e uma resposta (quem le o insight); "
+        "grava so em insights. Ver docstring do repository e a spec da CREED-80."
     ),
     "links": (
         "le o membro (vinculo + nome do participante + e-mail do login + tipo do "

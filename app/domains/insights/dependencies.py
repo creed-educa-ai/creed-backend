@@ -1,8 +1,8 @@
 """Wiring de injeção de dependência do domínio insights.
 
-O `InsightService` da requisição, que a exclusão de membro (M-3) e o envio da
-resposta (`responses`) usam, e o do worker da esteira, que não passa pelo `Depends`
-porque não atende requisição. O domínio ainda não tem rota.
+O `InsightService` da requisição, que as rotas do domínio, a exclusão de membro (M-3)
+e o envio da resposta (`responses`) usam, e o do worker da esteira, que não passa
+pelo `Depends` porque não atende requisição.
 """
 
 from typing import Annotated
@@ -10,6 +10,7 @@ from typing import Annotated
 from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.database import SessionDep
 from app.domains.insights.repository import InsightRepository
 from app.domains.insights.service import InsightService
@@ -33,6 +34,14 @@ def get_service(
 
 
 ServiceDep = Annotated[InsightService, Depends(get_service)]
+
+
+def get_max_attempts() -> int:
+    """O limite de tentativas, o mesmo do worker, para a volta com `retryable: true`."""
+    return settings.INSIGHT_MAX_ATTEMPTS
+
+
+MaxAttemptsDep = Annotated[int, Depends(get_max_attempts)]
 
 
 def build_dispatch_service(session: AsyncSession, n8n: N8NClient) -> InsightService:
