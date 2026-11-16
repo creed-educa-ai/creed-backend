@@ -7,6 +7,7 @@ sem acessar o banco de dados.
 import json
 import logging
 import uuid
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import AsyncMock
@@ -1167,6 +1168,29 @@ async def test_periodo_sem_resultado_nao_vira_pedido_da_empresa() -> None:
         await service.build_organization_payload(_insight_da_empresa())
 
 
+@pytest.mark.parametrize("enviadas", [1, 4])
+async def test_periodo_abaixo_do_piso_na_hora_do_disparo_nao_vira_pedido(
+    enviadas: int,
+) -> None:
+    """O agendamento contou 5, mas na hora do disparo o dashboard conta menos: um
+    membro excluído na espera, por exemplo. Com 1, o texto da empresa seria o
+    resultado de uma pessoa só (P-089)."""
+    service, _, _ = _service_da_empresa(
+        replace(_numeros_da_empresa(), submitted=enviadas)
+    )
+
+    with pytest.raises(ValidationError, match=f"{enviadas} respostas, abaixo do piso"):
+        await service.build_organization_payload(_insight_da_empresa())
+
+
+async def test_com_o_piso_exato_o_pedido_da_empresa_sai() -> None:
+    service, _, _ = _service_da_empresa(replace(_numeros_da_empresa(), submitted=5))
+
+    payload = await service.build_organization_payload(_insight_da_empresa())
+
+    assert payload.participation.submitted == 5
+
+
 async def test_insight_de_uma_resposta_nao_tem_pedido_da_empresa() -> None:
     service, _, dashboards = _service_da_empresa(_numeros_da_empresa())
 
@@ -1195,12 +1219,19 @@ async def test_ciclo_monta_cada_pedido_pelo_escopo() -> None:
     assert da_empresa.status is InsightStatus.DISPATCHED
 
 
-async def test_pedido_da_empresa_sem_resultado_vira_failed_e_nao_trava_a_fila() -> None:
-    """Todas as pessoas do período foram excluídas, por exemplo: tentar de novo não
-    muda isso."""
+@pytest.mark.parametrize("enviadas", [None, 4])
+async def test_pedido_da_empresa_sem_resultado_vira_failed_e_nao_trava_a_fila(
+    enviadas: int | None,
+) -> None:
+    """Todas as pessoas do período foram excluídas, ou só algumas e o período ficou
+    abaixo do piso: tentar de novo não muda isso. Se chegarem respostas, o envio que
+    voltar ao piso agenda um pedido novo, porque um `failed` não segura o próximo."""
+    numeros = (
+        None if enviadas is None else replace(_numeros_da_empresa(), submitted=enviadas)
+    )
     da_empresa, individual = _insight_da_empresa(0), _insight(InsightStatus.PENDING)
     service, _, _ = _service_do_ciclo(
-        reivindicados=[da_empresa, individual], dashboards=_dashboards(None)
+        reivindicados=[da_empresa, individual], dashboards=_dashboards(numeros)
     )
 
     payloads = await service.claim_due_batch(LIMITES)

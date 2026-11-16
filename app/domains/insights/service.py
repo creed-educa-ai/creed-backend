@@ -286,6 +286,12 @@ class InsightService:
         Os números são os do dashboard da empresa no período, sem recorte, pedidos na
         hora do disparo: o texto fala do que a tela mostra. Só vão os setores com o
         piso de respostas (P-089), e nenhuma resposta aberta (P-090).
+
+        O piso da empresa é conferido de novo aqui, e não só no agendamento: nos 30
+        min de espera, a exclusão de membro (M-3) pode apagar respostas, e a conta do
+        agendamento não é a do dashboard (lá contam todas as enviadas; aqui, só as do
+        público com nota). Sem esta conferência, o texto sairia sobre 4 pessoas, ou
+        sobre 1, e a gestora leria o resultado individual de alguém (P-086).
         """
         if insight.form_response_id is not None:
             # Erro de quem chama: o insight de uma resposta tem pedido próprio.
@@ -297,6 +303,11 @@ class InsightService:
         if numbers is None:
             raise ValidationError(
                 f"O período {insight.form_id} não tem resultado da empresa"
+            )
+        if numbers.submitted < ORGANIZATION_MIN_RESPONSES:
+            raise ValidationError(
+                f"O período {insight.form_id} tem {numbers.submitted} respostas, "
+                f"abaixo do piso de {ORGANIZATION_MIN_RESPONSES}"
             )
 
         return OrganizationInsightRequest(
