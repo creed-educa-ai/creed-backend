@@ -102,7 +102,7 @@ class IndividualInsightRequest(BaseModel):
     )
     attempt: int = Field(
         ge=1,
-        description="Tentativa de disparo, a partir de 1. Só para o log do N8N.",
+        description="Tentativa de disparo, a partir de 1. Volta igual no callback.",
     )
     language: Literal["pt-BR"] = Field(
         description="Idioma do texto, sempre pt-BR nesta versão (P-092)."

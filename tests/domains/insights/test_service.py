@@ -666,11 +666,11 @@ def _done_do_kit() -> InsightCallbackDone:
     )
 
 
-def _failed_do_kit(*, retryable: bool) -> InsightCallbackFailed:
+def _failed_do_kit(*, retryable: bool, attempt: int = 1) -> InsightCallbackFailed:
     falha = InsightCallbackFailed.model_validate_json(
         (CONTRACT_DIR / "exemplo-volta-failed.json").read_text(encoding="utf-8")
     )
-    return falha.model_copy(update={"retryable": retryable})
+    return falha.model_copy(update={"retryable": retryable, "attempt": attempt})
 
 
 def _service_da_volta(insight: Insight | None) -> tuple[InsightService, AsyncMock]:
@@ -686,9 +686,11 @@ def _service_da_volta(insight: Insight | None) -> tuple[InsightService, AsyncMoc
 async def test_done_grava_o_texto_sobre_pending_dispatched_e_failed(
     antes: InsightStatus,
 ) -> None:
-    """Sobre `failed` também: um texto atrasado vale mais que "indisponível"."""
+    """Sobre `failed` também: um texto atrasado vale mais que "indisponível". E de
+    qualquer tentativa: o `done` do kit é da tentativa 1, e o insight está na 2."""
     insight = _insight(antes, attempts=2)
     done = _done_do_kit()
+    assert done.attempt == 1
     service, repository = _service_da_volta(insight)
 
     await service.complete(done, max_attempts=5)
@@ -744,7 +746,6 @@ async def test_failed_sobre_failed_nao_muda_nada(retryable: bool) -> None:
     assert insight.last_error == "erro de antes"
 
 
-@pytest.mark.parametrize("antes", [InsightStatus.PENDING, InsightStatus.DISPATCHED])
 @pytest.mark.parametrize(
     ("attempts", "espera"),
     [
@@ -754,13 +755,15 @@ async def test_failed_sobre_failed_nao_muda_nada(retryable: bool) -> None:
     ],
 )
 async def test_failed_que_pode_repetir_faz_backoff(
-    antes: InsightStatus, attempts: int, espera: timedelta
+    attempts: int, espera: timedelta
 ) -> None:
     """A mesma espera de quando o disparo falha: uma regra só para os dois caminhos."""
-    insight = _insight(antes, attempts)
+    insight = _insight(InsightStatus.DISPATCHED, attempts)
     service, _ = _service_da_volta(insight)
 
-    await service.complete(_failed_do_kit(retryable=True), max_attempts=5)
+    await service.complete(
+        _failed_do_kit(retryable=True, attempt=attempts), max_attempts=5
+    )
 
     assert insight.status is InsightStatus.PENDING
     assert insight.next_attempt_at == AGORA + espera
@@ -771,24 +774,60 @@ async def test_failed_que_pode_repetir_vira_failed_no_limite_de_tentativas() -> 
     insight = _insight(InsightStatus.DISPATCHED, attempts=5)
     service, _ = _service_da_volta(insight)
 
-    await service.complete(_failed_do_kit(retryable=True), max_attempts=5)
+    await service.complete(_failed_do_kit(retryable=True, attempt=5), max_attempts=5)
 
     assert insight.status is InsightStatus.FAILED
     assert insight.last_error is not None and "bedrock_throttled" in insight.last_error
 
 
-@pytest.mark.parametrize("antes", [InsightStatus.PENDING, InsightStatus.DISPATCHED])
-async def test_failed_sem_nova_tentativa_vira_failed_direto(
-    antes: InsightStatus,
-) -> None:
+async def test_failed_sem_nova_tentativa_vira_failed_direto() -> None:
     """Recusa do modelo: a primeira tentativa já encerra, sem gastar as outras."""
-    insight = _insight(antes, attempts=1)
+    insight = _insight(InsightStatus.DISPATCHED, attempts=1)
     service, _ = _service_da_volta(insight)
 
     await service.complete(_failed_do_kit(retryable=False), max_attempts=5)
 
     assert insight.status is InsightStatus.FAILED
     assert insight.last_error is not None and "bedrock_throttled" in insight.last_error
+
+
+@pytest.mark.parametrize("retryable", [True, False])
+async def test_failed_atrasado_de_tentativa_antiga_nao_mexe_na_tentativa_em_voo(
+    retryable: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    """O N8N demorou mais que o prazo na tentativa 1: a varredura a soltou, e o
+    worker mandou a 2. Aí chega o `failed` da 1. Aplicado, ele devolveria à fila um
+    pedido em voo (disparo duplicado, teto furado) ou, com `retryable: false`,
+    encerraria um pedido que ainda pode dar certo."""
+    em_voo = _insight(InsightStatus.DISPATCHED, attempts=2)
+    em_voo.next_attempt_at = AGORA - timedelta(minutes=1)
+    service, _ = _service_da_volta(em_voo)
+
+    with caplog.at_level(logging.INFO, logger="app.domains.insights.service"):
+        await service.complete(
+            _failed_do_kit(retryable=retryable, attempt=1), max_attempts=5
+        )
+
+    assert em_voo.status is InsightStatus.DISPATCHED
+    assert em_voo.last_error is None
+    assert em_voo.next_attempt_at == AGORA - timedelta(minutes=1)
+    assert str(em_voo.id) in caplog.text  # o time vê no log que a volta chegou
+
+
+@pytest.mark.parametrize("retryable", [True, False])
+async def test_failed_sobre_pending_nao_muda_nada(retryable: bool) -> None:
+    """A varredura (ou a falha do disparo) já contou a falha desta tentativa e
+    marcou a próxima: a volta atrasada não remarca nem encerra."""
+    insight = _insight(InsightStatus.PENDING, attempts=1)
+    insight.last_error = "sem volta do N8N em 600 s"
+    insight.next_attempt_at = AGORA + timedelta(seconds=30)
+    service, _ = _service_da_volta(insight)
+
+    await service.complete(_failed_do_kit(retryable=retryable, attempt=1), max_attempts=5)
+
+    assert insight.status is InsightStatus.PENDING
+    assert insight.last_error == "sem volta do N8N em 600 s"
+    assert insight.next_attempt_at == AGORA + timedelta(seconds=30)
 
 
 async def test_volta_de_insight_desconhecido_vira_not_found(

@@ -169,6 +169,18 @@ def test_volta_done_com_paragrafo_longo_demais_e_recusada() -> None:
         CALLBACK.validate_python(body)
 
 
+@pytest.mark.parametrize(
+    "file_name", ["exemplo-volta-done.json", "exemplo-volta-failed.json"]
+)
+def test_volta_sem_attempt_e_recusada(file_name: str) -> None:
+    """Sem a tentativa, o back não sabe se um `failed` é da que está em voo."""
+    body = _load(file_name)
+    del body["attempt"]
+
+    with pytest.raises(ValidationError, match="attempt"):
+        CALLBACK.validate_python(body)
+
+
 def test_volta_failed_sem_retryable_e_recusada() -> None:
     body = _load("exemplo-volta-failed.json")
     del body["retryable"]

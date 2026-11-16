@@ -196,7 +196,7 @@
       "type": "string"
     },
     "attempt": {
-      "description": "Tentativa de disparo, a partir de 1. Só para o log do N8N.",
+      "description": "Tentativa de disparo, a partir de 1. Volta igual no callback.",
       "minimum": 1,
       "title": "Attempt",
       "type": "integer"
