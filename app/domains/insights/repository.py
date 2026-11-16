@@ -1,16 +1,31 @@
 """Acesso a dados do domínio de insights.
 
 Esta camada NÃO contém regra de negócio: só queries e operações de persistência.
+
+Leitura de outro domínio, declarada em `tests/test_arquitetura.py`
+(`LEITURA_ENTRE_DOMINIOS`): `get_form_scope` junta `form_responses` e `form` para
+saber a organização e o período de uma resposta. Só lê; nada fora de `insights` é
+gravado aqui.
 """
 
 import uuid
+from typing import NamedTuple
 
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domains.forms.models import Form
 from app.domains.insights.models import Insight, InsightPrisma
+from app.domains.responses.models import FormResponse
 from app.shared.enums import Prisma
+
+
+class FormScope(NamedTuple):
+    """A organização e o período (o formulário) a que uma resposta pertence."""
+
+    organization_id: uuid.UUID
+    form_id: uuid.UUID
 
 
 class InsightPrismaRepository:
@@ -65,6 +80,38 @@ class InsightPrismaRepository:
 class InsightRepository:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
+
+    async def get_form_scope(self, form_response_id: uuid.UUID) -> FormScope | None:
+        """Organização e formulário da resposta, ou `None` se ela não existe."""
+        result = await self.db.execute(
+            select(Form.organization_id, FormResponse.form_id)
+            .select_from(FormResponse)
+            .join(Form, Form.id == FormResponse.form_id)
+            .where(FormResponse.id == form_response_id)
+        )
+        row = result.one_or_none()
+        if row is None:
+            return None
+        return FormScope(organization_id=row.organization_id, form_id=row.form_id)
+
+    async def create(self, insight: Insight) -> Insight | None:
+        """Grava o pedido.
+
+        Devolve `None` se a resposta já tem insight. Quem recusa o segundo é a
+        restrição única de `form_response_id`, sem conferência prévia: dois envios
+        ao mesmo tempo passam juntos pela checagem de "em andamento" e só se
+        esbarram aqui. Qualquer outra violação sobe.
+        """
+        self.db.add(insight)
+        try:
+            await self.db.flush()
+        except IntegrityError as exc:
+            if "uq_insights_form_response_id" not in str(exc.orig):
+                raise
+            return None
+        # Traz o que o banco preenche sozinho (`next_attempt_at`, `created_at`).
+        await self.db.refresh(insight)
+        return insight
 
     async def delete_by_form_responses(self, form_response_ids: list[uuid.UUID]) -> None:
         """Apaga os insights das respostas e, antes, os prismas associados a eles.

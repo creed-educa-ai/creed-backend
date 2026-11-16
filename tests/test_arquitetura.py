@@ -32,6 +32,11 @@ LEITURA_ENTRE_DOMINIOS: dict[str, str] = {
         "agrega form_responses, answers, organizations e links; ver docstring do"
         " repository"
     ),
+    "insights": (
+        "le form_responses e form por join para saber a organizacao e o periodo de "
+        "uma resposta; grava so em insights. Ver docstring do repository e a spec da "
+        "CREED-80."
+    ),
     "links": (
         "le o membro (vinculo + nome do participante + e-mail do login + tipo do "
         "setor) numa consulta so, e para a lista de membros tambem os periodos (form) "
@@ -83,7 +88,8 @@ COMPOE_COM_SERVICE_DE: dict[str, str] = {
     "questions": "confere o formulario pelo FormService",
     "responses": (
         "confere formulario, pergunta e alternativa pelo FormService, "
-        "QuestionService e QuestionOptionService"
+        "QuestionService e QuestionOptionService; grava o pedido de insight no "
+        "envio pelo InsightService"
     ),
     "users": (
         "le o papel e a organizacao do vinculo pelo LinkService; no convite de "

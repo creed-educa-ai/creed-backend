@@ -213,17 +213,36 @@ class FakeQuestionOptionService:
         return self.alternativas[option_id]
 
 
+class FakeInsightService:
+    """Dublê do `InsightService`: guarda os pedidos, ou falha se mandarem.
+
+    Que o pedido vira uma linha `pending` com organização e período é provado em
+    tests/domains/insights. Aqui só importa quando o envio o pede.
+    """
+
+    def __init__(self, *, falhar_com: Exception | None = None) -> None:
+        self.falhar_com = falhar_com
+        self.pedidos: list[uuid.UUID] = []
+
+    async def request_individual(self, form_response_id: uuid.UUID) -> None:
+        if self.falhar_com is not None:
+            raise self.falhar_com
+        self.pedidos.append(form_response_id)
+
+
 def servico(
     repository: FakeFormResponseRepository,
     forms: FakeFormService | None = None,
     questions: FakeQuestionService | None = None,
     answers: FakeAnswerRepository | None = None,
+    insights: FakeInsightService | None = None,
 ) -> FormResponseService:
     return FormResponseService(
         repository,  # type: ignore[arg-type]
         forms or FakeFormService(),  # type: ignore[arg-type]
         questions or FakeQuestionService(),  # type: ignore[arg-type]
         answers or FakeAnswerRepository(),  # type: ignore[arg-type]
+        insights or FakeInsightService(),  # type: ignore[arg-type]
     )
 
 
@@ -297,6 +316,93 @@ class TestSubmitFormResponse:
             await servico(repository).submit_form_response(
                 form_response.id, link_id=form_response.vinculo_id
             )
+
+
+class TestEnvioPedeOInsight:
+    """O envio grava o pedido de insight da resposta (CREED-802, P-042).
+
+    O pedido nasce na mesma transação do envio, que o `get_db` fecha. Com dublês,
+    o que se prova é quando o envio o pede e que um erro dele não é engolido.
+    """
+
+    async def test_pede_o_insight_da_resposta_enviada(self) -> None:
+        form_response = um_form_response()
+        insights = FakeInsightService()
+
+        resultado = await servico(
+            FakeFormResponseRepository([form_response]), insights=insights
+        ).submit_form_response(form_response.id, link_id=form_response.vinculo_id)
+
+        assert insights.pedidos == [form_response.id]
+        assert resultado.status is FormResponseStatus.SUBMITTED
+
+    async def test_falha_ao_gravar_o_pedido_deixa_a_resposta_em_andamento(self) -> None:
+        form_response = um_form_response()
+        insights = FakeInsightService(
+            falhar_com=ConflictError("A resposta já tem insight")
+        )
+
+        with pytest.raises(ConflictError):
+            await servico(
+                FakeFormResponseRepository([form_response]), insights=insights
+            ).submit_form_response(form_response.id, link_id=form_response.vinculo_id)
+
+        assert form_response.status is FormResponseStatus.IN_PROGRESS
+        assert form_response.submitted_at is None
+
+    async def test_enviar_de_novo_da_409_e_nao_pede_outro_insight(self) -> None:
+        form_response = um_form_response()
+        insights = FakeInsightService()
+        service = servico(FakeFormResponseRepository([form_response]), insights=insights)
+
+        await service.submit_form_response(
+            form_response.id, link_id=form_response.vinculo_id
+        )
+        with pytest.raises(ConflictError):
+            await service.submit_form_response(
+                form_response.id, link_id=form_response.vinculo_id
+            )
+
+        assert insights.pedidos == [form_response.id]
+
+    async def test_resposta_de_outro_vinculo_nao_pede_insight(self) -> None:
+        form_response = um_form_response()
+        insights = FakeInsightService()
+
+        with pytest.raises(ForbiddenError):
+            await servico(
+                FakeFormResponseRepository([form_response]), insights=insights
+            ).submit_form_response(form_response.id, link_id=uuid.uuid4())
+
+        assert insights.pedidos == []
+
+    async def test_obrigatoria_sem_resposta_nao_pede_insight(self) -> None:
+        form_response = um_form_response()
+        pergunta = uma_pergunta(form_response.form_id, posicao=1)
+        insights = FakeInsightService()
+
+        with pytest.raises(ValidationError):
+            await servico(
+                FakeFormResponseRepository([form_response]),
+                questions=FakeQuestionService([pergunta]),
+                insights=insights,
+            ).submit_form_response(form_response.id, link_id=form_response.vinculo_id)
+
+        assert insights.pedidos == []
+
+    async def test_periodo_fechado_nao_pede_insight(self) -> None:
+        form_response = um_form_response()
+        forms = FakeFormService(
+            recusar_periodo=PeriodClosedError("O período deste questionário já fechou")
+        )
+        insights = FakeInsightService()
+
+        with pytest.raises(PeriodClosedError):
+            await servico(
+                FakeFormResponseRepository([form_response]), forms, insights=insights
+            ).submit_form_response(form_response.id, link_id=form_response.vinculo_id)
+
+        assert insights.pedidos == []
 
 
 def uma_resposta(form_response: FormResponse, pergunta: SimpleNamespace) -> Answer:

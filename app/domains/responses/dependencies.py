@@ -10,6 +10,7 @@ from fastapi import Depends
 
 from app.core.database import SessionDep
 from app.domains.forms.dependencies import ServiceDep as FormServiceDep
+from app.domains.insights.dependencies import ServiceDep as InsightServiceDep
 from app.domains.questions.dependencies import (
     OptionServiceDep as QuestionOptionServiceDep,
 )
@@ -35,8 +36,9 @@ def get_service(
     forms: FormServiceDep,
     questions: QuestionServiceDep,
     answers: Annotated[AnswerRepository, Depends(get_answer_repository)],
+    insights: InsightServiceDep,
 ) -> FormResponseService:
-    return FormResponseService(repository, forms, questions, answers)
+    return FormResponseService(repository, forms, questions, answers, insights)
 
 
 ServiceDep = Annotated[FormResponseService, Depends(get_service)]

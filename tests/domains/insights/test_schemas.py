@@ -52,7 +52,7 @@ def test_de_model_monta_a_saida_a_partir_do_model() -> None:
     insight = Insight(
         id=uuid.uuid4(),
         form_response_id=uuid.uuid4(),
-        content="O time demonstra alta segurança psicológica.",
+        content={"analise": ["O time demonstra alta segurança psicológica."]},
         created_at=datetime(2026, 10, 8, tzinfo=UTC),
     )
 
@@ -62,6 +62,21 @@ def test_de_model_monta_a_saida_a_partir_do_model() -> None:
     assert saida.form_response_id == insight.form_response_id
     assert saida.content == insight.content
     assert saida.created_at == insight.created_at
+
+
+def test_de_model_aceita_o_insight_da_empresa_ainda_sem_texto() -> None:
+    """Sem resposta e sem `content`: o pedido da empresa, antes de a esteira voltar."""
+    insight = Insight(
+        id=uuid.uuid4(),
+        form_response_id=None,
+        content=None,
+        created_at=datetime(2026, 10, 8, tzinfo=UTC),
+    )
+
+    saida = InsightResponse.de_model(insight)
+
+    assert saida.form_response_id is None
+    assert saida.content is None
 
 
 # --- InsightContent: o texto que volta da esteira (CREED-801, P-088) ----------

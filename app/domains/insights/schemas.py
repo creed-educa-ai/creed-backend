@@ -15,7 +15,7 @@ quem a recebe é este domínio. É o contrato `insight-v1` da spec da CREED-80, 
 
 import uuid
 from datetime import datetime
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -53,7 +53,7 @@ class InsightResponse(BaseModel):
                 {
                     "id": "0b4e1f2a-9c3d-4a5b-8e6f-7d8c9b0a1e2f",
                     "form_response_id": "3b1bb89a-471f-48b0-9025-cfda3b20d240",
-                    "content": "O time demonstra alta segurança psicológica...",
+                    "content": None,
                     "created_at": "2026-10-08T13:30:00Z",
                 }
             ]
@@ -61,10 +61,15 @@ class InsightResponse(BaseModel):
     )
 
     id: uuid.UUID = Field(description="Identificador da análise.")
-    form_response_id: uuid.UUID = Field(
-        description="Identificador do formulário respondido que originou a análise."
+    form_response_id: uuid.UUID | None = Field(
+        description=(
+            "Identificador do formulário respondido que originou a análise. Nulo no "
+            "insight da empresa."
+        )
     )
-    content: str = Field(description="Texto da análise gerada.")
+    content: dict[str, Any] | None = Field(
+        description="O `InsightContent` gerado. Nulo até o insight ficar pronto."
+    )
     created_at: datetime = Field(description="Data e hora de geração da análise.")
 
     @classmethod
