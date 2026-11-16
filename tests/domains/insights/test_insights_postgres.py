@@ -20,7 +20,7 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
 import pytest
-from sqlalchemy import func, select, text
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -56,7 +56,7 @@ from app.domains.responses.models import Answer, FormResponse, FormResponseStatu
 from app.external_services.n8n.client import N8NClient
 from app.external_services.n8n.schemas import IndividualInsightRequest
 from app.shared.enums import Dimension, LinkType, Prisma, Roles
-from app.shared.exceptions import ConflictError
+from app.shared.exceptions import ConflictError, ValidationError
 from app.shared.instrument import CREED_INSTRUMENT_ID
 from scripts.exportar_contrato_n8n import CONTRACT_DIR
 
@@ -836,13 +836,14 @@ async def test_dois_envios_simultaneos_criam_um_pending_so(
     assert len(await pedidos_da_empresa(cenario)) == 1
 
 
-async def responder_marcando_alternativa(session: AsyncSession, cenario: Cenario) -> None:
-    """A resposta 0 enviada, com a alternativa "4" marcada nas sete objetivas.
+async def responder_marcando_alternativa(
+    session: AsyncSession, respostas: list[uuid.UUID]
+) -> None:
+    """As respostas enviadas, com a alternativa "4" marcada nas sete objetivas.
 
     O dashboard tira a média pela alternativa marcada (`QuestionOption`), e não pelo
     `value` da resposta, que é o que o `responder` da CREED-803 grava.
     """
-    resposta = cenario.response_ids[0]
     for ordem, dimension in enumerate(Dimension, start=1):
         pergunta = Question(
             instrument_id=CREED_INSTRUMENT_ID,
@@ -859,49 +860,93 @@ async def responder_marcando_alternativa(session: AsyncSession, cenario: Cenario
         )
         session.add(quatro)
         await session.flush()
-        session.add(
-            Answer(
-                form_response_id=resposta,
-                question_id=pergunta.id,
-                option_id=quatro.id,
-                value="4",
+        for resposta in respostas:
+            session.add(
+                Answer(
+                    form_response_id=resposta,
+                    question_id=pergunta.id,
+                    option_id=quatro.id,
+                    value="4",
+                )
             )
-        )
-    enviada = await session.get(FormResponse, resposta)
-    assert enviada is not None
-    enviada.status = FormResponseStatus.SUBMITTED
+    for resposta in respostas:
+        enviada = await session.get(FormResponse, resposta)
+        assert enviada is not None
+        enviada.status = FormResponseStatus.SUBMITTED
     await session.flush()
+
+
+async def periodo_com_cinco_respondidas(cenario: Cenario) -> list[uuid.UUID]:
+    """O período 0 aberto, com 6 vínculos no público e 5 respostas enviadas, todas
+    com média 4. Devolve as 5."""
+    novas = await respostas_no_periodo(cenario, 4, FormResponseStatus.IN_PROGRESS)
+    respondidas = [*cenario.response_ids[:2], *novas[:3]]
+    async with cenario.sessions.begin() as session:
+        await responder_marcando_alternativa(session, respondidas)
+        periodo = await session.get(Form, cenario.form_ids[0])
+        assert periodo is not None
+        periodo.opens_at = datetime.now(UTC) - timedelta(days=1)
+    return respondidas
+
+
+def _service_com_dashboards(session: AsyncSession) -> InsightService:
+    prismas = PrismaService(PrismaRepository(session))
+    return InsightService(
+        InsightRepository(session),
+        prismas,
+        dashboards=DashboardService(DashboardRepository(session), prismas),
+    )
 
 
 async def test_pedido_da_empresa_montado_com_o_banco_de_verdade(
     cenario: Cenario,
 ) -> None:
     """O período, o público e as notas pelas consultas reais do dashboard."""
+    await periodo_com_cinco_respondidas(cenario)
     async with cenario.sessions.begin() as session:
-        await responder_marcando_alternativa(session, cenario)
-        periodo = await session.get(Form, cenario.form_ids[0])
-        assert periodo is not None
-        periodo.opens_at = datetime.now(UTC) - timedelta(days=1)
         pedido = um_insight(cenario)  # da empresa, no período 0
         pedido.attempts = 1
         session.add(pedido)
         await session.flush()
 
-        prismas = PrismaService(PrismaRepository(session))
-        service = InsightService(
-            InsightRepository(session),
-            prismas,
-            dashboards=DashboardService(DashboardRepository(session), prismas),
+        payload = await _service_com_dashboards(session).build_organization_payload(
+            pedido
         )
-        payload = await service.build_organization_payload(pedido)
+        periodo = await session.get(Form, cenario.form_ids[0])
 
-    # Uma pessoa com média 4: 75 em cada nota, na faixa alta.
+    # Cinco pessoas com média 4: 75 em cada nota, na faixa alta.
     assert payload.result.prismas.model_dump() == dict.fromkeys(
         (prisma.value for prisma in Prisma), 75.0
     )
-    # Os dois vínculos do cenário são do público; só um respondeu.
-    assert payload.participation.submitted == 1
-    assert payload.participation.invited == 2
+    # Seis vínculos são do público; cinco responderam.
+    assert payload.participation.submitted == 5
+    assert payload.participation.invited == 6
     assert payload.departments == []
-    assert payload.alignment.seguranca_psicologica.bands.alta == 1
+    assert payload.alignment.seguranca_psicologica.bands.alta == 5
+    assert periodo is not None
     assert payload.period.opens_at == periodo.opens_at
+
+
+async def test_exclusao_na_espera_deixa_o_periodo_abaixo_do_piso(
+    cenario: Cenario,
+) -> None:
+    """5 enviadas agendam o pedido, e um membro é excluído nos 30 min de espera. A
+    exclusão (M-3) apaga a resposta e o vínculo dele, e a conta do disparo, que é a
+    do dashboard, já não chega ao piso: o texto sairia sobre 4 pessoas."""
+    respondidas = await periodo_com_cinco_respondidas(cenario)
+    async with cenario.sessions.begin() as session:
+        pedido = um_insight(cenario)
+        pedido.attempts = 1
+        session.add(pedido)
+        excluida = await session.get(FormResponse, respondidas[-1])
+        assert excluida is not None
+        vinculo = excluida.vinculo_id
+        await session.execute(
+            delete(Answer).where(Answer.form_response_id == excluida.id)
+        )
+        await session.delete(excluida)
+        await session.flush()
+        await session.execute(delete(Link).where(Link.id == vinculo))
+
+        with pytest.raises(ValidationError, match="4 respostas, abaixo do piso de 5"):
+            await _service_com_dashboards(session).build_organization_payload(pedido)

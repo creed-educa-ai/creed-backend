@@ -198,6 +198,7 @@ def _done() -> dict[str, Any]:
     return {
         "contract_version": "insight-v1",
         "insight_id": str(uuid.uuid4()),
+        "attempt": 1,
         "status": "done",
         "content": _content(),
         "model_id": "anthropic.claude-opus-5-5",
@@ -209,6 +210,7 @@ def _failed() -> dict[str, Any]:
     return {
         "contract_version": "insight-v1",
         "insight_id": str(uuid.uuid4()),
+        "attempt": 1,
         "status": "failed",
         "error": "bedrock_throttled",
         "retryable": True,
