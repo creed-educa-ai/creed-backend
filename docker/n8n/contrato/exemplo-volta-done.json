@@ -1,0 +1,23 @@
+{
+  "contract_version": "insight-v1",
+  "insight_id": "0b4e1f2a-9c3d-4a5b-8e6f-7d8c9b0a1e2f",
+  "status": "done",
+  "content": {
+    "analise": [
+      "Seu resultado mostra um ponto forte claro em segurança psicológica: você tende a se sentir à vontade para propor ideias, admitir erros e pedir ajuda, e isso abre espaço para o grupo aprender junto.",
+      "A adaptabilidade cognitiva aparece como a maior oportunidade de desenvolvimento. Mudar de estratégia quando o contexto pede, e revisar o próprio jeito de aprender, são práticas que podem ganhar mais espaço na sua rotina."
+    ],
+    "prismas": {
+      "seguranca_psicologica": "Você se sente à vontade para se expor no grupo, o que favorece a troca e o aprendizado coletivo.",
+      "lideranca_adaptativa": "Você responde bem a mudanças e consegue reorganizar prioridades quando o cenário muda.",
+      "cultura_empreendedora": "Você demonstra iniciativa para transformar ideias em ação e buscar oportunidades.",
+      "adaptabilidade_cognitiva": "Revisar estratégias e experimentar novas formas de aprender pode ampliar seu repertório diante de problemas novos.",
+      "neuroinovacao_prisma": "O conjunto dos seus resultados indica uma base consistente para inovar, com espaço para crescer na flexibilidade de pensamento."
+    },
+    "recomendacao": [
+      "Escolha um problema recente e escreva duas formas diferentes de resolvê-lo antes de decidir. No fim da semana, compare o que funcionou e o que você mudaria."
+    ]
+  },
+  "model_id": "anthropic.claude-opus-5-5",
+  "prompt_version": "individual-v1+dossie-v1"
+}

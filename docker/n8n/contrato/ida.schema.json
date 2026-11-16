@@ -1,0 +1,233 @@
+{
+  "$defs": {
+    "DimensionScores": {
+      "additionalProperties": false,
+      "description": "Média de cada uma das sete dimensões da Matriz CREED, de 0 a 100.\n\nAs sete vêm sempre: sem uma delas, o back não calcula os prismas.",
+      "properties": {
+        "S2": {
+          "maximum": 100,
+          "minimum": 0,
+          "title": "S2",
+          "type": "number"
+        },
+        "S4": {
+          "maximum": 100,
+          "minimum": 0,
+          "title": "S4",
+          "type": "number"
+        },
+        "S5A": {
+          "maximum": 100,
+          "minimum": 0,
+          "title": "S5A",
+          "type": "number"
+        },
+        "S5B": {
+          "maximum": 100,
+          "minimum": 0,
+          "title": "S5B",
+          "type": "number"
+        },
+        "S6": {
+          "maximum": 100,
+          "minimum": 0,
+          "title": "S6",
+          "type": "number"
+        },
+        "S7": {
+          "maximum": 100,
+          "minimum": 0,
+          "title": "S7",
+          "type": "number"
+        },
+        "S8": {
+          "maximum": 100,
+          "minimum": 0,
+          "title": "S8",
+          "type": "number"
+        }
+      },
+      "required": [
+        "S2",
+        "S4",
+        "S5A",
+        "S5B",
+        "S6",
+        "S7",
+        "S8"
+      ],
+      "title": "DimensionScores",
+      "type": "object"
+    },
+    "InsightResult": {
+      "additionalProperties": false,
+      "description": "O resultado que o texto interpreta, já calculado pelo back.\n\n`destaque` e `oportunidade` são o prisma de maior e o de menor nota, pela mesma\nregra do dashboard. A IA não decide quais são (princípio 1 do projeto).",
+      "properties": {
+        "prismas": {
+          "$ref": "#/$defs/PrismaScores"
+        },
+        "dimensions": {
+          "$ref": "#/$defs/DimensionScores"
+        },
+        "destaque": {
+          "$ref": "#/$defs/Prisma",
+          "description": "Prisma de maior nota."
+        },
+        "oportunidade": {
+          "$ref": "#/$defs/Prisma",
+          "description": "Prisma de menor nota."
+        }
+      },
+      "required": [
+        "prismas",
+        "dimensions",
+        "destaque",
+        "oportunidade"
+      ],
+      "title": "InsightResult",
+      "type": "object"
+    },
+    "OpenAnswer": {
+      "additionalProperties": false,
+      "description": "Uma pergunta descritiva respondida, com o texto como a pessoa escreveu.\n\nA resposta é dado, nunca instrução: quem monta o prompt a coloca entre\nmarcadores (spec da CREED-80, \"Segurança na esteira\").",
+      "properties": {
+        "section": {
+          "description": "Seção do questionário, ex.: S9.",
+          "minLength": 1,
+          "title": "Section",
+          "type": "string"
+        },
+        "question": {
+          "description": "Texto da pergunta, em pt-BR.",
+          "minLength": 1,
+          "title": "Question",
+          "type": "string"
+        },
+        "answer": {
+          "description": "Resposta, como foi escrita.",
+          "minLength": 1,
+          "title": "Answer",
+          "type": "string"
+        }
+      },
+      "required": [
+        "section",
+        "question",
+        "answer"
+      ],
+      "title": "OpenAnswer",
+      "type": "object"
+    },
+    "Prisma": {
+      "description": "Os cinco prismas de análise do produto.\n\nTipo `prisma` no banco, compartilhado por `questions` e `insights`. Os\nvalores vêm do material do produto sobre a composição dos prismas\n(SP, LA, CE, AC, NP).",
+      "enum": [
+        "seguranca_psicologica",
+        "lideranca_adaptativa",
+        "cultura_empreendedora",
+        "adaptabilidade_cognitiva",
+        "neuroinovacao_prisma"
+      ],
+      "title": "Prisma",
+      "type": "string"
+    },
+    "PrismaScores": {
+      "additionalProperties": false,
+      "description": "Nota de cada um dos cinco prismas, de 0 a 100. Os cinco vêm sempre.",
+      "properties": {
+        "seguranca_psicologica": {
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Seguranca Psicologica",
+          "type": "number"
+        },
+        "lideranca_adaptativa": {
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Lideranca Adaptativa",
+          "type": "number"
+        },
+        "cultura_empreendedora": {
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Cultura Empreendedora",
+          "type": "number"
+        },
+        "adaptabilidade_cognitiva": {
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Adaptabilidade Cognitiva",
+          "type": "number"
+        },
+        "neuroinovacao_prisma": {
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Neuroinovacao Prisma",
+          "type": "number"
+        }
+      },
+      "required": [
+        "seguranca_psicologica",
+        "lideranca_adaptativa",
+        "cultura_empreendedora",
+        "adaptabilidade_cognitiva",
+        "neuroinovacao_prisma"
+      ],
+      "title": "PrismaScores",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Pedido de insight individual: o resultado de uma resposta enviada.\n\nNão leva nada que identifique a pessoa (P-091): nem nome, e-mail, documento,\norganização, setor, dado demográfico ou o id da resposta. O `insight_id` é a\núnica correlação de que o N8N precisa, e ele volta no callback.",
+  "properties": {
+    "contract_version": {
+      "const": "insight-v1",
+      "title": "Contract Version",
+      "type": "string"
+    },
+    "scope": {
+      "const": "individual",
+      "title": "Scope",
+      "type": "string"
+    },
+    "insight_id": {
+      "description": "Id do pedido. O callback devolve o mesmo valor.",
+      "format": "uuid",
+      "title": "Insight Id",
+      "type": "string"
+    },
+    "attempt": {
+      "description": "Tentativa de disparo, a partir de 1. Só para o log do N8N.",
+      "minimum": 1,
+      "title": "Attempt",
+      "type": "integer"
+    },
+    "language": {
+      "const": "pt-BR",
+      "description": "Idioma do texto, sempre pt-BR nesta versão (P-092).",
+      "title": "Language",
+      "type": "string"
+    },
+    "result": {
+      "$ref": "#/$defs/InsightResult"
+    },
+    "open_answers": {
+      "description": "Perguntas descritivas respondidas. Vazia se a pessoa não respondeu.",
+      "items": {
+        "$ref": "#/$defs/OpenAnswer"
+      },
+      "title": "Open Answers",
+      "type": "array"
+    }
+  },
+  "required": [
+    "contract_version",
+    "scope",
+    "insight_id",
+    "attempt",
+    "language",
+    "result",
+    "open_answers"
+  ],
+  "title": "IndividualInsightRequest",
+  "type": "object"
+}
