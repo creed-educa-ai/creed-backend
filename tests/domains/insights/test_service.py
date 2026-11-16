@@ -19,7 +19,9 @@ from app.domains.insights.repository import (
     FormScope,
     InsightPrismaRepository,
     InsightRepository,
+    ResponseOwner,
 )
+from app.domains.insights.schemas import InsightCallbackDone, InsightCallbackFailed
 from app.domains.insights.service import (
     DispatchLimits,
     InsightPrismaService,
@@ -29,8 +31,14 @@ from app.domains.prismas.service import PrismaService
 from app.external_services.n8n.client import N8NClient
 from app.external_services.n8n.exceptions import N8NUnavailableError
 from app.external_services.n8n.schemas import IndividualInsightRequest, OpenAnswer
-from app.shared.enums import Dimension, Prisma
-from app.shared.exceptions import ConflictError, NotFoundError, ValidationError
+from app.shared.authorization import AuthenticatedUser
+from app.shared.enums import Dimension, LinkType, Prisma
+from app.shared.exceptions import (
+    ConflictError,
+    ForbiddenError,
+    NotFoundError,
+    ValidationError,
+)
 from scripts.exportar_contrato_n8n import CONTRACT_DIR
 
 
@@ -646,3 +654,331 @@ async def test_service_sem_client_nao_entra_no_ciclo() -> None:
 
     with pytest.raises(RuntimeError, match="N8NClient"):
         await service.claim_due_batch(LIMITES)
+
+
+# --- A volta do N8N (CREED-805) ---------------------------------------------------
+# Uma linha da tabela de idempotência da spec por teste ("Volta: N8N → back").
+
+
+def _done_do_kit() -> InsightCallbackDone:
+    return InsightCallbackDone.model_validate_json(
+        (CONTRACT_DIR / "exemplo-volta-done.json").read_text(encoding="utf-8")
+    )
+
+
+def _failed_do_kit(*, retryable: bool, attempt: int = 1) -> InsightCallbackFailed:
+    falha = InsightCallbackFailed.model_validate_json(
+        (CONTRACT_DIR / "exemplo-volta-failed.json").read_text(encoding="utf-8")
+    )
+    return falha.model_copy(update={"retryable": retryable, "attempt": attempt})
+
+
+def _service_da_volta(insight: Insight | None) -> tuple[InsightService, AsyncMock]:
+    repository = AsyncMock(spec=InsightRepository)
+    repository.get_for_update.return_value = insight
+    repository.database_now.return_value = AGORA
+    return InsightService(repository, AsyncMock(spec=PrismaService)), repository
+
+
+@pytest.mark.parametrize(
+    "antes", [InsightStatus.PENDING, InsightStatus.DISPATCHED, InsightStatus.FAILED]
+)
+async def test_done_grava_o_texto_sobre_pending_dispatched_e_failed(
+    antes: InsightStatus,
+) -> None:
+    """Sobre `failed` também: um texto atrasado vale mais que "indisponível". E de
+    qualquer tentativa: o `done` do kit é da tentativa 1, e o insight está na 2."""
+    insight = _insight(antes, attempts=2)
+    done = _done_do_kit()
+    assert done.attempt == 1
+    service, repository = _service_da_volta(insight)
+
+    await service.complete(done, max_attempts=5)
+
+    # A trava vem do `get_for_update`: dois callbacks ao mesmo tempo se enfileiram.
+    repository.get_for_update.assert_awaited_once_with(done.insight_id)
+    assert insight.status is InsightStatus.DONE
+    assert insight.content == done.content.model_dump(mode="json")
+    assert insight.model_id == "anthropic.claude-opus-5-5"
+    assert insight.prompt_version == "individual-v1+dossie-v1"
+    assert insight.completed_at == AGORA  # a hora do banco
+
+
+async def test_done_sobre_done_nao_muda_nada() -> None:
+    """O primeiro `done` vence, mesmo que o segundo traga outro texto."""
+    primeiro = _done_do_kit()
+    insight = _insight(InsightStatus.DONE, attempts=1)
+    insight.content = primeiro.content.model_dump(mode="json")
+    insight.model_id = "anthropic.claude-opus-5-5"
+    insight.completed_at = AGORA - timedelta(hours=1)
+    service, repository = _service_da_volta(insight)
+    segundo = primeiro.model_copy(update={"model_id": "outro-modelo"})
+
+    await service.complete(segundo, max_attempts=5)
+
+    assert insight.model_id == "anthropic.claude-opus-5-5"
+    assert insight.completed_at == AGORA - timedelta(hours=1)
+    assert insight.content == primeiro.content.model_dump(mode="json")
+    repository.database_now.assert_not_awaited()
+
+
+@pytest.mark.parametrize("retryable", [True, False])
+async def test_failed_sobre_done_nao_muda_nada(retryable: bool) -> None:
+    insight = _insight(InsightStatus.DONE, attempts=1)
+    insight.content = _done_do_kit().content.model_dump(mode="json")
+    service, _ = _service_da_volta(insight)
+
+    await service.complete(_failed_do_kit(retryable=retryable), max_attempts=5)
+
+    assert insight.status is InsightStatus.DONE
+    assert insight.last_error is None
+
+
+@pytest.mark.parametrize("retryable", [True, False])
+async def test_failed_sobre_failed_nao_muda_nada(retryable: bool) -> None:
+    insight = _insight(InsightStatus.FAILED, attempts=5)
+    insight.last_error = "erro de antes"
+    service, _ = _service_da_volta(insight)
+
+    await service.complete(_failed_do_kit(retryable=retryable), max_attempts=5)
+
+    assert insight.status is InsightStatus.FAILED
+    assert insight.last_error == "erro de antes"
+
+
+@pytest.mark.parametrize(
+    ("attempts", "espera"),
+    [
+        (1, timedelta(seconds=30)),
+        (2, timedelta(minutes=1)),
+        (4, timedelta(minutes=4)),
+    ],
+)
+async def test_failed_que_pode_repetir_faz_backoff(
+    attempts: int, espera: timedelta
+) -> None:
+    """A mesma espera de quando o disparo falha: uma regra só para os dois caminhos."""
+    insight = _insight(InsightStatus.DISPATCHED, attempts)
+    service, _ = _service_da_volta(insight)
+
+    await service.complete(
+        _failed_do_kit(retryable=True, attempt=attempts), max_attempts=5
+    )
+
+    assert insight.status is InsightStatus.PENDING
+    assert insight.next_attempt_at == AGORA + espera
+    assert insight.last_error is not None and "bedrock_throttled" in insight.last_error
+
+
+async def test_failed_que_pode_repetir_vira_failed_no_limite_de_tentativas() -> None:
+    insight = _insight(InsightStatus.DISPATCHED, attempts=5)
+    service, _ = _service_da_volta(insight)
+
+    await service.complete(_failed_do_kit(retryable=True, attempt=5), max_attempts=5)
+
+    assert insight.status is InsightStatus.FAILED
+    assert insight.last_error is not None and "bedrock_throttled" in insight.last_error
+
+
+async def test_failed_sem_nova_tentativa_vira_failed_direto() -> None:
+    """Recusa do modelo: a primeira tentativa já encerra, sem gastar as outras."""
+    insight = _insight(InsightStatus.DISPATCHED, attempts=1)
+    service, _ = _service_da_volta(insight)
+
+    await service.complete(_failed_do_kit(retryable=False), max_attempts=5)
+
+    assert insight.status is InsightStatus.FAILED
+    assert insight.last_error is not None and "bedrock_throttled" in insight.last_error
+
+
+@pytest.mark.parametrize("retryable", [True, False])
+async def test_failed_atrasado_de_tentativa_antiga_nao_mexe_na_tentativa_em_voo(
+    retryable: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    """O N8N demorou mais que o prazo na tentativa 1: a varredura a soltou, e o
+    worker mandou a 2. Aí chega o `failed` da 1. Aplicado, ele devolveria à fila um
+    pedido em voo (disparo duplicado, teto furado) ou, com `retryable: false`,
+    encerraria um pedido que ainda pode dar certo."""
+    em_voo = _insight(InsightStatus.DISPATCHED, attempts=2)
+    em_voo.next_attempt_at = AGORA - timedelta(minutes=1)
+    service, _ = _service_da_volta(em_voo)
+
+    with caplog.at_level(logging.INFO, logger="app.domains.insights.service"):
+        await service.complete(
+            _failed_do_kit(retryable=retryable, attempt=1), max_attempts=5
+        )
+
+    assert em_voo.status is InsightStatus.DISPATCHED
+    assert em_voo.last_error is None
+    assert em_voo.next_attempt_at == AGORA - timedelta(minutes=1)
+    assert str(em_voo.id) in caplog.text  # o time vê no log que a volta chegou
+
+
+@pytest.mark.parametrize("retryable", [True, False])
+async def test_failed_sobre_pending_nao_muda_nada(retryable: bool) -> None:
+    """A varredura (ou a falha do disparo) já contou a falha desta tentativa e
+    marcou a próxima: a volta atrasada não remarca nem encerra."""
+    insight = _insight(InsightStatus.PENDING, attempts=1)
+    insight.last_error = "sem volta do N8N em 600 s"
+    insight.next_attempt_at = AGORA + timedelta(seconds=30)
+    service, _ = _service_da_volta(insight)
+
+    await service.complete(_failed_do_kit(retryable=retryable, attempt=1), max_attempts=5)
+
+    assert insight.status is InsightStatus.PENDING
+    assert insight.last_error == "sem volta do N8N em 600 s"
+    assert insight.next_attempt_at == AGORA + timedelta(seconds=30)
+
+
+async def test_volta_de_insight_desconhecido_vira_not_found(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    service, repository = _service_da_volta(None)
+    done = _done_do_kit()
+
+    with (
+        caplog.at_level(logging.WARNING, logger="app.domains.insights.service"),
+        pytest.raises(NotFoundError),
+    ):
+        await service.complete(done, max_attempts=5)
+
+    assert str(done.insight_id) in caplog.text
+    repository.database_now.assert_not_awaited()
+
+
+# --- A leitura do estado (CREED-805) ----------------------------------------------
+
+CREED_ORG = uuid.uuid4()
+OUTRA_ORG = uuid.uuid4()
+
+
+def _usuario(
+    role: str, link_id: uuid.UUID, organization_id: uuid.UUID
+) -> AuthenticatedUser:
+    return AuthenticatedUser(
+        sub="sub",
+        email="dev@creed.example.com",
+        roles=[role],
+        link_id=str(link_id),
+        organization_id=str(organization_id),
+    )
+
+
+def _service_da_leitura(
+    owner: ResponseOwner | None, insight: Insight | None
+) -> tuple[InsightService, AsyncMock]:
+    repository = AsyncMock(spec=InsightRepository)
+    repository.get_response_owner.return_value = owner
+    repository.get_by_form_response.return_value = insight
+    return InsightService(repository, AsyncMock(spec=PrismaService)), repository
+
+
+def _insight_pronto() -> Insight:
+    insight = _insight(InsightStatus.DONE, attempts=1)
+    insight.content = _done_do_kit().content.model_dump(mode="json")
+    insight.completed_at = AGORA
+    return insight
+
+
+async def test_dono_le_o_proprio_insight() -> None:
+    dono = uuid.uuid4()
+    resposta = uuid.uuid4()
+    owner = ResponseOwner(dono, LinkType.EMPREGO, OUTRA_ORG)
+    service, repository = _service_da_leitura(owner, _insight_pronto())
+
+    lido = await service.get_status(
+        resposta, user=_usuario("respondente", dono, OUTRA_ORG)
+    )
+
+    repository.get_by_form_response.assert_awaited_once_with(resposta)
+    assert lido.status == "done"
+    assert lido.content is not None and len(lido.content.analise) == 2
+    assert lido.completed_at == AGORA
+
+
+@pytest.mark.parametrize(
+    ("estado", "visto"),
+    [
+        (InsightStatus.PENDING, "pending"),
+        (InsightStatus.DISPATCHED, "pending"),  # quem lê não vê o `dispatched`
+        (InsightStatus.FAILED, "failed"),
+    ],
+)
+async def test_sem_texto_pronto_o_estado_vem_sem_content(
+    estado: InsightStatus, visto: str
+) -> None:
+    dono = uuid.uuid4()
+    owner = ResponseOwner(dono, LinkType.EMPREGO, OUTRA_ORG)
+    service, _ = _service_da_leitura(owner, _insight(estado, attempts=1))
+
+    lido = await service.get_status(
+        uuid.uuid4(), user=_usuario("respondente", dono, OUTRA_ORG)
+    )
+
+    assert lido.status == visto
+    assert lido.content is None
+    assert lido.completed_at is None
+
+
+async def test_administradora_le_o_insight_de_um_mentorando() -> None:
+    """P-048: o mentorando é um vínculo de mentoria na organização da CREED."""
+    mentorando = ResponseOwner(uuid.uuid4(), LinkType.MENTORIA, CREED_ORG)
+    service, _ = _service_da_leitura(mentorando, _insight_pronto())
+
+    lido = await service.get_status(
+        uuid.uuid4(), user=_usuario("admin", uuid.uuid4(), CREED_ORG)
+    )
+
+    assert lido.status == "done"
+
+
+@pytest.mark.parametrize(
+    ("papel", "dono_da_resposta"),
+    [
+        # A administradora não lê o de quem é de empresa: anônimo para a CREED também.
+        ("admin", ResponseOwner(uuid.uuid4(), LinkType.EMPREGO, OUTRA_ORG)),
+        # Mentoria, mas de outra organização que não a dela.
+        ("admin", ResponseOwner(uuid.uuid4(), LinkType.MENTORIA, OUTRA_ORG)),
+        # A gestora da mesma organização não lê o de um membro (P-086).
+        ("gestor", ResponseOwner(uuid.uuid4(), LinkType.EMPREGO, CREED_ORG)),
+        # Nem a gestora lê o de mentorando, por mais que a organização coincida.
+        ("gestor", ResponseOwner(uuid.uuid4(), LinkType.MENTORIA, CREED_ORG)),
+        # Outro respondente.
+        ("respondente", ResponseOwner(uuid.uuid4(), LinkType.EMPREGO, CREED_ORG)),
+    ],
+)
+async def test_outro_vinculo_nao_le_o_insight(
+    papel: str, dono_da_resposta: ResponseOwner
+) -> None:
+    service, repository = _service_da_leitura(dono_da_resposta, _insight_pronto())
+
+    with pytest.raises(ForbiddenError):
+        await service.get_status(
+            uuid.uuid4(), user=_usuario(papel, uuid.uuid4(), CREED_ORG)
+        )
+
+    # O 403 vem antes de abrir o insight: quem não pode ler não descobre nem o estado.
+    repository.get_by_form_response.assert_not_awaited()
+
+
+async def test_resposta_inexistente_e_not_found_e_nao_forbidden() -> None:
+    service, repository = _service_da_leitura(None, None)
+
+    with pytest.raises(NotFoundError):
+        await service.get_status(
+            uuid.uuid4(), user=_usuario("admin", uuid.uuid4(), CREED_ORG)
+        )
+
+    repository.get_by_form_response.assert_not_awaited()
+
+
+async def test_resposta_sem_insight_e_not_found() -> None:
+    """Resposta em andamento, ou enviada antes de a esteira existir."""
+    dono = uuid.uuid4()
+    owner = ResponseOwner(dono, LinkType.EMPREGO, OUTRA_ORG)
+    service, _ = _service_da_leitura(owner, None)
+
+    with pytest.raises(NotFoundError):
+        await service.get_status(
+            uuid.uuid4(), user=_usuario("respondente", dono, OUTRA_ORG)
+        )

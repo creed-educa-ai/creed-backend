@@ -20,9 +20,10 @@ from app.domains.insights.repository import (
     FormScope,
     InsightPrismaRepository,
     InsightRepository,
+    ResponseOwner,
 )
 from app.domains.questions.models import QuestionSection
-from app.shared.enums import Prisma
+from app.shared.enums import LinkType, Prisma
 
 
 class _SessaoFalsa:
@@ -295,3 +296,42 @@ async def test_resposta_sem_descritiva_devolve_lista_vazia() -> None:
     repository = InsightRepository(_SessaoFalsa())  # type: ignore[arg-type]
 
     assert await repository.list_descriptive_answers(uuid.uuid4()) == []
+
+
+# --- A leitura do estado (CREED-805) ----------------------------------------------
+
+
+async def test_dono_da_resposta_traz_vinculo_tipo_e_organizacao() -> None:
+    vinculo, organizacao = uuid.uuid4(), uuid.uuid4()
+    sessao = _SessaoFalsa(
+        linha=SimpleNamespace(
+            id=vinculo, type=LinkType.MENTORIA, organization_id=organizacao
+        )
+    )
+    repository = InsightRepository(sessao)  # type: ignore[arg-type]
+
+    dono = await repository.get_response_owner(uuid.uuid4())
+
+    assert dono == ResponseOwner(
+        link_id=vinculo, link_type=LinkType.MENTORIA, organization_id=organizacao
+    )
+
+
+async def test_dono_de_resposta_inexistente_devolve_none() -> None:
+    """A camada de banco não decide: devolve nada e o service levanta o 404."""
+    repository = InsightRepository(_SessaoFalsa(linha=None))  # type: ignore[arg-type]
+
+    assert await repository.get_response_owner(uuid.uuid4()) is None
+
+
+async def test_insight_da_resposta_devolve_o_que_o_banco_achou() -> None:
+    insight = _um_pedido()
+    repository = InsightRepository(_SessaoFalsa(resultado=insight))  # type: ignore[arg-type]
+
+    assert await repository.get_by_form_response(uuid.uuid4()) is insight
+
+
+async def test_resposta_sem_insight_devolve_none() -> None:
+    repository = InsightRepository(_SessaoFalsa())  # type: ignore[arg-type]
+
+    assert await repository.get_by_form_response(uuid.uuid4()) is None

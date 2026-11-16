@@ -17,6 +17,7 @@ from app.domains.demographics.router import router as demographics_router
 from app.domains.department.router import router as department_router
 from app.domains.forms.router import router as forms_router
 from app.domains.forms.router_periods import router as periods_router
+from app.domains.insights.router import router as insights_router
 from app.domains.links.router import router as links_router
 from app.domains.links.router_members import router as link_members_router
 from app.domains.organizacoes.router import router as organizacoes_router
@@ -105,6 +106,13 @@ OPENAPI_TAGS = [
         "name": "dashboards",
         "description": "Resumo executivo e indicadores consolidados para a organização.",
     },
+    {
+        "name": "insights",
+        "description": (
+            "Texto de interpretação gerado pela esteira de IA: a volta assinada do "
+            "N8N e a consulta do estado do insight de uma resposta."
+        ),
+    },
 ]
 
 
@@ -170,6 +178,7 @@ for _router in (
     organizations_router,
     prismas_router,
     dashboards_router,
+    insights_router,
     demographics_router,
     prognosticos_router,
     questions_router,

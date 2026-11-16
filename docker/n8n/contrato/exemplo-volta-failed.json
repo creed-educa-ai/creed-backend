@@ -1,6 +1,7 @@
 {
   "contract_version": "insight-v1",
   "insight_id": "0b4e1f2a-9c3d-4a5b-8e6f-7d8c9b0a1e2f",
+  "attempt": 1,
   "status": "failed",
   "error": "bedrock_throttled",
   "retryable": true

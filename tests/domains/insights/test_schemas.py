@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
-from app.domains.insights.models import Insight
+from app.domains.insights.models import Insight, InsightStatus
 from app.domains.insights.schemas import (
     InsightCallback,
     InsightCallbackDone,
@@ -19,6 +19,7 @@ from app.domains.insights.schemas import (
     InsightContent,
     InsightCreate,
     InsightResponse,
+    InsightStatusRead,
     PrismaTexts,
 )
 from app.shared.enums import Prisma
@@ -197,6 +198,7 @@ def _done() -> dict[str, Any]:
     return {
         "contract_version": "insight-v1",
         "insight_id": str(uuid.uuid4()),
+        "attempt": 1,
         "status": "done",
         "content": _content(),
         "model_id": "anthropic.claude-opus-5-5",
@@ -208,6 +210,7 @@ def _failed() -> dict[str, Any]:
     return {
         "contract_version": "insight-v1",
         "insight_id": str(uuid.uuid4()),
+        "attempt": 1,
         "status": "failed",
         "error": "bedrock_throttled",
         "retryable": True,
@@ -251,3 +254,52 @@ def test_callback_failed_com_content_e_recusado() -> None:
 
     with pytest.raises(ValidationError, match="content"):
         CALLBACK.validate_python(body)
+
+
+# --- InsightStatusRead: o que a tela lê no polling (CREED-805) ------------------
+
+
+def _insight_com(
+    status: InsightStatus, *, content: dict[str, Any] | None = None
+) -> Insight:
+    return Insight(
+        id=uuid.uuid4(),
+        status=status,
+        content=content,
+        completed_at=datetime(2026, 11, 15, 12, 0, tzinfo=UTC) if content else None,
+    )
+
+
+@pytest.mark.parametrize(
+    ("estado", "visto"),
+    [
+        (InsightStatus.PENDING, "pending"),
+        (InsightStatus.DISPATCHED, "pending"),
+        (InsightStatus.FAILED, "failed"),
+    ],
+)
+def test_status_sem_texto_vem_sem_content_nem_data(
+    estado: InsightStatus, visto: str
+) -> None:
+    saida = InsightStatusRead.de_model(_insight_com(estado))
+
+    assert saida.status == visto
+    assert saida.content is None
+    assert saida.completed_at is None
+
+
+def test_status_done_traz_o_texto_validado_e_a_data() -> None:
+    saida = InsightStatusRead.de_model(
+        _insight_com(InsightStatus.DONE, content=_content())
+    )
+
+    assert saida.status == "done"
+    assert saida.content == InsightContent.model_validate(_content())
+    assert saida.completed_at == datetime(2026, 11, 15, 12, 0, tzinfo=UTC)
+
+
+def test_status_nao_expoe_dispatched() -> None:
+    """Quem lê vê três estados: o contrato da rota não tem `dispatched`."""
+    schema = InsightStatusRead.model_json_schema()
+
+    assert schema["properties"]["status"]["enum"] == ["pending", "done", "failed"]

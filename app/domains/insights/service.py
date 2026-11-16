@@ -7,9 +7,19 @@ import logging
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from typing import TYPE_CHECKING
 
 from app.domains.insights.models import Insight, InsightPrisma, InsightStatus
-from app.domains.insights.repository import InsightPrismaRepository, InsightRepository
+from app.domains.insights.repository import (
+    InsightPrismaRepository,
+    InsightRepository,
+    ResponseOwner,
+)
+from app.domains.insights.schemas import (
+    InsightCallbackDone,
+    InsightCallbackFailed,
+    InsightStatusRead,
+)
 from app.domains.prismas.service import PrismaService, highest_and_lowest
 from app.external_services.n8n.client import N8NClient
 from app.external_services.n8n.exceptions import N8NUnavailableError
@@ -20,10 +30,20 @@ from app.external_services.n8n.schemas import (
     OpenAnswer,
     PrismaScores,
 )
-from app.shared.enums import Prisma
-from app.shared.exceptions import ConflictError, DomainError, NotFoundError
+from app.shared.enums import LinkType, Prisma
+from app.shared.exceptions import (
+    ConflictError,
+    DomainError,
+    ForbiddenError,
+    NotFoundError,
+)
+
+if TYPE_CHECKING:
+    from app.shared.authorization import AuthenticatedUser
 
 logger = logging.getLogger(__name__)
+
+ADMIN_ROLE = "admin"
 
 # A espera dobra a cada falha, a partir daqui: 30 s, 1 min, 2 min, 4 min (ADR-0010).
 FIRST_RETRY_DELAY = timedelta(seconds=30)
@@ -49,6 +69,23 @@ def _as_on_screen(score: float) -> float:
     O texto da IA não pode citar 61,3 para quem vê 61 na tela.
     """
     return float(round(score))
+
+
+def _can_read_insight(owner: ResponseOwner, user: "AuthenticatedUser") -> bool:
+    """O dono da resposta lê o próprio insight. A administradora lê também o dos
+    mentorandos, que são os vínculos de mentoria da CREED (P-048).
+
+    🟡 Premissa P-086 — a gestora não lê o insight individual de ninguém, nem o dos
+    membros da própria empresa: o resultado individual é anônimo para a empresa.
+    Confirmar na próxima reunião.
+    """
+    if owner.link_id == user.link_uuid:
+        return True
+    return (
+        user.role == ADMIN_ROLE
+        and owner.link_type is LinkType.MENTORIA
+        and owner.organization_id == user.organization_uuid
+    )
 
 
 class InsightPrismaService:
@@ -283,6 +320,91 @@ class InsightService:
             ):
                 now = await self.repository.database_now()
                 self._retry_or_fail(insight, exc.message, limits.max_attempts, now)
+
+    # --- A volta da esteira (CREED-805, spec da CREED-80 "Volta: N8N → back") ------
+
+    async def complete(
+        self,
+        callback: InsightCallbackDone | InsightCallbackFailed,
+        max_attempts: int,
+    ) -> None:
+        """Aplica a volta do N8N ao insight, pela tabela de idempotência da spec.
+
+        O N8N pode reenviar, e um `failed` pode chegar depois de um `done`. Quem
+        terminou antes não muda: o primeiro `done` vence, e um `failed` não desfaz
+        nada. Um `failed` só vale para a tentativa em voo, como no `dispatch`. O
+        insight fica travado até o fim da transação, para dois callbacks ao mesmo
+        tempo não passarem juntos pela conferência do estado.
+
+        `max_attempts` vem de quem chama, como os limites do worker (`DispatchLimits`).
+        """
+        insight = await self.repository.get_for_update(callback.insight_id)
+        if insight is None:
+            logger.warning(
+                "Volta do N8N para um insight desconhecido: %s", callback.insight_id
+            )
+            raise NotFoundError(f"Insight {callback.insight_id} não encontrado")
+
+        if insight.status is InsightStatus.DONE:
+            return
+
+        now = await self.repository.database_now()
+
+        if isinstance(callback, InsightCallbackDone):
+            # Vale também sobre `failed`: um texto que chega atrasado é melhor que a
+            # tela dizer "indisponível".
+            insight.status = InsightStatus.DONE
+            insight.content = callback.content.model_dump(mode="json")
+            insight.model_id = callback.model_id
+            insight.prompt_version = callback.prompt_version
+            insight.completed_at = now
+            return
+
+        # A falha de uma tentativa que já terminou não vale. Se a varredura soltou a
+        # tentativa 1 e o worker mandou a 2, um `failed` atrasado da 1 devolveria à
+        # fila, ou encerraria, um pedido com a 2 ainda em voo. Também não vale sobre
+        # `pending`: quem o pôs lá já contou a falha daquela tentativa.
+        if (
+            insight.status is not InsightStatus.DISPATCHED
+            or insight.attempts != callback.attempt
+        ):
+            logger.info(
+                "Falha da tentativa %s do insight %s ignorada: ele está %s, na "
+                "tentativa %s",
+                callback.attempt,
+                insight.id,
+                insight.status.value,
+                insight.attempts,
+            )
+            return
+
+        error = f"N8N devolveu falha: {callback.error}"
+        if callback.retryable:
+            self._retry_or_fail(insight, error, max_attempts, now)
+        else:
+            # Recusa do modelo: tentar de novo não muda o resultado.
+            self._fail(insight, error)
+
+    async def get_status(
+        self, form_response_id: uuid.UUID, *, user: "AuthenticatedUser"
+    ) -> InsightStatusRead:
+        """O estado do insight de uma resposta, para quem pode lê-lo: 404 antes de 403.
+
+        Resposta que existe mas não tem insight (ainda em andamento, ou enviada antes
+        de a esteira existir) também é 404: não há o que mostrar.
+        """
+        owner = await self.repository.get_response_owner(form_response_id)
+        if owner is None:
+            raise NotFoundError(
+                f"Resposta de formulário {form_response_id} não encontrada"
+            )
+        if not _can_read_insight(owner, user):
+            raise ForbiddenError("Sem acesso ao insight de outro respondente")
+
+        insight = await self.repository.get_by_form_response(form_response_id)
+        if insight is None:
+            raise NotFoundError(f"A resposta {form_response_id} não tem insight")
+        return InsightStatusRead.de_model(insight)
 
     def _retry_or_fail(
         self, insight: Insight, error: str, max_attempts: int, now: datetime
