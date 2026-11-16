@@ -76,7 +76,9 @@ def autenticar_como(
 # ---------------------------------------------------------------------------
 
 
-def _user_dashboard(period: uuid.UUID) -> UserDashboardRead:
+def _user_dashboard(
+    period: uuid.UUID, *, creed_summary: CreedSummaryRead | None = None
+) -> UserDashboardRead:
     return UserDashboardRead(
         organization_name="Empresa Exemplo",
         periods=[
@@ -93,12 +95,15 @@ def _user_dashboard(period: uuid.UUID) -> UserDashboardRead:
             periods=[period], departments=[], default_period=None
         ),
         comparisons=[],
-        creed_summary=CreedSummaryRead(
+        creed_summary=creed_summary
+        or CreedSummaryRead(
             analiseTexto=[],
             recomendacaoTexto=[],
             prismas={},
             destaque=Prisma.SEGURANCA_PSICOLOGICA,
             oportunidade=Prisma.NEUROINOVACAO_PRISMA,
+            insight_status="none",
+            generated_at=None,
         ),
     )
 
@@ -126,7 +131,38 @@ def test_me_devolve_o_resultado_com_os_nomes_do_contrato(
     # Os nomes em português do contrato do front (decisão D5).
     assert data["creed_summary"]["analiseTexto"] == []
     assert data["creed_summary"]["destaque"] == "seguranca_psicologica"
+    assert data["creed_summary"]["insight_status"] == "none"
+    assert data["creed_summary"]["generated_at"] is None
     assert service.get_user_dashboard.await_args.kwargs["period"] == period
+
+
+def test_me_devolve_o_texto_do_insight_pronto_com_a_data(
+    app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    autenticar_como(app, monkeypatch, "respondente")
+    service = AsyncMock()
+    service.get_user_dashboard.return_value = _user_dashboard(
+        uuid.uuid4(),
+        creed_summary=CreedSummaryRead(
+            analiseTexto=["Um parágrafo."],
+            recomendacaoTexto=["Uma recomendação."],
+            prismas={Prisma.SEGURANCA_PSICOLOGICA: "Um texto curto."},
+            destaque=Prisma.SEGURANCA_PSICOLOGICA,
+            oportunidade=Prisma.NEUROINOVACAO_PRISMA,
+            insight_status="done",
+            generated_at=datetime(2026, 10, 8, 13, 30, tzinfo=UTC),
+        ),
+    )
+    app.dependency_overrides[get_dashboard_service] = lambda: service
+
+    resp = client.get("/dashboards/me", headers=TOKEN)
+
+    summary = resp.json()["creed_summary"]
+    assert summary["insight_status"] == "done"
+    assert summary["generated_at"] == "2026-10-08T13:30:00Z"
+    assert summary["analiseTexto"] == ["Um parágrafo."]
+    assert summary["recomendacaoTexto"] == ["Uma recomendação."]
+    assert summary["prismas"] == {"seguranca_psicologica": "Um texto curto."}
 
 
 def test_me_sem_period_pede_o_mais_recente(

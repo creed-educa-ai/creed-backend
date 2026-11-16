@@ -359,6 +359,18 @@ def test_success_error_and_bearer_authentication_responses_are_documented() -> N
     assert conflict_response["content"]["application/json"]["example"]
 
 
+def test_creed_summary_documents_the_insight_status_and_date() -> None:
+    summary = app.openapi()["components"]["schemas"]["CreedSummaryRead"]
+    properties = summary["properties"]
+
+    # Quatro estados, e `none` é o de quem não tem texto (CREED-8010).
+    assert properties["insight_status"]["enum"] == ["pending", "done", "failed", "none"]
+    for name in ("insight_status", "generated_at"):
+        assert properties[name]["description"]
+        assert properties[name]["examples"]
+    assert {"insight_status", "generated_at"} <= set(summary["required"])
+
+
 def test_insight_routes_are_documented_with_their_own_protection() -> None:
     schema = app.openapi()
 

@@ -99,7 +99,8 @@ class PrismaComparisonRead(BaseModel):
 
 
 class CreedSummaryRead(BaseModel):
-    """O resumo do Creed.ai. Os textos vêm vazios até a esteira de IA existir."""
+    """O resumo do Creed.ai. Os textos são os do insight, e só vêm quando
+    `insight_status` é `done`; nos outros estados vêm vazios."""
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -110,6 +111,19 @@ class CreedSummaryRead(BaseModel):
     prismas: dict[Prisma, str] = Field(description="Um texto curto por prisma.")
     destaque: Prisma = Field(description="O prisma de maior nota.")
     oportunidade: Prisma = Field(description="O prisma de menor nota.")
+    insight_status: Literal["pending", "done", "failed", "none"] = Field(
+        description=(
+            "Em que ponto está o texto do Creed.ai: `done` quando está pronto, "
+            "`pending` enquanto está em preparo, `failed` quando as tentativas se "
+            "esgotaram e `none` quando não há texto para esta tela (resposta de "
+            "antes da esteira, ou um recorte que não tem insight)."
+        ),
+        examples=["done"],
+    )
+    generated_at: datetime | None = Field(
+        description="Quando o texto ficou pronto. Nulo fora do estado `done`.",
+        examples=["2026-10-08T13:30:00Z"],
+    )
 
 
 class DashboardResultRead(BaseModel):
@@ -161,11 +175,15 @@ class UserDashboardRead(DashboardResultRead):
                     },
                     "comparisons": [],
                     "creed_summary": {
-                        "analiseTexto": [],
-                        "recomendacaoTexto": [],
-                        "prismas": {},
+                        "analiseTexto": ["Seu time mostra confiança para opinar."],
+                        "recomendacaoTexto": ["Abra espaço para discordar."],
+                        "prismas": {
+                            "seguranca_psicologica": "Há abertura para errar e dizer.",
+                        },
                         "destaque": "adaptabilidade_cognitiva",
                         "oportunidade": "lideranca_adaptativa",
+                        "insight_status": "done",
+                        "generated_at": "2026-10-08T13:30:00Z",
                     },
                 }
             ]

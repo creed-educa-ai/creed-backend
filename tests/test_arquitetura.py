@@ -29,8 +29,8 @@ NOMES = [caminho.name for caminho in DOMINIOS]
 #     "dashboards": "agrega respondentes e prismas; ver docstring do repository"
 LEITURA_ENTRE_DOMINIOS: dict[str, str] = {
     "dashboards": (
-        "agrega form_responses, answers, organizations e links; ver docstring do"
-        " repository"
+        "agrega form_responses, answers, organizations e links, e le o texto do "
+        "Creed.ai em insights (CREED-8010); ver docstring do repository"
     ),
     "insights": (
         "le form_responses e form por join para saber a organizacao e o periodo de "
