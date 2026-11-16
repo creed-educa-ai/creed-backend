@@ -448,8 +448,9 @@ class InsightService:
 
         O N8N pode reenviar, e um `failed` pode chegar depois de um `done`. Quem
         terminou antes não muda: o primeiro `done` vence, e um `failed` não desfaz
-        nada. O insight fica travado até o fim da transação, para dois callbacks ao
-        mesmo tempo não passarem juntos pela conferência do estado.
+        nada. Um `failed` só vale para a tentativa em voo, como no `dispatch`. O
+        insight fica travado até o fim da transação, para dois callbacks ao mesmo
+        tempo não passarem juntos pela conferência do estado.
 
         `max_attempts` vem de quem chama, como os limites do worker (`DispatchLimits`).
         """
@@ -475,7 +476,22 @@ class InsightService:
             insight.completed_at = now
             return
 
-        if insight.status is InsightStatus.FAILED:
+        # A falha de uma tentativa que já terminou não vale. Se a varredura soltou a
+        # tentativa 1 e o worker mandou a 2, um `failed` atrasado da 1 devolveria à
+        # fila, ou encerraria, um pedido com a 2 ainda em voo. Também não vale sobre
+        # `pending`: quem o pôs lá já contou a falha daquela tentativa.
+        if (
+            insight.status is not InsightStatus.DISPATCHED
+            or insight.attempts != callback.attempt
+        ):
+            logger.info(
+                "Falha da tentativa %s do insight %s ignorada: ele está %s, na "
+                "tentativa %s",
+                callback.attempt,
+                insight.id,
+                insight.status.value,
+                insight.attempts,
+            )
             return
 
         error = f"N8N devolveu falha: {callback.error}"

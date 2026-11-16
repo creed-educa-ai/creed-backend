@@ -127,6 +127,7 @@ class InsightCallbackDone(BaseModel):
 
     contract_version: Literal["insight-v1"]
     insight_id: uuid.UUID = Field(description="O mesmo id que foi no pedido.")
+    attempt: int = Field(ge=1, description="A mesma tentativa que foi no pedido.")
     status: Literal["done"]
     content: InsightContent
     model_id: str = Field(
@@ -146,6 +147,13 @@ class InsightCallbackFailed(BaseModel):
 
     contract_version: Literal["insight-v1"]
     insight_id: uuid.UUID = Field(description="O mesmo id que foi no pedido.")
+    attempt: int = Field(
+        ge=1,
+        description=(
+            "A mesma tentativa que foi no pedido. O back só aplica a falha à "
+            "tentativa que ainda espera a volta."
+        ),
+    )
     status: Literal["failed"]
     error: str = Field(
         min_length=1,
