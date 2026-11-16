@@ -11,6 +11,7 @@ from fastapi import Depends
 from app.core.database import SessionDep
 from app.domains.insights.repository import InsightRepository
 from app.domains.insights.service import InsightService
+from app.domains.prismas.dependencies import ServiceDep as PrismaServiceDep
 
 
 def get_repository(
@@ -21,8 +22,9 @@ def get_repository(
 
 def get_service(
     repository: Annotated[InsightRepository, Depends(get_repository)],
+    prismas: PrismaServiceDep,
 ) -> InsightService:
-    return InsightService(repository)
+    return InsightService(repository, prismas)
 
 
 ServiceDep = Annotated[InsightService, Depends(get_service)]

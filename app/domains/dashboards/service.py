@@ -34,6 +34,7 @@ from app.domains.dashboards.schemas import (
     TeamAlignmentRead,
     UserDashboardRead,
 )
+from app.domains.prismas.service import highest_and_lowest
 from app.shared.enums import DepartmentType, Dimension, LinkType, Prisma
 from app.shared.exceptions import ForbiddenError, NotFoundError, ValidationError
 
@@ -107,19 +108,11 @@ def _variation(
     return {p: shown[p] - reference[p] for p in Prisma}
 
 
-def _highest_and_lowest(prismas: dict[Prisma, float]) -> tuple[Prisma, Prisma]:
-    """Destaque e oportunidade. Empate: a ordem de `Prisma` desempata (decisão 7)."""
-    ordem = list(Prisma)
-    destaque = max(ordem, key=lambda p: (prismas[p], -ordem.index(p)))
-    oportunidade = min(ordem, key=lambda p: (prismas[p], ordem.index(p)))
-    return destaque, oportunidade
-
-
 def _most_common(people: list[PersonScores], group: GroupScores) -> Prisma:
     """🟡 O prisma que mais vezes é o maior de cada pessoa (a moda). Empate: a maior
     média do grupo, e depois a ordem de `Prisma`."""
     ordem = list(Prisma)
-    maiores = Counter(_highest_and_lowest(person.prismas)[0] for person in people)
+    maiores = Counter(highest_and_lowest(person.prismas)[0] for person in people)
     return max(
         ordem,
         key=lambda p: (maiores[p], group.prismas[p], -ordem.index(p)),
@@ -156,7 +149,7 @@ def _alignment(people: list[PersonScores]) -> TeamAlignmentRead:
 
 def _creed_summary(group: GroupScores) -> CreedSummaryRead:
     """Textos vazios até a esteira de IA existir (D3); só as marcas dos cards."""
-    destaque, oportunidade = _highest_and_lowest(group.prismas)
+    destaque, oportunidade = highest_and_lowest(group.prismas)
     return CreedSummaryRead(
         analiseTexto=[],
         recomendacaoTexto=[],
@@ -447,7 +440,7 @@ class DashboardService:
             if (member_id is None or link.link_id == member_id)
             and (department is None or link.department == department)
         ]
-        destaque, oportunidade = _highest_and_lowest(current.prismas)
+        destaque, oportunidade = highest_and_lowest(current.prismas)
         mais_comum = _most_common(view_people, current)
         rounded = _rounded(current.prismas)
 
@@ -596,7 +589,7 @@ class DashboardService:
             )
 
         used = [forms[p.form_id] for p in snapshot]
-        destaque, oportunidade = _highest_and_lowest(overall.prismas)
+        destaque, oportunidade = highest_and_lowest(overall.prismas)
         mais_comum = _most_common(snapshot, overall)
         rounded = _rounded(overall.prismas)
         everyone = set().union(*invited.values()) if invited else set()

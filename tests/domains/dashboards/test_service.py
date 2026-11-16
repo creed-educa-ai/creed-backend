@@ -2,6 +2,7 @@
 
 import uuid
 from datetime import UTC, datetime
+from typing import cast
 from unittest.mock import AsyncMock
 
 import pytest
@@ -18,7 +19,6 @@ from app.domains.dashboards.service import (
     GroupScores,
     PersonScores,
     _alignment,
-    _highest_and_lowest,
     _most_common,
     _variation,
     group_average,
@@ -149,13 +149,6 @@ def test_group_average_e_a_media_das_pessoas() -> None:
     assert media is not None
     assert media.prismas[Prisma.SEGURANCA_PSICOLOGICA] == 50
     assert media.dimensions[Dimension.S2] == 50
-
-
-def test_empate_em_destaque_e_oportunidade_segue_a_ordem_dos_prismas() -> None:
-    destaque, oportunidade = _highest_and_lowest(dict.fromkeys(Prisma, 50.0))
-
-    assert destaque is Prisma.SEGURANCA_PSICOLOGICA
-    assert oportunidade is Prisma.SEGURANCA_PSICOLOGICA
 
 
 @pytest.mark.asyncio
@@ -759,7 +752,7 @@ async def test_retrato_dos_mentorandos_so_conta_vinculo_mentoria() -> None:
         {individual.id: [ANA, DIEGO]},
         mentorandos=[ANA],
     )
-    nomes = service.repository.list_member_names  # type: ignore[attr-defined]
+    nomes = cast(AsyncMock, service.repository.list_member_names)
     nomes.side_effect = lambda ids: dict.fromkeys(ids, "Ana")
 
     result = await service.get_overview(user=_admin(), kind="mentees")

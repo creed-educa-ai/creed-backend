@@ -33,6 +33,18 @@ ADMIN_ROLE = "admin"
 GESTOR_ROLE = "gestor"
 
 
+def highest_and_lowest(prismas: dict[Prisma, float]) -> tuple[Prisma, Prisma]:
+    """Destaque e oportunidade. Empate: a ordem de `Prisma` desempata (decisão 7).
+
+    Uma fonte só para o dashboard e para o pedido de insight (CREED-803): o texto da
+    IA fala do mesmo destaque que a tela mostra.
+    """
+    ordem = list(Prisma)
+    destaque = max(ordem, key=lambda p: (prismas[p], -ordem.index(p)))
+    oportunidade = min(ordem, key=lambda p: (prismas[p], ordem.index(p)))
+    return destaque, oportunidade
+
+
 class PrismaService:
     def __init__(self, repository: "PrismaRepository") -> None:
         self.repository = repository
@@ -81,6 +93,39 @@ class PrismaService:
             vinculo_id=form_response.vinculo_id,
             answers=answers,
         )
+
+    async def calculate_for_dispatch(
+        self, form_response_id: uuid.UUID
+    ) -> tuple[dict[Prisma, float], dict[Dimension, float]]:
+        """Os 5 prismas e as 7 dimensões de uma resposta enviada, de 0 a 100.
+
+        É o cálculo do pedido de insight (CREED-803), e por isso não confere quem
+        pede: quem chama é o worker da esteira, não um usuário logado, e a resposta
+        já passou pela guarda de acesso quando foi enviada. Nunca exponha este
+        método numa rota.
+
+        Sai pelo mesmo caminho do dashboard (`scores_from_dimension_averages`) e, como
+        lá, sem arredondar: quem arredonda é quem mostra.
+        """
+        form_response = await self.repository.get_form_response(form_response_id)
+        if form_response is None:
+            raise NotFoundError(
+                f"Resposta de formulário {form_response_id} não encontrada"
+            )
+
+        status_val = getattr(form_response.status, "value", form_response.status)
+        if status_val != "submitted":
+            raise ValidationError(
+                "O formulário precisa estar finalizado para calcular os prismas"
+            )
+
+        answers = await self.repository.get_answers_with_dimensions(form_response_id)
+        if not answers:
+            raise ValidationError(
+                "Nenhuma resposta objetiva válida encontrada para calcular os prismas"
+            )
+
+        return self.scores_from_dimension_averages(dimension_averages(answers))
 
     def compute_prisms_data(
         self,

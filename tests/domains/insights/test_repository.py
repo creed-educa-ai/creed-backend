@@ -16,10 +16,12 @@ from sqlalchemy.exc import IntegrityError
 
 from app.domains.insights.models import Insight, InsightPrisma
 from app.domains.insights.repository import (
+    DescriptiveAnswer,
     FormScope,
     InsightPrismaRepository,
     InsightRepository,
 )
+from app.domains.questions.models import QuestionSection
 from app.shared.enums import Prisma
 
 
@@ -32,10 +34,12 @@ class _SessaoFalsa:
         lista: list[InsightPrisma] | None = None,
         erro_no_flush: Exception | None = None,
         linha: object | None = None,
+        linhas: list[object] | None = None,
     ) -> None:
         self.resultado = resultado
         self.lista = lista or []
         self.linha = linha
+        self.linhas = linhas or []
         self.add = MagicMock()
         self.flush = AsyncMock(side_effect=erro_no_flush)
         self.refresh = AsyncMock()
@@ -46,6 +50,7 @@ class _SessaoFalsa:
         resultado.scalar_one_or_none.return_value = self.resultado
         resultado.scalars.return_value.all.return_value = self.lista
         resultado.one_or_none.return_value = self.linha
+        resultado.all.return_value = self.linhas
         return resultado
 
 
@@ -258,3 +263,35 @@ async def test_outra_violacao_ao_criar_o_pedido_sobe() -> None:
 
     with pytest.raises(IntegrityError):
         await repository.create(_um_pedido())
+
+
+# --- Respostas descritivas do pedido de insight (CREED-803) ---------------------
+# O JOIN e o filtro por tipo só se provam com banco: test_insights_postgres.py.
+
+
+async def test_descritivas_viram_secao_em_texto_pergunta_e_resposta() -> None:
+    sessao = _SessaoFalsa(
+        linhas=[
+            SimpleNamespace(
+                section=QuestionSection.S9, text="Outras sugestões.", value="Mais trocas."
+            ),
+            SimpleNamespace(section=QuestionSection.S9, text="Em branco", value=None),
+        ]
+    )
+    repository = InsightRepository(sessao)  # type: ignore[arg-type]
+
+    respostas = await repository.list_descriptive_answers(uuid.uuid4())
+
+    # A resposta nula vem junto: quem decide o que conta como respondida é o service.
+    assert respostas == [
+        DescriptiveAnswer(
+            section="S9", question="Outras sugestões.", answer="Mais trocas."
+        ),
+        DescriptiveAnswer(section="S9", question="Em branco", answer=None),
+    ]
+
+
+async def test_resposta_sem_descritiva_devolve_lista_vazia() -> None:
+    repository = InsightRepository(_SessaoFalsa())  # type: ignore[arg-type]
+
+    assert await repository.list_descriptive_answers(uuid.uuid4()) == []
