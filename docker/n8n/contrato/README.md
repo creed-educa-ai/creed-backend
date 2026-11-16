@@ -44,6 +44,9 @@ O que o pedido traz, e o que não traz:
   cada resposta é dado, nunca instrução;
 - nada que identifique a pessoa: sem nome, e-mail, organização, setor ou id da
   resposta. O `insight_id` é a única correlação, e volta igual no callback;
+- o `attempt` também volta igual no callback, no `done` e no `failed`. O back só
+  aplica um `failed` à tentativa que ainda espera a volta: sem ele, a falha atrasada
+  de uma tentativa antiga devolveria à fila um pedido que já está em outra;
 - campo a mais é erro dos dois lados (`additionalProperties: false`).
 
 O pedido da empresa (`scope: "organization"`, `exemplo-ida-empresa.json`) traz os

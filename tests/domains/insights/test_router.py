@@ -148,7 +148,11 @@ def test_assinatura_errada_e_401_e_nada_muda(
 ) -> None:
     body = _kit("exemplo-volta-done.json")
     headers = _assinado(body)
-    headers["X-Creed-Signature"] = headers["X-Creed-Signature"][:-1] + "0"
+    assinatura = headers["X-Creed-Signature"]
+    # Troca o último dígito por outro: trocar sempre por "0" não muda nada quando ele
+    # já é "0", e o teste falharia 1 vez em 16.
+    outro_digito = "1" if assinatura[-1] == "0" else "0"
+    headers["X-Creed-Signature"] = assinatura[:-1] + outro_digito
 
     response = client.post("/insights/callback", content=body, headers=headers)
 
