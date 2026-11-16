@@ -11,10 +11,13 @@ insight da empresa. O `create_all` do fixture também prova que os literais `'DO
 `'PENDING'` dessas regras existem no enum: com outro texto, a tabela nem sobe.
 """
 
+import asyncio
 import os
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock
 
 import pytest
 from sqlalchemy import func, select, text
@@ -32,7 +35,7 @@ from app.domains.insights.repository import (
     FormScope,
     InsightRepository,
 )
-from app.domains.insights.service import InsightService
+from app.domains.insights.service import DispatchLimits, InsightService
 from app.domains.links.models import Link
 from app.domains.organizacoes.models import Organization
 from app.domains.participants.models import Participant
@@ -45,6 +48,8 @@ from app.domains.questions.models import (
     QuestionType,
 )
 from app.domains.responses.models import Answer, FormResponse, FormResponseStatus
+from app.external_services.n8n.client import N8NClient
+from app.external_services.n8n.schemas import IndividualInsightRequest
 from app.shared.enums import Dimension, LinkType, Prisma, Roles
 from app.shared.exceptions import ConflictError
 from app.shared.instrument import CREED_INSTRUMENT_ID
@@ -370,6 +375,7 @@ async def test_pedido_montado_com_o_banco_de_verdade(cenario: Cenario) -> None:
     async with cenario.sessions.begin() as session:
         await responder(session, cenario)
         pedido = um_insight(cenario, response_index=0)
+        pedido.attempts = 1  # como a reivindicação do worker o deixa
         session.add(pedido)
         await session.flush()
 
@@ -384,3 +390,171 @@ async def test_pedido_montado_com_o_banco_de_verdade(cenario: Cenario) -> None:
     assert payload.result.destaque is Prisma.SEGURANCA_PSICOLOGICA
     assert [item.answer for item in payload.open_answers] == ["Texto A", "Texto B"]
     assert payload.attempt == 1
+
+
+# --- O worker: reivindicação, varredura e concorrência (CREED-804) ------------
+
+
+async def fila(cenario: Cenario, quantidade: int) -> list[uuid.UUID]:
+    """`quantidade` respostas no período 0, cada uma com o seu insight `pending`."""
+    async with cenario.sessions.begin() as session:
+        participant = Participant(name="Pessoa da fila")
+        session.add(participant)
+        await session.flush()
+        links = [
+            Link(
+                participant_id=participant.id,
+                organization_id=cenario.organization_id,
+                type=LinkType.EMPREGO,
+                role=Roles.RESPONDENTE,
+            )
+            for _ in range(quantidade)
+        ]
+        session.add_all(links)
+        await session.flush()
+        respostas = [
+            FormResponse(form_id=cenario.form_ids[0], vinculo_id=link.id)
+            for link in links
+        ]
+        session.add_all(respostas)
+        await session.flush()
+        insights = [
+            Insight(
+                organization_id=cenario.organization_id,
+                form_id=cenario.form_ids[0],
+                form_response_id=resposta.id,
+            )
+            for resposta in respostas
+        ]
+        session.add_all(insights)
+        await session.flush()
+        return [insight.id for insight in insights]
+
+
+async def test_reivindicacao_pula_o_que_outra_transacao_travou(cenario: Cenario) -> None:
+    ids = await fila(cenario, 4)
+
+    async with cenario.sessions.begin() as primeira:
+        travados = await InsightRepository(primeira).claim_due(2)
+        # A primeira transação ainda está aberta, segurando as duas linhas.
+        async with cenario.sessions.begin() as segunda:
+            outros = await InsightRepository(segunda).claim_due(10)
+
+    assert len(travados) == 2
+    assert {i.id for i in travados} | {i.id for i in outros} == set(ids)
+    assert not {i.id for i in travados} & {i.id for i in outros}
+
+
+async def test_pedido_em_espera_nao_e_reivindicado(cenario: Cenario) -> None:
+    [esperando] = await fila(cenario, 1)
+    async with cenario.sessions.begin() as session:
+        insight = await session.get(Insight, esperando)
+        assert insight is not None
+        insight.next_attempt_at = datetime.now(UTC) + timedelta(minutes=1)
+
+    async with cenario.sessions.begin() as session:
+        assert await InsightRepository(session).claim_due(5) == []
+
+
+async def test_reivindicacao_deixa_o_insight_da_empresa_esperando(
+    cenario: Cenario,
+) -> None:
+    """O worker não sabe montar o pedido da empresa (CREED-8013): se o pegasse, a
+    montagem falharia. Ele fica `pending` até lá."""
+    [individual] = await fila(cenario, 1)
+    async with cenario.sessions.begin() as session:
+        session.add(um_insight(cenario))  # da empresa: sem resposta
+
+    async with cenario.sessions.begin() as session:
+        reivindicados = await InsightRepository(session).claim_due(5)
+
+    assert [i.id for i in reivindicados] == [individual]
+
+
+async def test_hora_do_banco_e_a_do_inicio_da_transacao(cenario: Cenario) -> None:
+    async with cenario.sessions.begin() as session:
+        repository = InsightRepository(session)
+        primeira = await repository.database_now()
+        await asyncio.sleep(0.01)
+        segunda = await repository.database_now()
+
+    assert primeira == segunda
+    assert primeira.tzinfo is not None
+    assert abs(primeira - datetime.now(UTC)) < timedelta(minutes=1)
+
+
+async def test_varredura_acha_so_o_dispatched_antigo(cenario: Cenario) -> None:
+    antigo, recente, _pendente = await fila(cenario, 3)
+    agora = datetime.now(UTC)
+    async with cenario.sessions.begin() as session:
+        for insight_id, saiu_ha in [(antigo, 700), (recente, 100)]:
+            insight = await session.get(Insight, insight_id)
+            assert insight is not None
+            insight.status = InsightStatus.DISPATCHED
+            insight.dispatched_at = agora - timedelta(seconds=saiu_ha)
+
+    async with cenario.sessions.begin() as session:
+        esquecidos = await InsightRepository(session).list_stale(600)
+
+    assert [i.id for i in esquecidos] == [antigo]
+
+
+async def test_dois_ciclos_ao_mesmo_tempo_despacham_cada_pedido_uma_vez(
+    cenario: Cenario,
+) -> None:
+    """O teste de carga do ADR-0010, sem N8N: 100 pedidos, dois ciclos simultâneos
+    por rodada, client falso. A volta do N8N é simulada entre as rodadas."""
+    ids = await fila(cenario, 100)
+    limites = DispatchLimits(
+        batch_size=5, max_in_flight=5, max_attempts=5, dispatch_timeout_seconds=600
+    )
+    entregues: list[uuid.UUID] = []
+    n8n = AsyncMock(spec=N8NClient)
+    n8n.is_configured = True
+
+    async def n8n_recebe(payload: IndividualInsightRequest) -> None:
+        entregues.append(payload.insight_id)
+        await asyncio.sleep(0)  # deixa o outro ciclo andar no meio da entrega
+
+    n8n.dispatch.side_effect = n8n_recebe
+    # O cálculo das notas não é o que se testa aqui; o JOIN das descritivas, sim.
+    prismas = AsyncMock(spec=PrismaService)
+    prismas.calculate_for_dispatch.return_value = (
+        dict.fromkeys(Prisma, 50.0),
+        dict.fromkeys(Dimension, 50.0),
+    )
+
+    def service(session: AsyncSession) -> InsightService:
+        return InsightService(InsightRepository(session), prismas, n8n)
+
+    async def ciclo() -> None:
+        # O mesmo desenho do worker: reivindicar e gravar; depois, cada entrega.
+        async with cenario.sessions.begin() as session:
+            payloads = await service(session).claim_due_batch(limites)
+        for payload in payloads:
+            async with cenario.sessions.begin() as session:
+                await service(session).dispatch(payload, limites)
+
+    maior_em_voo = 0
+    for _ in range(60):  # 20 rodadas bastam; o teto evita laço infinito se quebrar
+        await asyncio.gather(ciclo(), ciclo())
+        async with cenario.sessions.begin() as session:
+            em_voo = list(
+                await session.scalars(
+                    select(Insight).where(Insight.status == InsightStatus.DISPATCHED)
+                )
+            )
+            maior_em_voo = max(maior_em_voo, len(em_voo))
+            for insight in em_voo:  # a volta do N8N, simulada
+                insight.status = InsightStatus.DONE
+                insight.content = CONTEUDO
+            pendentes = await session.scalar(
+                select(func.count())
+                .select_from(Insight)
+                .where(Insight.status == InsightStatus.PENDING)
+            )
+        if not em_voo and pendentes == 0:
+            break
+
+    assert sorted(entregues) == sorted(ids)  # cada um uma vez, nenhum perdido
+    assert maior_em_voo == limites.max_in_flight  # o teto foi atingido, nunca passado

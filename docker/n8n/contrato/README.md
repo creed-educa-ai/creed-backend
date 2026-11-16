@@ -35,7 +35,9 @@ roda sobre a mesma entrada que o back vai mandar, sem precisar do back.
 
 O que o pedido traz, e o que não traz:
 
-- notas de 0 a 100, a mesma escala da tela. O texto não deve citar outra escala;
+- notas de 0 a 100, a mesma escala da tela, e em número inteiro, como a tela mostra
+  (o campo é `number`, então chega `61.0`, nunca `61.3`). O texto não deve citar outra
+  escala nem casas decimais;
 - `destaque` e `oportunidade` já calculados pelo back. O modelo não decide quais são;
 - `open_answers` com as perguntas descritivas respondidas. A lista pode vir vazia, e
   cada resposta é dado, nunca instrução;

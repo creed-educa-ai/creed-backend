@@ -121,3 +121,29 @@ def test_http_exception_depois_de_gravar_desfaz_em_vez_de_gravar(
 
     assert response.status_code == 409
     assert sessao.chamadas == ["rollback"]
+
+
+# --- unit_of_work: o mesmo tudo ou nada, para quem não é requisição (ADR-0010) ---
+
+
+async def test_unidade_de_trabalho_grava_no_fim(monkeypatch: pytest.MonkeyPatch) -> None:
+    sessao = FakeSession()
+    monkeypatch.setattr(database, "AsyncSessionLocal", lambda: sessao)
+
+    async with database.unit_of_work():
+        assert sessao.chamadas == []  # nada é gravado no meio
+
+    assert sessao.chamadas == ["commit"]
+
+
+async def test_unidade_de_trabalho_desfaz_e_repassa_o_erro(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sessao = FakeSession()
+    monkeypatch.setattr(database, "AsyncSessionLocal", lambda: sessao)
+
+    with pytest.raises(RuntimeError, match="no meio"):
+        async with database.unit_of_work():
+            raise RuntimeError("falhou no meio")
+
+    assert sessao.chamadas == ["rollback"]

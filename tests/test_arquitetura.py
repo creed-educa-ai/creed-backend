@@ -252,8 +252,9 @@ def test_commit_so_no_get_db() -> None:
         if arquivo != database and any(".commit()" in linha for linha in _codigo(arquivo))
     ]
     assert not culpados, (
-        f"commit fora do get_db em: {culpados}. "
-        "A unidade de trabalho é a requisição; repository usa flush()."
+        f"commit fora de app/core/database.py em: {culpados}. "
+        "A requisição grava pelo get_db, e o worker abre a unit_of_work; "
+        "repository usa flush()."
     )
 
 

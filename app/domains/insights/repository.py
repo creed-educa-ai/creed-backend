@@ -10,17 +10,22 @@ gravado aqui.
 """
 
 import uuid
+from datetime import datetime, timedelta
 from typing import NamedTuple
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.forms.models import Form
-from app.domains.insights.models import Insight, InsightPrisma
+from app.domains.insights.models import Insight, InsightPrisma, InsightStatus
 from app.domains.questions.models import Question, QuestionType
 from app.domains.responses.models import Answer, FormResponse
 from app.shared.enums import Prisma
+
+# Chave da trava de transação que serializa "contar os em voo e reivindicar" entre
+# workers (`lock_dispatch`). Qualquer número fixo serve, desde que só a esteira o use.
+DISPATCH_LOCK_KEY = 804
 
 
 class FormScope(NamedTuple):
@@ -128,6 +133,81 @@ class InsightRepository:
             )
             for row in result.all()
         ]
+
+    # --- O worker da esteira (CREED-804, ADR-0010 item 3) ------------------------
+
+    async def lock_dispatch(self) -> None:
+        """Trava a reivindicação até o fim da transação.
+
+        Sem ela, dois ciclos ao mesmo tempo contariam os mesmos `dispatched` e
+        passariam juntos do teto. Com ela, o segundo espera o primeiro gravar e conta
+        de novo. A trava se solta sozinha no commit ou no rollback.
+        """
+        await self.db.execute(select(func.pg_advisory_xact_lock(DISPATCH_LOCK_KEY)))
+
+    async def database_now(self) -> datetime:
+        """A hora do banco, a mesma `now()` com que `claim_due` e `list_stale`
+        comparam as datas. No Postgres, é a do início da transação."""
+        result = await self.db.execute(select(func.now()))
+        return result.scalar_one()
+
+    async def count_dispatched(self) -> int:
+        """Quantos pedidos foram ao N8N e ainda esperam a volta."""
+        result = await self.db.execute(
+            select(func.count())
+            .select_from(Insight)
+            .where(Insight.status == InsightStatus.DISPATCHED)
+        )
+        return int(result.scalar_one())
+
+    async def claim_due(self, limit: int) -> list[Insight]:
+        """Os `pending` individuais vencidos, os mais antigos primeiro, travados nesta
+        transação.
+
+        `SKIP LOCKED` pula as linhas que outra transação já travou: dois workers
+        nunca pegam o mesmo pedido. O "vencido" é pelo relógio do banco.
+
+        Só os individuais: o insight da empresa (`form_response_id` nulo) tem pedido
+        próprio, que nasce na CREED-8013. Até lá ele espera `pending`, em vez de ser
+        reivindicado por um worker que não sabe montá-lo.
+        """
+        result = await self.db.execute(
+            select(Insight)
+            .where(
+                Insight.status == InsightStatus.PENDING,
+                Insight.next_attempt_at <= func.now(),
+                Insight.form_response_id.is_not(None),
+            )
+            .order_by(Insight.next_attempt_at)
+            .limit(limit)
+            .with_for_update(skip_locked=True)
+        )
+        return list(result.scalars().all())
+
+    async def list_stale(self, older_than_seconds: int) -> list[Insight]:
+        """Os `dispatched` sem volta há mais de `older_than_seconds`, travados."""
+        limit = func.now() - timedelta(seconds=older_than_seconds)
+        result = await self.db.execute(
+            select(Insight)
+            .where(
+                Insight.status == InsightStatus.DISPATCHED,
+                Insight.dispatched_at < limit,
+            )
+            .with_for_update(skip_locked=True)
+        )
+        return list(result.scalars().all())
+
+    async def flush(self) -> None:
+        """Manda ao banco o que mudou nos insights carregados, sem commitar."""
+        await self.db.flush()
+
+    async def get_for_update(self, insight_id: uuid.UUID) -> Insight | None:
+        """O insight, travado até o fim da transação: a volta do N8N pode chegar
+        enquanto o worker registra a falha do disparo."""
+        result = await self.db.execute(
+            select(Insight).where(Insight.id == insight_id).with_for_update()
+        )
+        return result.scalar_one_or_none()
 
     async def create(self, insight: Insight) -> Insight | None:
         """Grava o pedido.
