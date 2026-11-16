@@ -18,20 +18,40 @@ FAKE_SESSION = SessionResponse(
     access_token="access-fake",  # noqa: S106
     refresh_token="refresh-fake",  # noqa: S106
     expires_in=900,
-    user=UserSessionResponse(id="user-123", email="dev@creed.example.com", role="admin"),
+    user=UserSessionResponse(
+        id="user-123", email="dev@creed.example.com", role="admin", name="Maria Souza"
+    ),
 )
 
 
 class _FakeService:
-    """`unavailable` faz login e renovação falharem como o Keycloak fora do ar."""
+    """`unavailable` faz login e renovação falharem como o Keycloak fora do ar.
+    `session_ok=False` é o vínculo que sumiu entre a guarda e a sessão."""
 
     def __init__(
-        self, login_ok: bool = True, refresh_ok: bool = True, unavailable: bool = False
+        self,
+        login_ok: bool = True,
+        refresh_ok: bool = True,
+        unavailable: bool = False,
+        session_ok: bool = True,
     ) -> None:
         self.login_ok = login_ok
         self.refresh_ok = refresh_ok
         self.unavailable = unavailable
+        self.session_ok = session_ok
         self.password_resets: list[str] = []
+
+    async def get_session(self, user: AuthenticatedUser) -> UserSessionResponse:
+        if not self.session_ok:
+            raise AuthenticationError("Não autenticado")
+        return UserSessionResponse(
+            id=user.sub,
+            email=user.email or "",
+            role=user.roles[0] if user.roles else None,
+            link_id=user.link_id,
+            organization_id=user.organization_id,
+            name="Maria Souza",
+        )
 
     async def login(self, _data: LoginRequest) -> SessionResponse:
         if self.unavailable:
@@ -85,6 +105,7 @@ def test_login_with_valid_credentials_returns_200_in_the_contract_shape(
     assert set(body["user"]) == {
         "id",
         "email",
+        "name",
         "role",
         "link_id",
         "organization_id",
@@ -210,12 +231,21 @@ def test_session_without_authorization_returns_401(client: TestClient) -> None:
     assert response.status_code == 401
 
 
-def test_session_with_authenticated_user_returns_200(
+def _authenticated_user() -> AuthenticatedUser:
+    return AuthenticatedUser(
+        sub="user-123",
+        email="dev@creed.example.com",
+        roles=["admin"],
+        link_id="3f9a2b1c-4d5e-4f6a-8b7c-9d0e1f2a3b4c",
+        organization_id="8f14e45f-ceea-467e-adde-3f81905dbc1c",
+    )
+
+
+def test_session_with_authenticated_user_returns_200_with_the_name(
     app: FastAPI, client: TestClient
 ) -> None:
-    app.dependency_overrides[current_user] = lambda: AuthenticatedUser(
-        sub="user-123", email="dev@creed.example.com", roles=["admin"]
-    )
+    app.dependency_overrides[current_user] = _authenticated_user
+    _use_fake_service(app, _FakeService())
 
     response = client.get(
         "/authentication/session", headers={"Authorization": "Bearer valid"}
@@ -225,18 +255,14 @@ def test_session_with_authenticated_user_returns_200(
     body = response.json()
     assert body["id"] == "user-123"
     assert body["role"] == "admin"
+    assert body["name"] == "Maria Souza"
 
 
 def test_session_returns_link_id_and_organization_id_of_authenticated_user(
     app: FastAPI, client: TestClient
 ) -> None:
-    app.dependency_overrides[current_user] = lambda: AuthenticatedUser(
-        sub="user-123",
-        email="dev@creed.example.com",
-        roles=["admin"],
-        link_id="3f9a2b1c-4d5e-4f6a-8b7c-9d0e1f2a3b4c",
-        organization_id="8f14e45f-ceea-467e-adde-3f81905dbc1c",
-    )
+    app.dependency_overrides[current_user] = _authenticated_user
+    _use_fake_service(app, _FakeService())
 
     response = client.get(
         "/authentication/session", headers={"Authorization": "Bearer valid"}
@@ -246,3 +272,17 @@ def test_session_returns_link_id_and_organization_id_of_authenticated_user(
     body = response.json()
     assert body["link_id"] == "3f9a2b1c-4d5e-4f6a-8b7c-9d0e1f2a3b4c"
     assert body["organization_id"] == "8f14e45f-ceea-467e-adde-3f81905dbc1c"
+
+
+def test_session_without_the_link_person_returns_401(
+    app: FastAPI, client: TestClient
+) -> None:
+    app.dependency_overrides[current_user] = _authenticated_user
+    _use_fake_service(app, _FakeService(session_ok=False))
+
+    response = client.get(
+        "/authentication/session", headers={"Authorization": "Bearer valid"}
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Não autenticado"

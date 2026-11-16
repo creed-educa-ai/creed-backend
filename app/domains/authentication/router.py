@@ -143,7 +143,7 @@ async def password_reset(data: PasswordResetRequest, service: ServiceDep) -> Non
     summary="Consultar a sessão atual",
     description=(
         "Valida o token Bearer, confere o usuário ativo no banco e devolve "
-        "a identidade usada pela aplicação."
+        "a identidade usada pela aplicação, com o nome da pessoa do vínculo."
     ),
     response_description="Dados do usuário autenticado.",
     operation_id="get_current_session",
@@ -155,11 +155,8 @@ async def password_reset(data: PasswordResetRequest, service: ServiceDep) -> Non
         }
     },
 )
-async def session(user: CurrentUserDep) -> UserSessionResponse:
-    return UserSessionResponse(
-        id=user.sub,
-        email=user.email or "",
-        role=user.roles[0] if user.roles else None,
-        link_id=user.link_id,
-        organization_id=user.organization_id,
-    )
+async def session(user: CurrentUserDep, service: ServiceDep) -> UserSessionResponse:
+    try:
+        return await service.get_session(user)
+    except AuthenticationError as exc:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, exc.message) from exc

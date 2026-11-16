@@ -17,6 +17,7 @@ from app.domains.department.models import Department
 from app.domains.links.models import Link
 from app.domains.links.schemas import LinkCreate, LinkResponse
 from app.domains.links.service import LinkService
+from app.domains.participants.models import Participant
 from app.shared.enums import DepartmentType, LinkType, Roles
 from app.shared.exceptions import NotFoundError
 from app.shared.exceptions import ValidationError as DomainValidationError
@@ -314,6 +315,48 @@ class TestGetLink:
         found = await service(repository).get_link_by_id_service(uuid.uuid4())
 
         assert found is None
+
+
+class FakeNamedParticipantService:
+    """Dublê do `ParticipantService` que devolve um participante com nome e anota
+    qual id foi pedido."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.asked: list[uuid.UUID] = []
+
+    async def get_participant(self, participant_id: uuid.UUID) -> Participant:
+        self.asked.append(participant_id)
+        return Participant(id=participant_id, name=self.name)
+
+
+class TestGetPersonName:
+    """O nome que vai junto da sessão: o do participante do vínculo."""
+
+    async def test_returns_the_name_of_the_link_participant(self) -> None:
+        link = make_link()
+        participants = FakeNamedParticipantService("Maria Souza")
+
+        name = await service(
+            FakeLinkRepository([link]),
+            participants,  # type: ignore[arg-type]
+        ).get_person_name(link.id)
+
+        assert name == "Maria Souza"
+        assert participants.asked == [link.participant_id]
+
+    async def test_unknown_link_returns_none_without_asking_the_participant(
+        self,
+    ) -> None:
+        participants = FakeNamedParticipantService("Maria Souza")
+
+        name = await service(
+            FakeLinkRepository(),
+            participants,  # type: ignore[arg-type]
+        ).get_person_name(uuid.uuid4())
+
+        assert name is None
+        assert participants.asked == []
 
 
 class TestListOrganizationLinkIds:
