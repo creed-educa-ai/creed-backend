@@ -51,6 +51,10 @@ class World:
     # resposta -> formulário; as alternativas marcadas (`answer`) saem com ela
     responses: dict[uuid.UUID, uuid.UUID] = field(default_factory=dict)
     insights: dict[uuid.UUID, uuid.UUID] = field(default_factory=dict)  # -> resposta
+    # insight da empresa (sem resposta) -> (organização, formulário)
+    company_insights: dict[uuid.UUID, tuple[uuid.UUID, uuid.UUID]] = field(
+        default_factory=dict
+    )
     dashboards: dict[uuid.UUID, uuid.UUID] = field(default_factory=dict)  # -> resposta
     realm: set[uuid.UUID] = field(default_factory=set)
     keycloak_down: bool = False
@@ -118,6 +122,10 @@ class FakeOrganizationService:
         )
         w.refuse_if(organization.id in w.forms.values(), "organização (formulário)")
         w.refuse_if(organization.id in w.departments.values(), "organização (setor)")
+        w.refuse_if(
+            any(org == organization.id for org, _ in w.company_insights.values()),
+            "organização (insight da empresa)",
+        )
         del w.organizations[organization.id]
         w.log.append("organizations.delete_organization")
 
@@ -151,6 +159,10 @@ class FakeFormService:
         w = self.world
         for form_id in form_ids:
             w.refuse_if(form_id in w.responses.values(), "formulário (resposta)")
+            w.refuse_if(
+                any(form == form_id for _, form in w.company_insights.values()),
+                "formulário (insight da empresa)",
+            )
             del w.forms[form_id]
         w.log.append("forms.delete_organization_forms")
 
@@ -186,6 +198,13 @@ class FakeInsightService:
             if response_id in form_response_ids:
                 del w.insights[insight_id]
         w.log.append("insights.delete_for_form_responses")
+
+    async def delete_for_organization(self, organization_id: uuid.UUID) -> None:
+        w = self.world
+        for insight_id, (org, _) in list(w.company_insights.items()):
+            if org == organization_id:
+                del w.company_insights[insight_id]
+        w.log.append("insights.delete_for_organization")
 
 
 class FakeDashboardService:
@@ -323,14 +342,15 @@ def add_member(
 
 
 def add_answered_form(world: World, organization: Organization) -> uuid.UUID:
-    """Um questionário "para todos" com uma resposta que ainda
-    aponta para ele, com insight e dashboard. Devolve a resposta."""
+    """Um questionário "para todos" com uma resposta que ainda aponta para ele, com
+    insight e dashboard, e um insight da empresa do período. Devolve a resposta."""
     form_id = uuid.uuid4()
     world.forms[form_id] = organization.id
     response_id = uuid.uuid4()
     world.responses[response_id] = form_id
     world.insights[uuid.uuid4()] = response_id
     world.dashboards[uuid.uuid4()] = response_id
+    world.company_insights[uuid.uuid4()] = (organization.id, form_id)
     return response_id
 
 
@@ -359,6 +379,8 @@ class TestRemoveOrganization:
         assert world.forms == {}
         assert world.responses == {}
         assert world.insights == {}
+        # Nenhum insight da organização sobra, nem o da empresa (CREED-8014).
+        assert world.company_insights == {}
         assert world.dashboards == {}
         assert world.realm.isdisjoint(logins)
 
@@ -381,6 +403,7 @@ class TestRemoveOrganization:
             "forms.list_organization_form_ids",
             "responses.list_ids_for_forms",
             "insights.delete_for_form_responses",
+            "insights.delete_for_organization",
             "dashboards.delete_for_member_removal",
             "responses.delete_with_answers",
             "forms.delete_organization_forms",

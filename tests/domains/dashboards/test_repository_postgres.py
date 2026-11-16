@@ -9,6 +9,7 @@ RUN_POSTGRES_TESTS=1 habilita estes testes; usa as variáveis POSTGRES_* normais
 import os
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 
 import pytest
 from sqlalchemy import select, text
@@ -431,3 +432,85 @@ async def test_insight_da_resposta_enviada_do_vinculo_no_periodo(cenario) -> Non
     assert em_preparo == InsightText("pending", None, None)
     assert sem_insight is None
     assert de_outro_periodo is None
+
+
+async def test_ultimo_insight_da_empresa_do_periodo(cenario) -> None:  # type: ignore[no-untyped-def]
+    sessions, ids = cenario
+    conteudo_antigo = {"analise": ["Antigo", "Antigo"], "recomendacao": ["Antiga"]}
+    conteudo_novo = {"analise": ["Novo", "Novo"], "recomendacao": ["Nova"]}
+
+    def da_empresa(form: str, status: InsightStatus, hora: int, **campos: Any) -> Insight:
+        return Insight(
+            organization_id=ids["empresa"],
+            form_id=ids[form],
+            status=status,
+            created_at=datetime(2026, 10, 8, hora, tzinfo=UTC),
+            **campos,
+        )
+
+    async with sessions.begin() as session:
+        resposta_de_setembro = await session.scalar(
+            select(FormResponse.id).where(
+                FormResponse.form_id == ids["setembro"],
+                FormResponse.vinculo_id == ids["marketing"],
+            )
+        )
+        session.add_all(
+            [
+                # Setembro: dois prontos e, por último, um novo esperando.
+                da_empresa(
+                    "setembro",
+                    InsightStatus.DONE,
+                    10,
+                    content=conteudo_antigo,
+                    # O pedido antigo terminou depois do novo: não passa na frente.
+                    completed_at=datetime(2026, 10, 8, 12, 30, tzinfo=UTC),
+                ),
+                da_empresa(
+                    "setembro",
+                    InsightStatus.DONE,
+                    11,
+                    content=conteudo_novo,
+                    completed_at=datetime(2026, 10, 8, 11, 5, tzinfo=UTC),
+                ),
+                da_empresa("setembro", InsightStatus.PENDING, 12),
+                # Outubro: nenhum pronto; o mais recente já foi ao N8N.
+                da_empresa("outubro", InsightStatus.FAILED, 10),
+                da_empresa("outubro", InsightStatus.DISPATCHED, 11),
+                # O individual mais novo de setembro não é o da empresa.
+                Insight(
+                    organization_id=ids["empresa"],
+                    form_id=ids["setembro"],
+                    form_response_id=resposta_de_setembro,
+                    status=InsightStatus.DONE,
+                    content=conteudo_novo,
+                    created_at=datetime(2026, 10, 8, 13, tzinfo=UTC),
+                ),
+            ]
+        )
+
+    async with sessions() as session:
+        repository = DashboardRepository(session)
+        setembro_pronto = await repository.get_latest_company_insight(
+            ids["empresa"], ids["setembro"], only_done=True
+        )
+        setembro_ultimo = await repository.get_latest_company_insight(
+            ids["empresa"], ids["setembro"], only_done=False
+        )
+        outubro_pronto = await repository.get_latest_company_insight(
+            ids["empresa"], ids["outubro"], only_done=True
+        )
+        outubro_ultimo = await repository.get_latest_company_insight(
+            ids["empresa"], ids["outubro"], only_done=False
+        )
+        da_outra = await repository.get_latest_company_insight(
+            ids["outra"], ids["da_outra"], only_done=False
+        )
+
+    assert setembro_pronto == InsightText(
+        "done", conteudo_novo, datetime(2026, 10, 8, 11, 5, tzinfo=UTC)
+    )
+    assert setembro_ultimo == InsightText("pending", None, None)
+    assert outubro_pronto is None
+    assert outubro_ultimo == InsightText("pending", None, None)
+    assert da_outra is None

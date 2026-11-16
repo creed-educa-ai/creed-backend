@@ -357,3 +357,20 @@ class InsightRepository:
         await self.db.execute(
             delete(Insight).where(Insight.form_response_id.in_(form_response_ids))
         )
+
+    async def delete_by_organization(self, organization_id: uuid.UUID) -> None:
+        """Apaga os insights da empresa (sem resposta) da organização e, antes, os
+        prismas associados a eles.
+
+        Os individuais não entram: saem com as respostas (`delete_by_form_responses`).
+        """
+        of_the_company = (
+            Insight.organization_id == organization_id,
+            Insight.form_response_id.is_(None),
+        )
+        await self.db.execute(
+            delete(InsightPrisma).where(
+                InsightPrisma.insight_id.in_(select(Insight.id).where(*of_the_company))
+            )
+        )
+        await self.db.execute(delete(Insight).where(*of_the_company))

@@ -234,6 +234,34 @@ class DashboardRepository:
         status, content, completed_at = row
         return InsightText(_INSIGHT_SHOWN[status], content, completed_at)
 
+    async def get_latest_company_insight(
+        self, organization_id: uuid.UUID, form_id: uuid.UUID, *, only_done: bool
+    ) -> InsightText | None:
+        """O insight da empresa mais recente do período, ou `None` se não há nenhum.
+        Com `only_done`, o mais recente entre os prontos.
+
+        "Mais recente" é o último pedido (`created_at`), que leva mais respostas: um
+        pedido antigo que fica pronto depois não passa na frente de um novo.
+        """
+        conditions = [
+            Insight.organization_id == organization_id,
+            Insight.form_id == form_id,
+            Insight.form_response_id.is_(None),
+        ]
+        if only_done:
+            conditions.append(Insight.status == InsightStatus.DONE)
+        result = await self.db.execute(
+            select(Insight.status, Insight.content, Insight.completed_at)
+            .where(*conditions)
+            .order_by(Insight.created_at.desc())
+            .limit(1)
+        )
+        row = result.first()
+        if row is None:
+            return None
+        status, content, completed_at = row
+        return InsightText(_INSIGHT_SHOWN[status], content, completed_at)
+
     async def list_company_forms(
         self, organization_id: uuid.UUID, now: datetime
     ) -> list[Form]:

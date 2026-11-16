@@ -355,6 +355,11 @@ class InsightService:
         """Apaga os insights das respostas que a exclusão de membro (M-3) remove."""
         await self.repository.delete_by_form_responses(form_response_ids)
 
+    async def delete_for_organization(self, organization_id: uuid.UUID) -> None:
+        """Apaga os insights da empresa que a exclusão de empresa (E-6) remove. Eles
+        apontam para os questionários e para a organização, e saem antes deles."""
+        await self.repository.delete_by_organization(organization_id)
+
     # --- O ciclo do worker (CREED-804, ADR-0010 item 3) ----------------------------
     # Dois passos, cada um na sua unidade de trabalho, que o worker abre: reivindicar
     # (e gravar a reivindicação) e só depois disparar. Assim um pedido nunca sai sem

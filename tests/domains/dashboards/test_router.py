@@ -264,6 +264,30 @@ def test_empresa_repassa_os_filtros_e_devolve_o_contrato(
     assert kwargs["organization_id"] is None
 
 
+def test_empresa_devolve_o_texto_da_empresa_com_a_data(
+    app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    autenticar_como(app, monkeypatch, "gestor")
+    dashboard = _company_dashboard(uuid.uuid4())
+    resumo = dashboard.creed_summary.model_copy(
+        update={
+            "analiseTexto": ["O grupo confia para opinar."],
+            "insight_status": "done",
+            "generated_at": datetime(2026, 10, 8, 13, 30, tzinfo=UTC),
+        }
+    )
+    _servico_da_empresa(
+        app, return_value=dashboard.model_copy(update={"creed_summary": resumo})
+    )
+
+    resp = client.get("/dashboards/company", headers=TOKEN)
+
+    summary = resp.json()["creed_summary"]
+    assert summary["insight_status"] == "done"
+    assert summary["generated_at"] == "2026-10-08T13:30:00Z"
+    assert summary["analiseTexto"] == ["O grupo confia para opinar."]
+
+
 def test_empresa_setor_vai_pelo_valor_do_enum(
     app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:

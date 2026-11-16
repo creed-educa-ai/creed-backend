@@ -1,9 +1,10 @@
 """Testes do serviço do domínio dashboards."""
 
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Literal, cast
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, call
 
 import pytest
 
@@ -437,6 +438,8 @@ def _servico_da_empresa(
     repo.list_member_names.side_effect = lambda ids: {i: f"Pessoa {i}" for i in ids}
     repo.link_in_organization.return_value = True
     repo.get_organization_name.return_value = "Empresa Exemplo"
+    # Sem insight da empresa, a menos que o teste diga o contrário.
+    repo.get_latest_company_insight.return_value = None
     return DashboardService(repo, PrismaService(AsyncMock()))
 
 
@@ -535,19 +538,125 @@ async def test_empresa_inteira_media_so_do_publico_e_resumo() -> None:
 
 
 @pytest.mark.asyncio
-async def test_empresa_segue_sem_texto_do_creed_ate_a_leitura_da_empresa() -> None:
-    """Enquanto a CREED-8014 não chega, a empresa não lê insight: texto vazio e
-    `none`, e nem consulta o insight individual de ninguém."""
-    service, _, _ = _cenario()
+async def test_empresa_inteira_sem_insight_tem_status_none() -> None:
+    """Período abaixo do piso, ou anterior à esteira: nenhum insight da empresa."""
+    service, outubro, _ = _cenario()
+    repo = cast(AsyncMock, service.repository)
 
     summary = (await _empresa(service)).creed_summary
 
     assert summary.insight_status == "none"
     assert summary.generated_at is None
     assert summary.analiseTexto == []
-    assert summary.recomendacaoTexto == []
     assert summary.prismas == {}
-    service.repository.get_response_insight.assert_not_awaited()  # type: ignore[attr-defined]
+    # Procurou um pronto, depois qualquer um, sempre do período exibido.
+    assert repo.get_latest_company_insight.await_args_list == [
+        call(ORG, outubro.id, only_done=True),
+        call(ORG, outubro.id, only_done=False),
+    ]
+    # O insight individual nunca entra no dashboard da empresa (P-086).
+    repo.get_response_insight.assert_not_awaited()
+
+
+def _insights_da_empresa(
+    *, pronto: InsightText | None, mais_recente: InsightText | None
+) -> Callable[..., InsightText | None]:
+    """O `get_latest_company_insight` falso: o último pronto e o último de todos."""
+
+    def latest(
+        organization_id: uuid.UUID, form_id: uuid.UUID, *, only_done: bool
+    ) -> InsightText | None:
+        return pronto if only_done else mais_recente
+
+    return latest
+
+
+@pytest.mark.asyncio
+async def test_empresa_mostra_o_ultimo_pronto_mesmo_com_um_novo_em_preparo() -> None:
+    service, outubro, _ = _cenario()
+    repo = cast(AsyncMock, service.repository)
+    repo.get_latest_company_insight.side_effect = _insights_da_empresa(
+        pronto=InsightText("done", CONTEUDO_DO_INSIGHT, PRONTO_EM),
+        mais_recente=InsightText("pending", None, None),
+    )
+
+    summary = (await _empresa(service)).creed_summary
+
+    assert summary.insight_status == "done"
+    assert summary.generated_at == PRONTO_EM
+    assert summary.analiseTexto == CONTEUDO_DO_INSIGHT["analise"]
+    assert summary.recomendacaoTexto == CONTEUDO_DO_INSIGHT["recomendacao"]
+    assert summary.prismas == {prisma: f"Texto de {prisma.value}." for prisma in Prisma}
+    # Destaque e oportunidade seguem do cálculo da empresa, e não do texto.
+    assert summary.destaque is Prisma.SEGURANCA_PSICOLOGICA
+    repo.get_latest_company_insight.assert_awaited_once_with(
+        ORG, outubro.id, only_done=True
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["pending", "failed"])
+async def test_empresa_sem_nenhum_pronto_mostra_o_estado_do_mais_recente(
+    status: Literal["pending", "failed"],
+) -> None:
+    service, _, _ = _cenario()
+    cast(
+        AsyncMock, service.repository
+    ).get_latest_company_insight.side_effect = _insights_da_empresa(
+        pronto=None, mais_recente=InsightText(status, None, None)
+    )
+
+    summary = (await _empresa(service)).creed_summary
+
+    assert summary.insight_status == status
+    assert summary.generated_at is None
+    assert summary.analiseTexto == []
+    assert summary.prismas == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "recorte",
+    [{"department": DepartmentType.MARKETING}, {"member_id": ANA}],
+    ids=["setor", "pessoa"],
+)
+async def test_empresa_recorte_por_setor_ou_pessoa_nao_tem_texto(
+    recorte: dict[str, object],
+) -> None:
+    service, _, _ = _cenario()
+    repo = cast(AsyncMock, service.repository)
+    repo.get_latest_company_insight.return_value = InsightText(
+        "done", CONTEUDO_DO_INSIGHT, PRONTO_EM
+    )
+
+    summary = (
+        await _empresa(service, user=_admin(), organization_id=ORG, **recorte)
+    ).creed_summary
+
+    # O texto é do grupo inteiro: não descreve um setor nem uma pessoa (P-089).
+    assert summary.insight_status == "none"
+    assert summary.analiseTexto == []
+    repo.get_latest_company_insight.assert_not_awaited()
+    repo.get_response_insight.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_empresa_admin_ve_o_mesmo_insight_que_a_gestora() -> None:
+    service, _, _ = _cenario()
+    repo = cast(AsyncMock, service.repository)
+    repo.get_latest_company_insight.return_value = InsightText(
+        "done", CONTEUDO_DO_INSIGHT, PRONTO_EM
+    )
+
+    da_gestora = (await _empresa(service)).creed_summary
+    da_admin = (await _empresa(service, user=_admin(), organization_id=ORG)).creed_summary
+
+    assert da_admin == da_gestora
+    # As duas leituras são da organização escolhida, e não da CREED da admin.
+    assert [c.args[0] for c in repo.get_latest_company_insight.await_args_list] == [
+        ORG,
+        ORG,
+    ]
 
 
 @pytest.mark.asyncio
