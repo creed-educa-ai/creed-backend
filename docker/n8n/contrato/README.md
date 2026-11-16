@@ -12,9 +12,10 @@ nasce dos modelos Pydantic do back, e os arquivos daqui derivam deles.
 
 | Arquivo | O que é | Quem usa |
 |---|---|---|
-| `ida.schema.json` | JSON Schema do pedido que o back manda ao webhook do N8N. Gerado de `app/external_services/n8n/schemas.py` | o N8N, para validar a entrada |
+| `ida.schema.json` | JSON Schema do pedido que o back manda ao webhook do N8N, `individual` ou `organization` (o `scope` diz qual). Gerado de `app/external_services/n8n/schemas.py` | o N8N, para validar a entrada |
 | `volta.schema.json` | JSON Schema do callback que o N8N manda ao back, `done` ou `failed`. Gerado de `app/domains/insights/schemas.py`. O `InsightContent` dentro dele é o formato do texto que o modelo produz | o N8N, para conferir a saída do modelo antes de mandar |
 | `exemplo-ida-individual.json` | um pedido individual válido, com dados sintéticos | o N8N, como entrada fixa enquanto o workflow é montado |
+| `exemplo-ida-empresa.json` | um pedido da empresa válido, com dados sintéticos (CREED-8013) | o N8N, como entrada fixa do ramo da empresa (CREED-8015) |
 | `exemplo-volta-done.json` | um callback `done` válido | o back, nos testes da rota de volta |
 | `exemplo-volta-failed.json` | um callback `failed` válido | o back, nos testes da rota de volta |
 | `vetor-hmac.json` | um segredo de teste, um timestamp, um corpo e a assinatura que eles dão | os dois lados, para provar que assinam igual |
@@ -47,6 +48,11 @@ O que o pedido traz, e o que não traz:
   aplica um `failed` à tentativa que ainda espera a volta: sem ele, a falha atrasada
   de uma tentativa antiga devolveria à fila um pedido que já está em outra;
 - campo a mais é erro dos dois lados (`additionalProperties: false`).
+
+O pedido da empresa (`scope: "organization"`, `exemplo-ida-empresa.json`) traz os
+números do dashboard da empresa no período, sem recorte: as notas do grupo, a
+participação, o alinhamento de cada prisma e os setores com 5 ou mais respostas. Não
+traz resposta aberta nenhuma nem nome de pessoa ou da organização (P-090).
 
 ### A assinatura da volta
 

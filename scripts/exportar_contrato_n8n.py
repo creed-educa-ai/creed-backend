@@ -18,7 +18,7 @@ from typing import Any
 from pydantic import TypeAdapter
 
 from app.domains.insights.schemas import InsightCallback
-from app.external_services.n8n.schemas import IndividualInsightRequest
+from app.external_services.n8n.schemas import InsightRequest
 
 CONTRACT_DIR = Path(__file__).resolve().parents[1] / "docker" / "n8n" / "contrato"
 
@@ -26,11 +26,12 @@ CONTRACT_DIR = Path(__file__).resolve().parents[1] / "docker" / "n8n" / "contrat
 def contract_schemas() -> dict[str, dict[str, Any]]:
     """Nome de cada arquivo do kit e o JSON Schema que ele deve conter.
 
-    A volta é a união de `done` e `failed`, e união não é classe: por isso o
-    `TypeAdapter`, que dá o mesmo schema que o FastAPI vai usar no callback.
+    A ida é a união dos escopos `individual` e `organization`, e a volta, a de
+    `done` e `failed`. União não é classe: por isso o `TypeAdapter`, que dá o mesmo
+    schema que o FastAPI vai usar no callback.
     """
     return {
-        "ida.schema.json": IndividualInsightRequest.model_json_schema(),
+        "ida.schema.json": TypeAdapter(InsightRequest).json_schema(),
         "volta.schema.json": TypeAdapter(InsightCallback).json_schema(),
     }
 

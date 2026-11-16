@@ -827,3 +827,53 @@ async def test_mentorando_sem_resposta_e_404() -> None:
         await service.get_member_dashboard(
             user=_admin(), member_id=mentorando, period=None
         )
+
+
+# Os números do pedido de insight da empresa (CREED-8013)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_numeros_do_periodo_sao_os_do_dashboard_da_empresa_sem_recorte() -> None:
+    """O texto da IA fala do que a tela mostra: as mesmas notas, o mesmo público
+    (`FORA` não entra), os mesmos setores e o mesmo alinhamento."""
+    service, outubro, _ = _cenario()
+    repo = cast(AsyncMock, service.repository)
+    repo.get_company_form.return_value = outubro
+
+    dashboard = await _empresa(service, period=outubro.id)
+    numeros = await service.company_period_numbers(ORG, outubro.id)
+
+    repo.get_company_form.assert_awaited_once_with(ORG, outubro.id)
+    assert numeros is not None
+    assert numeros.opens_at == outubro.opens_at
+    assert numeros.closes_at == outubro.closes_at
+    assert numeros.scores == dashboard.scores
+    assert numeros.dimensions == dashboard.dimensions
+    assert numeros.submitted == dashboard.company_summary.concluidos == 4
+    assert numeros.invited == dashboard.company_summary.convidados == 5
+    assert numeros.destaque is dashboard.company_summary.destaque.prisma
+    assert numeros.oportunidade is dashboard.company_summary.oportunidade.prisma
+    assert numeros.departments == dashboard.department_matrix
+    assert dashboard.alignment is not None
+    assert numeros.alignment == dashboard.alignment.prismas
+
+
+@pytest.mark.asyncio
+async def test_numeros_de_formulario_que_nao_e_periodo_da_empresa_sao_none() -> None:
+    """Formulário individual, de outra organização ou inexistente."""
+    service, outubro, _ = _cenario()
+    cast(AsyncMock, service.repository).get_company_form.return_value = None
+
+    assert await service.company_period_numbers(ORG, outubro.id) is None
+
+
+@pytest.mark.asyncio
+async def test_numeros_de_periodo_sem_resposta_do_publico_sao_none() -> None:
+    """Só `FORA` respondeu, e ele não é do público do período."""
+    form = _periodo(10)
+    form.organization_id = ORG
+    service = _servico_da_empresa([form], _respostas(form, {FORA: 3}), {form.id: [ANA]})
+    cast(AsyncMock, service.repository).get_company_form.return_value = form
+
+    assert await service.company_period_numbers(ORG, form.id) is None

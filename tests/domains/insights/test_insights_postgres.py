@@ -20,13 +20,15 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
 import pytest
-from sqlalchemy import func, select, text
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app import models  # noqa: F401 — registra todas as FKs
 from app.core.config import settings
 from app.core.database import Base
+from app.domains.dashboards.repository import DashboardRepository
+from app.domains.dashboards.service import DashboardService
 from app.domains.documents.models import Document
 from app.domains.forms.models import Form
 from app.domains.insights.models import Insight, InsightStatus
@@ -46,6 +48,7 @@ from app.domains.prismas.service import PrismaService
 from app.domains.questions.models import (
     Instrument,
     Question,
+    QuestionOption,
     QuestionSection,
     QuestionType,
 )
@@ -53,7 +56,7 @@ from app.domains.responses.models import Answer, FormResponse, FormResponseStatu
 from app.external_services.n8n.client import N8NClient
 from app.external_services.n8n.schemas import IndividualInsightRequest
 from app.shared.enums import Dimension, LinkType, Prisma, Roles
-from app.shared.exceptions import ConflictError
+from app.shared.exceptions import ConflictError, ValidationError
 from app.shared.instrument import CREED_INSTRUMENT_ID
 from scripts.exportar_contrato_n8n import CONTRACT_DIR
 
@@ -202,7 +205,7 @@ async def test_escopo_de_uma_resposta_vem_do_join(cenario: Cenario) -> None:
         escopo = await repository.get_form_scope(cenario.response_ids[2])
         inexistente = await repository.get_form_scope(uuid.uuid4())
 
-    assert escopo == FormScope(cenario.organization_id, cenario.form_ids[1])
+    assert escopo == FormScope(cenario.organization_id, cenario.form_ids[1], False)
     assert inexistente is None
 
 
@@ -459,19 +462,19 @@ async def test_pedido_em_espera_nao_e_reivindicado(cenario: Cenario) -> None:
         assert await InsightRepository(session).claim_due(5) == []
 
 
-async def test_reivindicacao_deixa_o_insight_da_empresa_esperando(
+async def test_reivindicacao_pega_tambem_o_insight_da_empresa(
     cenario: Cenario,
 ) -> None:
-    """O worker não sabe montar o pedido da empresa (CREED-8013): se o pegasse, a
-    montagem falharia. Ele fica `pending` até lá."""
+    """Desde a CREED-8013, o worker sabe montar o pedido da empresa."""
     [individual] = await fila(cenario, 1)
     async with cenario.sessions.begin() as session:
-        session.add(um_insight(cenario))  # da empresa: sem resposta
+        da_empresa = um_insight(cenario)  # sem resposta
+        session.add(da_empresa)
 
     async with cenario.sessions.begin() as session:
         reivindicados = await InsightRepository(session).claim_due(5)
 
-    assert [i.id for i in reivindicados] == [individual]
+    assert {i.id for i in reivindicados} == {individual, da_empresa.id}
 
 
 async def test_hora_do_banco_e_a_do_inicio_da_transacao(cenario: Cenario) -> None:
@@ -638,3 +641,281 @@ async def test_primeiro_done_vence_mesmo_com_dois_callbacks_ao_mesmo_tempo(
         gravado = await session.get(Insight, insight.id)
     assert gravado is not None
     assert gravado.model_id == "modelo-do-primeiro"
+
+
+# --- O insight da empresa (CREED-8013) -----------------------------------------
+
+
+async def respostas_no_periodo(
+    cenario: Cenario,
+    quantas: int,
+    status: FormResponseStatus,
+    form_id: uuid.UUID | None = None,
+) -> list[uuid.UUID]:
+    """`quantas` respostas novas no período (o 0, se nenhum vier), cada uma de um
+    vínculo novo da organização."""
+    ids = []
+    async with cenario.sessions.begin() as session:
+        participant = Participant(name="Mais uma pessoa")
+        session.add(participant)
+        await session.flush()
+        for _ in range(quantas):
+            link = Link(
+                participant_id=participant.id,
+                organization_id=cenario.organization_id,
+                type=LinkType.EMPREGO,
+                role=Roles.RESPONDENTE,
+            )
+            session.add(link)
+            await session.flush()
+            resposta = FormResponse(
+                form_id=form_id or cenario.form_ids[0],
+                vinculo_id=link.id,
+                status=status,
+            )
+            session.add(resposta)
+            await session.flush()
+            ids.append(resposta.id)
+    return ids
+
+
+async def enviar(cenario: Cenario, resposta: uuid.UUID, segurar: float = 0.0) -> None:
+    """O que o envio faz no banco, numa transação: pede o insight da empresa e marca
+    a resposta enviada. `segurar` atrasa o commit, para outro envio chegar no meio."""
+    async with cenario.sessions.begin() as session:
+        await _service(session).request_organization(resposta)
+        enviada = await session.get(FormResponse, resposta)
+        assert enviada is not None
+        enviada.status = FormResponseStatus.SUBMITTED
+        await session.flush()
+        await asyncio.sleep(segurar)
+
+
+async def pedidos_da_empresa(cenario: Cenario) -> list[Insight]:
+    async with cenario.sessions() as session:
+        result = await session.scalars(
+            select(Insight).where(Insight.form_response_id.is_(None))
+        )
+        return list(result.all())
+
+
+async def test_com_4_enviadas_nao_existe_insight_da_empresa(cenario: Cenario) -> None:
+    await respostas_no_periodo(cenario, 3, FormResponseStatus.SUBMITTED)
+    [quarta] = await respostas_no_periodo(cenario, 1, FormResponseStatus.IN_PROGRESS)
+
+    await enviar(cenario, quarta)
+
+    assert await pedidos_da_empresa(cenario) == []
+
+
+async def test_na_quinta_nasce_um_pending_para_daqui_a_30_minutos(
+    cenario: Cenario,
+) -> None:
+    await respostas_no_periodo(cenario, 4, FormResponseStatus.SUBMITTED)
+    [quinta] = await respostas_no_periodo(cenario, 1, FormResponseStatus.IN_PROGRESS)
+    async with cenario.sessions() as session:
+        antes = await session.scalar(select(func.now()))
+    assert antes is not None
+
+    await enviar(cenario, quinta)
+
+    [pedido] = await pedidos_da_empresa(cenario)
+    assert pedido.status is InsightStatus.PENDING
+    assert pedido.organization_id == cenario.organization_id
+    assert pedido.form_id == cenario.form_ids[0]
+    assert timedelta(minutes=29) < pedido.next_attempt_at - antes < timedelta(minutes=31)
+
+
+async def test_dez_envios_dentro_da_janela_nao_criam_outro(cenario: Cenario) -> None:
+    """O `ON CONFLICT DO NOTHING` contra o índice parcial: nenhum envio falha."""
+    await respostas_no_periodo(cenario, 4, FormResponseStatus.SUBMITTED)
+    novas = await respostas_no_periodo(cenario, 11, FormResponseStatus.IN_PROGRESS)
+
+    for resposta in novas:
+        await enviar(cenario, resposta)
+
+    assert len(await pedidos_da_empresa(cenario)) == 1
+
+
+async def test_com_o_da_empresa_dispatched_um_envio_novo_agenda_o_proximo(
+    cenario: Cenario,
+) -> None:
+    await respostas_no_periodo(cenario, 4, FormResponseStatus.SUBMITTED)
+    quinta, sexta = await respostas_no_periodo(cenario, 2, FormResponseStatus.IN_PROGRESS)
+    await enviar(cenario, quinta)
+    async with cenario.sessions.begin() as session:
+        pedido = await session.scalar(
+            select(Insight).where(Insight.form_response_id.is_(None))
+        )
+        assert pedido is not None
+        pedido.status = InsightStatus.DISPATCHED
+
+    await enviar(cenario, sexta)
+
+    estados = sorted(pedido.status.value for pedido in await pedidos_da_empresa(cenario))
+    assert estados == ["dispatched", "pending"]
+
+
+async def test_questionario_individual_nunca_agenda_insight_da_empresa(
+    cenario: Cenario,
+) -> None:
+    """O formulário de uma pessoa só (`link_id`, P-048), mesmo com 5 enviadas."""
+    async with cenario.sessions.begin() as session:
+        dono = await session.scalar(
+            select(FormResponse.vinculo_id).where(
+                FormResponse.id == cenario.response_ids[0]
+            )
+        )
+        individual = Form(
+            name="Questionário da mentoria",
+            organization_id=cenario.organization_id,
+            link_id=dono,
+        )
+        session.add(individual)
+        await session.flush()
+        individual_id = individual.id
+    await respostas_no_periodo(
+        cenario, 4, FormResponseStatus.SUBMITTED, form_id=individual_id
+    )
+    [quinta] = await respostas_no_periodo(
+        cenario, 1, FormResponseStatus.IN_PROGRESS, form_id=individual_id
+    )
+
+    await enviar(cenario, quinta)
+
+    assert await pedidos_da_empresa(cenario) == []
+
+
+@pytest.mark.parametrize("enviadas_antes", [3, 4])
+async def test_dois_envios_simultaneos_criam_um_pending_so(
+    cenario: Cenario, enviadas_antes: int
+) -> None:
+    """Com 3 enviadas, cada envio sozinho contaria 4 e nenhum agendaria: é a trava do
+    período que faz o segundo contar o primeiro. Com 4, os dois chegam ao piso, e só
+    um grava. Nos dois casos, nenhum envio falha (o `gather` levantaria)."""
+    await respostas_no_periodo(cenario, enviadas_antes, FormResponseStatus.SUBMITTED)
+    primeira, segunda = await respostas_no_periodo(
+        cenario, 2, FormResponseStatus.IN_PROGRESS
+    )
+
+    await asyncio.gather(
+        enviar(cenario, primeira, segurar=0.3), enviar(cenario, segunda, segurar=0.3)
+    )
+
+    assert len(await pedidos_da_empresa(cenario)) == 1
+
+
+async def responder_marcando_alternativa(
+    session: AsyncSession, respostas: list[uuid.UUID]
+) -> None:
+    """As respostas enviadas, com a alternativa "4" marcada nas sete objetivas.
+
+    O dashboard tira a média pela alternativa marcada (`QuestionOption`), e não pelo
+    `value` da resposta, que é o que o `responder` da CREED-803 grava.
+    """
+    for ordem, dimension in enumerate(Dimension, start=1):
+        pergunta = Question(
+            instrument_id=CREED_INSTRUMENT_ID,
+            text=f"Objetiva de {dimension.value}",
+            order_index=ordem,
+            type=QuestionType.OBJECTIVE,
+            section=QuestionSection(dimension.value),
+            dimensao=dimension,
+        )
+        session.add(pergunta)
+        await session.flush()
+        quatro = QuestionOption(
+            question_id=pergunta.id, label="4", value="4", order_index=4
+        )
+        session.add(quatro)
+        await session.flush()
+        for resposta in respostas:
+            session.add(
+                Answer(
+                    form_response_id=resposta,
+                    question_id=pergunta.id,
+                    option_id=quatro.id,
+                    value="4",
+                )
+            )
+    for resposta in respostas:
+        enviada = await session.get(FormResponse, resposta)
+        assert enviada is not None
+        enviada.status = FormResponseStatus.SUBMITTED
+    await session.flush()
+
+
+async def periodo_com_cinco_respondidas(cenario: Cenario) -> list[uuid.UUID]:
+    """O período 0 aberto, com 6 vínculos no público e 5 respostas enviadas, todas
+    com média 4. Devolve as 5."""
+    novas = await respostas_no_periodo(cenario, 4, FormResponseStatus.IN_PROGRESS)
+    respondidas = [*cenario.response_ids[:2], *novas[:3]]
+    async with cenario.sessions.begin() as session:
+        await responder_marcando_alternativa(session, respondidas)
+        periodo = await session.get(Form, cenario.form_ids[0])
+        assert periodo is not None
+        periodo.opens_at = datetime.now(UTC) - timedelta(days=1)
+    return respondidas
+
+
+def _service_com_dashboards(session: AsyncSession) -> InsightService:
+    prismas = PrismaService(PrismaRepository(session))
+    return InsightService(
+        InsightRepository(session),
+        prismas,
+        dashboards=DashboardService(DashboardRepository(session), prismas),
+    )
+
+
+async def test_pedido_da_empresa_montado_com_o_banco_de_verdade(
+    cenario: Cenario,
+) -> None:
+    """O período, o público e as notas pelas consultas reais do dashboard."""
+    await periodo_com_cinco_respondidas(cenario)
+    async with cenario.sessions.begin() as session:
+        pedido = um_insight(cenario)  # da empresa, no período 0
+        pedido.attempts = 1
+        session.add(pedido)
+        await session.flush()
+
+        payload = await _service_com_dashboards(session).build_organization_payload(
+            pedido
+        )
+        periodo = await session.get(Form, cenario.form_ids[0])
+
+    # Cinco pessoas com média 4: 75 em cada nota, na faixa alta.
+    assert payload.result.prismas.model_dump() == dict.fromkeys(
+        (prisma.value for prisma in Prisma), 75.0
+    )
+    # Seis vínculos são do público; cinco responderam.
+    assert payload.participation.submitted == 5
+    assert payload.participation.invited == 6
+    assert payload.departments == []
+    assert payload.alignment.seguranca_psicologica.bands.alta == 5
+    assert periodo is not None
+    assert payload.period.opens_at == periodo.opens_at
+
+
+async def test_exclusao_na_espera_deixa_o_periodo_abaixo_do_piso(
+    cenario: Cenario,
+) -> None:
+    """5 enviadas agendam o pedido, e um membro é excluído nos 30 min de espera. A
+    exclusão (M-3) apaga a resposta e o vínculo dele, e a conta do disparo, que é a
+    do dashboard, já não chega ao piso: o texto sairia sobre 4 pessoas."""
+    respondidas = await periodo_com_cinco_respondidas(cenario)
+    async with cenario.sessions.begin() as session:
+        pedido = um_insight(cenario)
+        pedido.attempts = 1
+        session.add(pedido)
+        excluida = await session.get(FormResponse, respondidas[-1])
+        assert excluida is not None
+        vinculo = excluida.vinculo_id
+        await session.execute(
+            delete(Answer).where(Answer.form_response_id == excluida.id)
+        )
+        await session.delete(excluida)
+        await session.flush()
+        await session.execute(delete(Link).where(Link.id == vinculo))
+
+        with pytest.raises(ValidationError, match="4 respostas, abaixo do piso de 5"):
+            await _service_com_dashboards(session).build_organization_payload(pedido)

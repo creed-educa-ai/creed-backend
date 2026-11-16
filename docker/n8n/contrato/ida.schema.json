@@ -1,5 +1,100 @@
 {
   "$defs": {
+    "AlignmentBands": {
+      "additionalProperties": false,
+      "description": "Quantas pessoas estão em cada faixa de nota de um prisma (P-061).",
+      "properties": {
+        "baixa": {
+          "minimum": 0,
+          "title": "Baixa",
+          "type": "integer"
+        },
+        "media": {
+          "minimum": 0,
+          "title": "Media",
+          "type": "integer"
+        },
+        "alta": {
+          "minimum": 0,
+          "title": "Alta",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "baixa",
+        "media",
+        "alta"
+      ],
+      "title": "AlignmentBands",
+      "type": "object"
+    },
+    "AlignmentByPrisma": {
+      "additionalProperties": false,
+      "description": "O alinhamento do grupo em cada um dos cinco prismas. Os cinco vêm sempre.",
+      "properties": {
+        "seguranca_psicologica": {
+          "$ref": "#/$defs/PrismaAlignment"
+        },
+        "lideranca_adaptativa": {
+          "$ref": "#/$defs/PrismaAlignment"
+        },
+        "cultura_empreendedora": {
+          "$ref": "#/$defs/PrismaAlignment"
+        },
+        "adaptabilidade_cognitiva": {
+          "$ref": "#/$defs/PrismaAlignment"
+        },
+        "neuroinovacao_prisma": {
+          "$ref": "#/$defs/PrismaAlignment"
+        }
+      },
+      "required": [
+        "seguranca_psicologica",
+        "lideranca_adaptativa",
+        "cultura_empreendedora",
+        "adaptabilidade_cognitiva",
+        "neuroinovacao_prisma"
+      ],
+      "title": "AlignmentByPrisma",
+      "type": "object"
+    },
+    "DepartmentScores": {
+      "additionalProperties": false,
+      "description": "A nota de um setor. Só vem setor com o piso de respostas (P-089).",
+      "properties": {
+        "department": {
+          "$ref": "#/$defs/DepartmentType"
+        },
+        "submitted": {
+          "description": "Pessoas do setor com resposta enviada.",
+          "minimum": 1,
+          "title": "Submitted",
+          "type": "integer"
+        },
+        "prismas": {
+          "$ref": "#/$defs/PrismaScores"
+        }
+      },
+      "required": [
+        "department",
+        "submitted",
+        "prismas"
+      ],
+      "title": "DepartmentScores",
+      "type": "object"
+    },
+    "DepartmentType": {
+      "description": "Os cinco setores fixos de uma organização.\n\nTipo `department_type` no banco, da tabela `departments`. Compartilhado por\n`department` (o setor cadastrado da empresa) e `links` (o setor que a troca de\nsetor do membro recebe e devolve).",
+      "enum": [
+        "Marketing",
+        "Financeiro",
+        "Administrativo",
+        "RecursosHumanos",
+        "TecnologiaInformacao"
+      ],
+      "title": "DepartmentType",
+      "type": "string"
+    },
     "DimensionScores": {
       "additionalProperties": false,
       "description": "Média de cada uma das sete dimensões da Matriz CREED, de 0 a 100.\n\nAs sete vêm sempre: sem uma delas, o back não calcula os prismas.",
@@ -57,6 +152,62 @@
         "S8"
       ],
       "title": "DimensionScores",
+      "type": "object"
+    },
+    "IndividualInsightRequest": {
+      "additionalProperties": false,
+      "description": "Pedido de insight individual: o resultado de uma resposta enviada.\n\nNão leva nada que identifique a pessoa (P-091): nem nome, e-mail, documento,\norganização, setor, dado demográfico ou o id da resposta. O `insight_id` é a\núnica correlação de que o N8N precisa, e ele volta no callback.",
+      "properties": {
+        "contract_version": {
+          "const": "insight-v1",
+          "title": "Contract Version",
+          "type": "string"
+        },
+        "scope": {
+          "const": "individual",
+          "title": "Scope",
+          "type": "string"
+        },
+        "insight_id": {
+          "description": "Id do pedido. O callback devolve o mesmo valor.",
+          "format": "uuid",
+          "title": "Insight Id",
+          "type": "string"
+        },
+        "attempt": {
+          "description": "Tentativa de disparo, a partir de 1. Volta igual no callback.",
+          "minimum": 1,
+          "title": "Attempt",
+          "type": "integer"
+        },
+        "language": {
+          "const": "pt-BR",
+          "description": "Idioma do texto, sempre pt-BR nesta versão (P-092).",
+          "title": "Language",
+          "type": "string"
+        },
+        "result": {
+          "$ref": "#/$defs/InsightResult"
+        },
+        "open_answers": {
+          "description": "Perguntas descritivas respondidas. Vazia se a pessoa não respondeu.",
+          "items": {
+            "$ref": "#/$defs/OpenAnswer"
+          },
+          "title": "Open Answers",
+          "type": "array"
+        }
+      },
+      "required": [
+        "contract_version",
+        "scope",
+        "insight_id",
+        "attempt",
+        "language",
+        "result",
+        "open_answers"
+      ],
+      "title": "IndividualInsightRequest",
       "type": "object"
     },
     "InsightResult": {
@@ -118,6 +269,129 @@
       "title": "OpenAnswer",
       "type": "object"
     },
+    "OrganizationInsightRequest": {
+      "additionalProperties": false,
+      "description": "Pedido de insight da empresa: o resultado agregado de um período.\n\nSão os números do dashboard da empresa, sem recorte. Não leva nenhuma resposta\naberta (P-090), nem nome de pessoa ou da organização: o texto fala do grupo.",
+      "properties": {
+        "contract_version": {
+          "const": "insight-v1",
+          "title": "Contract Version",
+          "type": "string"
+        },
+        "scope": {
+          "const": "organization",
+          "title": "Scope",
+          "type": "string"
+        },
+        "insight_id": {
+          "description": "Id do pedido. O callback devolve o mesmo valor.",
+          "format": "uuid",
+          "title": "Insight Id",
+          "type": "string"
+        },
+        "attempt": {
+          "description": "Tentativa de disparo, a partir de 1. Volta igual no callback.",
+          "minimum": 1,
+          "title": "Attempt",
+          "type": "integer"
+        },
+        "language": {
+          "const": "pt-BR",
+          "description": "Idioma do texto, sempre pt-BR nesta versão (P-092).",
+          "title": "Language",
+          "type": "string"
+        },
+        "period": {
+          "$ref": "#/$defs/Period"
+        },
+        "participation": {
+          "$ref": "#/$defs/Participation"
+        },
+        "result": {
+          "$ref": "#/$defs/InsightResult"
+        },
+        "departments": {
+          "description": "Setores com o piso de respostas. Vazia se nenhum chega a ele.",
+          "items": {
+            "$ref": "#/$defs/DepartmentScores"
+          },
+          "title": "Departments",
+          "type": "array"
+        },
+        "alignment": {
+          "$ref": "#/$defs/AlignmentByPrisma"
+        }
+      },
+      "required": [
+        "contract_version",
+        "scope",
+        "insight_id",
+        "attempt",
+        "language",
+        "period",
+        "participation",
+        "result",
+        "departments",
+        "alignment"
+      ],
+      "title": "OrganizationInsightRequest",
+      "type": "object"
+    },
+    "Participation": {
+      "additionalProperties": false,
+      "description": "Quantas pessoas responderam, de quantas eram do público do período.",
+      "properties": {
+        "submitted": {
+          "description": "Pessoas com resposta enviada.",
+          "minimum": 1,
+          "title": "Submitted",
+          "type": "integer"
+        },
+        "invited": {
+          "description": "Pessoas do público do período.",
+          "minimum": 1,
+          "title": "Invited",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "submitted",
+        "invited"
+      ],
+      "title": "Participation",
+      "type": "object"
+    },
+    "Period": {
+      "additionalProperties": false,
+      "description": "O período do questionário que a empresa respondeu.",
+      "properties": {
+        "opens_at": {
+          "description": "Abertura do período.",
+          "format": "date-time",
+          "title": "Opens At",
+          "type": "string"
+        },
+        "closes_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Fechamento do período. Nulo se o período não tem data para fechar.",
+          "title": "Closes At"
+        }
+      },
+      "required": [
+        "opens_at",
+        "closes_at"
+      ],
+      "title": "Period",
+      "type": "object"
+    },
     "Prisma": {
       "description": "Os cinco prismas de análise do produto.\n\nTipo `prisma` no banco, compartilhado por `questions` e `insights`. Os\nvalores vêm do material do produto sobre a composição dos prismas\n(SP, LA, CE, AC, NP).",
       "enum": [
@@ -129,6 +403,30 @@
       ],
       "title": "Prisma",
       "type": "string"
+    },
+    "PrismaAlignment": {
+      "additionalProperties": false,
+      "description": "As faixas de um prisma e a leitura delas (P-062).",
+      "properties": {
+        "bands": {
+          "$ref": "#/$defs/AlignmentBands"
+        },
+        "level": {
+          "enum": [
+            "alinhado",
+            "moderado",
+            "dividido"
+          ],
+          "title": "Level",
+          "type": "string"
+        }
+      },
+      "required": [
+        "bands",
+        "level"
+      ],
+      "title": "PrismaAlignment",
+      "type": "object"
     },
     "PrismaScores": {
       "additionalProperties": false,
@@ -176,58 +474,19 @@
       "type": "object"
     }
   },
-  "additionalProperties": false,
-  "description": "Pedido de insight individual: o resultado de uma resposta enviada.\n\nNão leva nada que identifique a pessoa (P-091): nem nome, e-mail, documento,\norganização, setor, dado demográfico ou o id da resposta. O `insight_id` é a\núnica correlação de que o N8N precisa, e ele volta no callback.",
-  "properties": {
-    "contract_version": {
-      "const": "insight-v1",
-      "title": "Contract Version",
-      "type": "string"
+  "discriminator": {
+    "mapping": {
+      "individual": "#/$defs/IndividualInsightRequest",
+      "organization": "#/$defs/OrganizationInsightRequest"
     },
-    "scope": {
-      "const": "individual",
-      "title": "Scope",
-      "type": "string"
-    },
-    "insight_id": {
-      "description": "Id do pedido. O callback devolve o mesmo valor.",
-      "format": "uuid",
-      "title": "Insight Id",
-      "type": "string"
-    },
-    "attempt": {
-      "description": "Tentativa de disparo, a partir de 1. Volta igual no callback.",
-      "minimum": 1,
-      "title": "Attempt",
-      "type": "integer"
-    },
-    "language": {
-      "const": "pt-BR",
-      "description": "Idioma do texto, sempre pt-BR nesta versão (P-092).",
-      "title": "Language",
-      "type": "string"
-    },
-    "result": {
-      "$ref": "#/$defs/InsightResult"
-    },
-    "open_answers": {
-      "description": "Perguntas descritivas respondidas. Vazia se a pessoa não respondeu.",
-      "items": {
-        "$ref": "#/$defs/OpenAnswer"
-      },
-      "title": "Open Answers",
-      "type": "array"
-    }
+    "propertyName": "scope"
   },
-  "required": [
-    "contract_version",
-    "scope",
-    "insight_id",
-    "attempt",
-    "language",
-    "result",
-    "open_answers"
-  ],
-  "title": "IndividualInsightRequest",
-  "type": "object"
+  "oneOf": [
+    {
+      "$ref": "#/$defs/IndividualInsightRequest"
+    },
+    {
+      "$ref": "#/$defs/OrganizationInsightRequest"
+    }
+  ]
 }

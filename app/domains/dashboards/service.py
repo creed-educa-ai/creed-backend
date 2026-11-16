@@ -80,6 +80,26 @@ class GroupScores:
     dimensions: dict[Dimension, float]
 
 
+@dataclass(frozen=True)
+class CompanyPeriodNumbers:
+    """Os números da empresa inteira num período, como o dashboard sem recorte os
+    mostra: já arredondados, com o mesmo público e as mesmas faixas.
+
+    É o que o insight da empresa interpreta (CREED-8013).
+    """
+
+    opens_at: datetime
+    closes_at: datetime | None
+    submitted: int
+    invited: int
+    scores: dict[Prisma, float]
+    dimensions: dict[Dimension, float]
+    destaque: Prisma
+    oportunidade: Prisma
+    departments: list[DepartmentRowRead]
+    alignment: dict[Prisma, PrismaAlignmentRead]
+
+
 def group_average(people: Iterable[PersonScores]) -> GroupScores | None:
     """A média do grupo, prisma a prisma e dimensão a dimensão. Grupo vazio é None:
     zero seria uma nota, e o grupo não tem nenhuma."""
@@ -487,6 +507,49 @@ class DashboardService:
             ),
             alignment=None if member_id is not None else _alignment(view_people),
             department_matrix=self._department_matrix(all_departments, shown_people),
+        )
+
+    async def company_period_numbers(
+        self, organization_id: uuid.UUID, form_id: uuid.UUID
+    ) -> CompanyPeriodNumbers | None:
+        """Os números da empresa num período, sem recorte. `None` se o formulário não
+        é um período da empresa, ou se ninguém do público tem nota nele.
+
+        É o que o pedido de insight da empresa leva (CREED-8013), e por isso não
+        confere quem pede: quem chama é o worker da esteira, não um usuário logado.
+        Nunca exponha este método numa rota. As contas são as do
+        `get_company_dashboard` sem recorte, com as mesmas funções.
+        """
+        form = await self.repository.get_company_form(organization_id, form_id)
+        if form is None or form.opens_at is None:
+            return None
+
+        invited = await self.repository.list_invited_links(form)
+        public = {link.link_id for link in invited}
+        rows = await self.repository.list_dimension_averages([form.id])
+        people = [
+            person
+            for person in self._person_scores(rows)
+            if person.form_id == form.id and person.link_id in public
+        ]
+        group = group_average(people)
+        alignment = _alignment(people)
+        if group is None or alignment.prismas is None:
+            return None
+
+        destaque, oportunidade = highest_and_lowest(group.prismas)
+        all_departments = await self.repository.list_departments(organization_id)
+        return CompanyPeriodNumbers(
+            opens_at=form.opens_at,
+            closes_at=form.closes_at,
+            submitted=len(people),
+            invited=max(len(invited), len(people)),
+            scores=_rounded(group.prismas),
+            dimensions=_rounded(group.dimensions),
+            destaque=destaque,
+            oportunidade=oportunidade,
+            departments=self._department_matrix(all_departments, people),
+            alignment=alignment.prismas,
         )
 
     async def get_overview(

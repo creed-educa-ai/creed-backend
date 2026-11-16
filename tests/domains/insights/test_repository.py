@@ -7,6 +7,7 @@ organização e o período, as restrições da tabela) roda em
 """
 
 import uuid
+from datetime import timedelta
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -206,13 +207,31 @@ def _um_pedido() -> Insight:
 async def test_escopo_da_resposta_traz_organizacao_e_formulario() -> None:
     organizacao, formulario = uuid.uuid4(), uuid.uuid4()
     sessao = _SessaoFalsa(
-        linha=SimpleNamespace(organization_id=organizacao, form_id=formulario)
+        linha=SimpleNamespace(
+            organization_id=organizacao, form_id=formulario, link_id=None
+        )
     )
     repository = InsightRepository(sessao)  # type: ignore[arg-type]
 
     escopo = await repository.get_form_scope(uuid.uuid4())
 
-    assert escopo == FormScope(organization_id=organizacao, form_id=formulario)
+    assert escopo == FormScope(
+        organization_id=organizacao, form_id=formulario, individual_form=False
+    )
+
+
+async def test_escopo_de_questionario_individual_diz_que_e_individual() -> None:
+    """O formulário com `link_id` é de uma pessoa só, como o do mentorando."""
+    sessao = _SessaoFalsa(
+        linha=SimpleNamespace(
+            organization_id=uuid.uuid4(), form_id=uuid.uuid4(), link_id=uuid.uuid4()
+        )
+    )
+    repository = InsightRepository(sessao)  # type: ignore[arg-type]
+
+    escopo = await repository.get_form_scope(uuid.uuid4())
+
+    assert escopo is not None and escopo.individual_form is True
 
 
 async def test_escopo_de_resposta_inexistente_devolve_none() -> None:
@@ -335,3 +354,24 @@ async def test_resposta_sem_insight_devolve_none() -> None:
     repository = InsightRepository(_SessaoFalsa())  # type: ignore[arg-type]
 
     assert await repository.get_by_form_response(uuid.uuid4()) is None
+
+
+# --- O insight da empresa (CREED-8013) --------------------------------------------
+# O ON CONFLICT, a trava e a contagem de verdade rodam em `test_insights_postgres.py`.
+
+
+async def test_agendar_o_da_empresa_diz_se_gravou() -> None:
+    repository = InsightRepository(_SessaoFalsa(resultado=uuid.uuid4()))  # type: ignore[arg-type]
+
+    assert await repository.schedule_organization(
+        uuid.uuid4(), uuid.uuid4(), timedelta(minutes=30)
+    )
+
+
+async def test_agendar_o_da_empresa_com_um_ja_esperando_devolve_false() -> None:
+    """O `ON CONFLICT DO NOTHING` não devolve linha: o service segue sem erro."""
+    repository = InsightRepository(_SessaoFalsa(resultado=None))  # type: ignore[arg-type]
+
+    assert not await repository.schedule_organization(
+        uuid.uuid4(), uuid.uuid4(), timedelta(minutes=30)
+    )

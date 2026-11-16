@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
+from app.domains.dashboards.service import DashboardService
 from app.domains.insights.models import Insight, InsightPrisma, InsightStatus
 from app.domains.insights.repository import (
     InsightPrismaRepository,
@@ -24,10 +25,16 @@ from app.domains.prismas.service import PrismaService, highest_and_lowest
 from app.external_services.n8n.client import N8NClient
 from app.external_services.n8n.exceptions import N8NUnavailableError
 from app.external_services.n8n.schemas import (
+    AlignmentByPrisma,
+    DepartmentScores,
     DimensionScores,
     IndividualInsightRequest,
+    InsightRequest,
     InsightResult,
     OpenAnswer,
+    OrganizationInsightRequest,
+    Participation,
+    Period,
     PrismaScores,
 )
 from app.shared.enums import LinkType, Prisma
@@ -36,6 +43,7 @@ from app.shared.exceptions import (
     DomainError,
     ForbiddenError,
     NotFoundError,
+    ValidationError,
 )
 
 if TYPE_CHECKING:
@@ -47,6 +55,12 @@ ADMIN_ROLE = "admin"
 
 # A espera dobra a cada falha, a partir daqui: 30 s, 1 min, 2 min, 4 min (ADR-0010).
 FIRST_RETRY_DELAY = timedelta(seconds=30)
+
+# 🟡 Premissa P-089 — a empresa recebe um insight por período só com 5 ou mais
+# respostas enviadas, regerado no máximo a cada 30 min enquanto chegam respostas. O
+# mesmo piso vale para cada setor no pedido. Confirmar na próxima reunião.
+ORGANIZATION_MIN_RESPONSES = 5
+ORGANIZATION_DEBOUNCE = timedelta(minutes=30)
 
 
 @dataclass(frozen=True)
@@ -149,12 +163,15 @@ class InsightService:
         repository: InsightRepository,
         prismas: PrismaService,
         n8n: N8NClient | None = None,
+        dashboards: DashboardService | None = None,
     ) -> None:
         self.repository = repository
         self.prismas = prismas
-        # Só o worker passa o client: o envio da resposta e a exclusão de membro
-        # usam este service sem falar com o N8N.
+        # Só o worker passa o client e os dashboards: o envio da resposta e a
+        # exclusão de membro usam este service sem falar com o N8N e sem montar
+        # pedido.
         self.n8n = n8n
+        self.dashboards = dashboards
 
     async def request_individual(self, form_response_id: uuid.UUID) -> Insight:
         """Grava o pedido de insight de uma resposta que acabou de ser enviada.
@@ -182,6 +199,36 @@ class InsightService:
             raise ConflictError(f"A resposta {form_response_id} já tem insight")
 
         return created
+
+    async def request_organization(self, form_response_id: uuid.UUID) -> None:
+        """Agenda o insight da empresa do período desta resposta, se o período chegou
+        ao piso (CREED-8013).
+
+        Quem chama é o envio da resposta, na transação dele, logo depois do pedido
+        individual. Com o piso atingido, grava um pedido `pending` para daqui a
+        `ORGANIZATION_DEBOUNCE`, e só se o período ainda não tem um esperando. Assim
+        um pico de envios vira um pedido só, e o texto acompanha o período com até
+        30 min de atraso. Um pedido já `dispatched` não segura o próximo.
+        """
+        scope = await self.repository.get_form_scope(form_response_id)
+        if scope is None:
+            raise NotFoundError(f"FormResponse {form_response_id} não encontrado")
+        if scope.individual_form:
+            # O questionário do mentorando é de uma pessoa só: não há grupo para ler.
+            return
+
+        # A trava vem antes da contagem: é ela que faz o segundo de dois envios
+        # simultâneos contar o primeiro.
+        await self.repository.lock_period(scope.form_id)
+        submitted = await self.repository.count_submitted_with(
+            scope.form_id, form_response_id
+        )
+        if submitted < ORGANIZATION_MIN_RESPONSES:
+            return
+
+        await self.repository.schedule_organization(
+            scope.organization_id, scope.form_id, ORGANIZATION_DEBOUNCE
+        )
 
     async def build_individual_payload(
         self, insight: Insight
@@ -231,6 +278,79 @@ class InsightService:
             ],
         )
 
+    async def build_organization_payload(
+        self, insight: Insight
+    ) -> OrganizationInsightRequest:
+        """Monta o pedido `insight-v1` do insight da empresa (CREED-8013).
+
+        Os números são os do dashboard da empresa no período, sem recorte, pedidos na
+        hora do disparo: o texto fala do que a tela mostra. Só vão os setores com o
+        piso de respostas (P-089), e nenhuma resposta aberta (P-090).
+
+        O piso da empresa é conferido de novo aqui, e não só no agendamento: nos 30
+        min de espera, a exclusão de membro (M-3) pode apagar respostas, e a conta do
+        agendamento não é a do dashboard (lá contam todas as enviadas; aqui, só as do
+        público com nota). Sem esta conferência, o texto sairia sobre 4 pessoas, ou
+        sobre 1, e a gestora leria o resultado individual de alguém (P-086).
+        """
+        if insight.form_response_id is not None:
+            # Erro de quem chama: o insight de uma resposta tem pedido próprio.
+            raise ValueError(f"O insight {insight.id} é de uma resposta, não da empresa")
+
+        numbers = await self._dashboards().company_period_numbers(
+            insight.organization_id, insight.form_id
+        )
+        if numbers is None:
+            raise ValidationError(
+                f"O período {insight.form_id} não tem resultado da empresa"
+            )
+        if numbers.submitted < ORGANIZATION_MIN_RESPONSES:
+            raise ValidationError(
+                f"O período {insight.form_id} tem {numbers.submitted} respostas, "
+                f"abaixo do piso de {ORGANIZATION_MIN_RESPONSES}"
+            )
+
+        return OrganizationInsightRequest(
+            contract_version="insight-v1",
+            scope="organization",
+            insight_id=insight.id,
+            # A reivindicação já contou esta tentativa (ADR-0010, item 3).
+            attempt=insight.attempts,
+            language="pt-BR",  # P-092
+            period=Period(opens_at=numbers.opens_at, closes_at=numbers.closes_at),
+            participation=Participation(
+                submitted=numbers.submitted, invited=numbers.invited
+            ),
+            result=InsightResult(
+                prismas=PrismaScores.model_validate(
+                    {prisma.value: score for prisma, score in numbers.scores.items()}
+                ),
+                dimensions=DimensionScores.model_validate(
+                    {dim.value: score for dim, score in numbers.dimensions.items()}
+                ),
+                destaque=numbers.destaque,
+                oportunidade=numbers.oportunidade,
+            ),
+            departments=[
+                DepartmentScores(
+                    department=row.department,
+                    submitted=row.respondents,
+                    prismas=PrismaScores.model_validate(
+                        {prisma.value: score for prisma, score in row.scores.items()}
+                    ),
+                )
+                for row in numbers.departments
+                if row.scores is not None
+                and row.respondents >= ORGANIZATION_MIN_RESPONSES
+            ],
+            alignment=AlignmentByPrisma.model_validate(
+                {
+                    prisma.value: alignment.model_dump()
+                    for prisma, alignment in numbers.alignment.items()
+                }
+            ),
+        )
+
     async def delete_for_form_responses(self, form_response_ids: list[uuid.UUID]) -> None:
         """Apaga os insights das respostas que a exclusão de membro (M-3) remove."""
         await self.repository.delete_by_form_responses(form_response_ids)
@@ -240,9 +360,7 @@ class InsightService:
     # (e gravar a reivindicação) e só depois disparar. Assim um pedido nunca sai sem
     # estar marcado `dispatched`, e uma queda no meio cai na varredura.
 
-    async def claim_due_batch(
-        self, limits: DispatchLimits
-    ) -> list[IndividualInsightRequest]:
+    async def claim_due_batch(self, limits: DispatchLimits) -> list[InsightRequest]:
         """Reivindica os pedidos que podem sair agora e devolve os payloads.
 
         Devolve à fila os `dispatched` esquecidos, confere o teto de pedidos em voo,
@@ -277,13 +395,13 @@ class InsightService:
             return []
 
         claimed = await self.repository.claim_due(min(limits.batch_size, free_slots))
-        payloads = []
+        payloads: list[InsightRequest] = []
         for insight in claimed:
             insight.status = InsightStatus.DISPATCHED
             insight.attempts += 1
             insight.dispatched_at = now
             try:
-                payloads.append(await self.build_individual_payload(insight))
+                payloads.append(await self._build_payload(insight))
             except (DomainError, ValueError) as exc:
                 # A resposta não vira pedido, e tentar de novo não muda isso. O
                 # `ValueError` cobre também o `ValidationError` do Pydantic, que herda
@@ -294,9 +412,7 @@ class InsightService:
                 self._fail(insight, f"pedido não montado: {exc}")
         return payloads
 
-    async def dispatch(
-        self, payload: IndividualInsightRequest, limits: DispatchLimits
-    ) -> None:
+    async def dispatch(self, payload: InsightRequest, limits: DispatchLimits) -> None:
         """Entrega ao N8N um pedido já reivindicado.
 
         Se o N8N não recebe, o pedido volta à fila com espera, ou vira `failed` no
@@ -423,7 +539,18 @@ class InsightService:
         insight.status = InsightStatus.FAILED
         insight.last_error = error
 
+    async def _build_payload(self, insight: Insight) -> InsightRequest:
+        """O pedido do escopo do insight: sem resposta, é o da empresa."""
+        if insight.form_response_id is None:
+            return await self.build_organization_payload(insight)
+        return await self.build_individual_payload(insight)
+
     def _n8n(self) -> N8NClient:
         if self.n8n is None:
             raise RuntimeError("N8NClient não configurado no InsightService")
         return self.n8n
+
+    def _dashboards(self) -> DashboardService:
+        if self.dashboards is None:
+            raise RuntimeError("DashboardService não configurado no InsightService")
+        return self.dashboards
