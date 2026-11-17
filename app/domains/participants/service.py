@@ -50,6 +50,17 @@ class ParticipantService:
 
         return created
 
+    async def create_member_participant(self, name: str) -> Participant:
+        """O participante do convite de membro (CREED-23.8, D8): só o nome.
+
+        Existe para o `users` não montar `ParticipantCreate`, que é schema deste
+        domínio (`tests/test_arquitetura.py`). Sem documento, o cadastro não tem o que
+        conferir nem com quem conflitar.
+
+        🟡 Premissa P-046 — o nome vem de quem convida, o mesmo que vai para o usuário.
+        """
+        return await self.create_participant(ParticipantCreate(name=name))
+
     async def get_participant(self, participant_id: uuid.UUID) -> Participant:
         participant = await self.repository.get_by_id(participant_id)
 
@@ -57,3 +68,20 @@ class ParticipantService:
             raise NotFoundError(f"Participante {participant_id} não encontrado")
 
         return participant
+
+    async def document_in_use(self, document_id: uuid.UUID) -> bool:
+        """Se algum participante aponta para o documento.
+
+        É o que a exclusão de empresa (E-6) pergunta antes de apagar o documento da
+        organização: com participante apontando, o banco recusaria.
+        """
+        return await self.repository.get_by_document_id(document_id) is not None
+
+    async def delete_participant(self, participant_id: uuid.UUID) -> None:
+        """Apaga a pessoa na exclusão de membro (M-3).
+
+        Quem chama já apagou os vínculos e o perfil demográfico, que apontam para o
+        participante. O documento fica: ele não aponta para a pessoa, é a pessoa
+        que aponta para ele, e a M-3 não o inclui.
+        """
+        await self.repository.delete_by_id(participant_id)

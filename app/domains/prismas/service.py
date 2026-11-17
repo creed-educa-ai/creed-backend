@@ -1,1 +1,179 @@
-"""Regra de negócio do domínio prismas. Não conhece HTTP nem ORM."""
+"""Regra de negócio do domínio prismas.
+
+Esta camada não conhece HTTP nem ORM. É onde o cálculo da Matriz CREED é aplicado
+sobre as respostas validadas.
+"""
+
+import uuid
+from typing import TYPE_CHECKING
+
+from app.domains.prismas.schemas import FormResponsePrismasRead
+from app.domains.prismas.utils import (
+    NeuroinnovationPrism,
+    calculate_all_prisms,
+    dimension_averages,
+    scale_to_100,
+)
+from app.shared.enums import Dimension, Prisma
+from app.shared.exceptions import ForbiddenError, NotFoundError, ValidationError
+
+if TYPE_CHECKING:
+    from app.domains.prismas.repository import PrismaRepository
+    from app.shared.authorization import AuthenticatedUser
+
+PRISMA_MAP: dict[NeuroinnovationPrism, Prisma] = {
+    NeuroinnovationPrism.PSYCHOLOGICAL_SAFETY: Prisma.SEGURANCA_PSICOLOGICA,
+    NeuroinnovationPrism.ADAPTIVE_LEADERSHIP: Prisma.LIDERANCA_ADAPTATIVA,
+    NeuroinnovationPrism.ENTREPRENEURIAL_CULTURE: Prisma.CULTURA_EMPREENDEDORA,
+    NeuroinnovationPrism.COGNITIVE_ADAPTABILITY: Prisma.ADAPTABILIDADE_COGNITIVA,
+    NeuroinnovationPrism.NEUROINNOVATION: Prisma.NEUROINOVACAO_PRISMA,
+}
+
+ADMIN_ROLE = "admin"
+GESTOR_ROLE = "gestor"
+
+
+def highest_and_lowest(prismas: dict[Prisma, float]) -> tuple[Prisma, Prisma]:
+    """Destaque e oportunidade. Empate: a ordem de `Prisma` desempata (decisão 7).
+
+    Uma fonte só para o dashboard e para o pedido de insight (CREED-803): o texto da
+    IA fala do mesmo destaque que a tela mostra.
+    """
+    ordem = list(Prisma)
+    destaque = max(ordem, key=lambda p: (prismas[p], -ordem.index(p)))
+    oportunidade = min(ordem, key=lambda p: (prismas[p], ordem.index(p)))
+    return destaque, oportunidade
+
+
+class PrismaService:
+    def __init__(self, repository: "PrismaRepository") -> None:
+        self.repository = repository
+
+    async def calculate_for_form_response(
+        self,
+        form_response_id: uuid.UUID,
+        *,
+        user: "AuthenticatedUser",
+    ) -> FormResponsePrismasRead:
+        """Calcula os prismas individuais de um FormResponse finalizado."""
+        form_response = await self.repository.get_form_response(form_response_id)
+        if form_response is None:
+            raise NotFoundError(
+                f"Resposta de formulário {form_response_id} não encontrada"
+            )
+
+        form = await self.repository.get_form(form_response.form_id)
+        if form is None:
+            raise NotFoundError(f"Formulário {form_response.form_id} não encontrado")
+
+        # Regra de acesso: admin vê tudo; gestor da org; membro a própria resposta
+        if user.role != ADMIN_ROLE:
+            if user.role == GESTOR_ROLE:
+                if form.organization_id != user.organization_uuid:
+                    raise ForbiddenError("Sem acesso a respostas de outra organização")
+            else:
+                if form_response.vinculo_id != user.link_uuid:
+                    raise ForbiddenError("Sem acesso a resposta de outro respondente")
+
+        status_val = getattr(form_response.status, "value", form_response.status)
+        if status_val != "submitted":
+            raise ValidationError(
+                "O formulário precisa estar finalizado para calcular os prismas"
+            )
+
+        answers = await self.repository.get_answers_with_dimensions(form_response_id)
+        if not answers:
+            raise ValidationError(
+                "Nenhuma resposta objetiva válida encontrada para calcular os prismas"
+            )
+
+        return self.compute_prisms_data(
+            form_response_id=form_response.id,
+            form_id=form_response.form_id,
+            vinculo_id=form_response.vinculo_id,
+            answers=answers,
+        )
+
+    async def calculate_for_dispatch(
+        self, form_response_id: uuid.UUID
+    ) -> tuple[dict[Prisma, float], dict[Dimension, float]]:
+        """Os 5 prismas e as 7 dimensões de uma resposta enviada, de 0 a 100.
+
+        É o cálculo do pedido de insight (CREED-803), e por isso não confere quem
+        pede: quem chama é o worker da esteira, não um usuário logado, e a resposta
+        já passou pela guarda de acesso quando foi enviada. Nunca exponha este
+        método numa rota.
+
+        Sai pelo mesmo caminho do dashboard (`scores_from_dimension_averages`) e, como
+        lá, sem arredondar: quem arredonda é quem mostra.
+        """
+        form_response = await self.repository.get_form_response(form_response_id)
+        if form_response is None:
+            raise NotFoundError(
+                f"Resposta de formulário {form_response_id} não encontrada"
+            )
+
+        status_val = getattr(form_response.status, "value", form_response.status)
+        if status_val != "submitted":
+            raise ValidationError(
+                "O formulário precisa estar finalizado para calcular os prismas"
+            )
+
+        answers = await self.repository.get_answers_with_dimensions(form_response_id)
+        if not answers:
+            raise ValidationError(
+                "Nenhuma resposta objetiva válida encontrada para calcular os prismas"
+            )
+
+        return self.scores_from_dimension_averages(dimension_averages(answers))
+
+    def compute_prisms_data(
+        self,
+        *,
+        form_response_id: uuid.UUID,
+        form_id: uuid.UUID,
+        vinculo_id: uuid.UUID,
+        answers: list[tuple[Dimension, float]],
+    ) -> FormResponsePrismasRead:
+        """Aplica o algoritmo da Matriz CREED e monta o DTO de saída."""
+        dim_averages = dimension_averages(answers)
+        raw_prisms = calculate_all_prisms(dim_averages)
+
+        scores: dict[str, float] = {}
+        scores_100: dict[str, float] = {}
+        for neuro_prism, val in raw_prisms.items():
+            prisma_enum = PRISMA_MAP[neuro_prism]
+            scores[prisma_enum.value] = round(val, 2)
+            scores_100[prisma_enum.value] = round(scale_to_100(val), 1)
+
+        dim_scores: dict[str, float] = {
+            dim.value: round(val, 2) for dim, val in dim_averages.items()
+        }
+
+        return FormResponsePrismasRead(
+            form_response_id=form_response_id,
+            form_id=form_id,
+            vinculo_id=vinculo_id,
+            scores=scores,
+            scores_100=scores_100,
+            dimensions=dim_scores,
+        )
+
+    def scores_from_dimension_averages(
+        self, averages: dict[Dimension, float]
+    ) -> tuple[dict[Prisma, float], dict[Dimension, float]]:
+        """Os 5 prismas e as 7 dimensões de uma pessoa, na escala 0 a 100.
+
+        Recebe as médias de 1 a 5 de cada dimensão, já calculadas no banco. É o que
+        o domínio dashboards usa: ele agrega as respostas de todas as pessoas numa
+        consulta só e chama este método uma vez por pessoa. Sem arredondar: quem
+        mostra arredonda, depois de tirar a média do grupo.
+        """
+        prismas = {
+            PRISMA_MAP[prism]: scale_to_100(value)
+            for prism, value in calculate_all_prisms(averages).items()
+        }
+        dimensions = {
+            dimension: scale_to_100(value) for dimension, value in averages.items()
+        }
+        return prismas, dimensions

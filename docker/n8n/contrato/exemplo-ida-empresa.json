@@ -1,0 +1,81 @@
+{
+  "contract_version": "insight-v1",
+  "scope": "organization",
+  "insight_id": "6f1d2c3b-4a5e-4f60-8b7a-9c0d1e2f3a4b",
+  "attempt": 1,
+  "language": "pt-BR",
+  "period": {
+    "opens_at": "2026-11-01T00:00:00Z",
+    "closes_at": "2026-11-30T23:59:59Z"
+  },
+  "participation": {
+    "submitted": 23,
+    "invited": 40
+  },
+  "result": {
+    "prismas": {
+      "seguranca_psicologica": 71.0,
+      "lideranca_adaptativa": 64.0,
+      "cultura_empreendedora": 58.0,
+      "adaptabilidade_cognitiva": 49.0,
+      "neuroinovacao_prisma": 61.0
+    },
+    "dimensions": {
+      "S2": 66.0,
+      "S4": 70.0,
+      "S5A": 52.0,
+      "S5B": 47.0,
+      "S6": 63.0,
+      "S7": 72.0,
+      "S8": 55.0
+    },
+    "destaque": "seguranca_psicologica",
+    "oportunidade": "adaptabilidade_cognitiva"
+  },
+  "departments": [
+    {
+      "department": "Marketing",
+      "submitted": 6,
+      "prismas": {
+        "seguranca_psicologica": 78.0,
+        "lideranca_adaptativa": 69.0,
+        "cultura_empreendedora": 66.0,
+        "adaptabilidade_cognitiva": 57.0,
+        "neuroinovacao_prisma": 68.0
+      }
+    },
+    {
+      "department": "TecnologiaInformacao",
+      "submitted": 9,
+      "prismas": {
+        "seguranca_psicologica": 64.0,
+        "lideranca_adaptativa": 59.0,
+        "cultura_empreendedora": 52.0,
+        "adaptabilidade_cognitiva": 38.0,
+        "neuroinovacao_prisma": 54.0
+      }
+    }
+  ],
+  "alignment": {
+    "seguranca_psicologica": {
+      "bands": { "baixa": 2, "media": 9, "alta": 12 },
+      "level": "moderado"
+    },
+    "lideranca_adaptativa": {
+      "bands": { "baixa": 3, "media": 14, "alta": 6 },
+      "level": "moderado"
+    },
+    "cultura_empreendedora": {
+      "bands": { "baixa": 5, "media": 13, "alta": 5 },
+      "level": "moderado"
+    },
+    "adaptabilidade_cognitiva": {
+      "bands": { "baixa": 8, "media": 8, "alta": 7 },
+      "level": "dividido"
+    },
+    "neuroinovacao_prisma": {
+      "bands": { "baixa": 1, "media": 17, "alta": 5 },
+      "level": "alinhado"
+    }
+  }
+}

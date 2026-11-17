@@ -10,7 +10,7 @@ negócio: é o banco fechando a corrida que a checagem do service não fecha.
 
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -49,3 +49,6 @@ class ParticipantRepository:
             return None
         await self.db.refresh(participant)
         return participant
+
+    async def delete_by_id(self, participant_id: uuid.UUID) -> None:
+        await self.db.execute(delete(Participant).where(Participant.id == participant_id))

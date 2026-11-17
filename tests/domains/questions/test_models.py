@@ -9,7 +9,14 @@ from typing import cast
 
 import sqlalchemy as sa
 
-from app.domains.questions.models import Question, QuestionSection, QuestionType
+from app.domains.questions.models import (
+    Question,
+    QuestionLang,
+    QuestionOptionTranslation,
+    QuestionSection,
+    QuestionTranslation,
+    QuestionType,
+)
 from app.shared.enums import Dimension, Prisma
 
 # `Question.__table__` é tipado como `FromClause` (a base genérica); o cast dá acesso
@@ -18,7 +25,7 @@ TABELA = cast(sa.Table, Question.__table__)
 
 COLUNAS_OBRIGATORIAS = {
     "id",
-    "form_id",
+    "instrument_id",
     "text",
     "order_index",
     "type",
@@ -47,11 +54,16 @@ def test_section_nao_tem_valor_padrao() -> None:
     assert coluna.server_default is None
 
 
-def test_section_tem_so_os_tres_valores_provisorios() -> None:
+def test_section_tem_as_secoes_do_formulario_original() -> None:
     assert [item.value for item in QuestionSection] == [
-        "profile",
-        "assessment",
-        "closing",
+        "S2",
+        "S4",
+        "S5A",
+        "S5B",
+        "S6",
+        "S7",
+        "S8",
+        "S9",
     ]
 
 
@@ -81,28 +93,59 @@ def test_dimension_tem_as_sete_dimensoes_da_matriz() -> None:
     ]
 
 
-def test_a_unica_chave_estrangeira_e_form_id() -> None:
+def test_a_unica_chave_estrangeira_e_instrument_id() -> None:
     fks = {fk.parent.name: (fk.target_fullname, fk.name) for fk in TABELA.foreign_keys}
 
-    assert fks == {"form_id": ("form.id", "fk_questions_form_id_form")}
+    assert fks == {
+        "instrument_id": ("instruments.id", "fk_questions_instrument_id_instruments")
+    }
 
 
-def test_indice_existe_so_em_form_id() -> None:
+def test_indice_existe_so_em_instrument_id() -> None:
     colunas_indexadas = {
         coluna.name for indice in TABELA.indexes for coluna in indice.columns
     }
-    assert colunas_indexadas == {"form_id"}
+    assert colunas_indexadas == {"instrument_id"}
 
 
-def test_restricao_unica_em_form_id_e_order_index() -> None:
+def test_restricao_unica_em_instrument_id_e_order_index() -> None:
     restricoes = [
         constraint
         for constraint in TABELA.constraints
         if isinstance(constraint, sa.UniqueConstraint)
-        and constraint.name == "uq_questions_form_id_order_index"
+        and constraint.name == "uq_questions_instrument_id_order_index"
     ]
     assert len(restricoes) == 1
     assert {coluna.name for coluna in restricoes[0].columns} == {
-        "form_id",
+        "instrument_id",
         "order_index",
     }
+
+
+def test_lang_de_traducao_so_tem_ingles_e_espanhol() -> None:
+    """O PT vive em `Question.text`/`QuestionOption.label`: não é tradução."""
+    assert [item.value for item in QuestionLang] == ["en", "es"]
+
+
+def test_restricao_unica_em_question_id_e_lang() -> None:
+    tabela = cast(sa.Table, QuestionTranslation.__table__)
+    restricoes = [
+        constraint
+        for constraint in tabela.constraints
+        if isinstance(constraint, sa.UniqueConstraint)
+        and constraint.name == "uq_question_translations_question_id_lang"
+    ]
+    assert len(restricoes) == 1
+    assert {coluna.name for coluna in restricoes[0].columns} == {"question_id", "lang"}
+
+
+def test_restricao_unica_em_option_id_e_lang() -> None:
+    tabela = cast(sa.Table, QuestionOptionTranslation.__table__)
+    restricoes = [
+        constraint
+        for constraint in tabela.constraints
+        if isinstance(constraint, sa.UniqueConstraint)
+        and constraint.name == "uq_question_option_translations_option_id_lang"
+    ]
+    assert len(restricoes) == 1
+    assert {coluna.name for coluna in restricoes[0].columns} == {"option_id", "lang"}

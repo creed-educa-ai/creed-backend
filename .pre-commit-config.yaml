@@ -27,7 +27,7 @@ repos:
         additional_dependencies:
           - pydantic
           - pydantic-settings
-          - sqlalchemy
+          - sqlalchemy>=2.0.36,<2.1  # a mesma faixa do pyproject: a 2.1 muda a tipagem das linhas
           - fastapi
           - alembic
           - pytest

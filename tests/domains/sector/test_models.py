@@ -3,7 +3,8 @@
 from sqlalchemy import Enum
 from sqlalchemy.dialects.postgresql import UUID
 
-from app.domains.department.models import Department, DepartmentType
+from app.domains.department.models import Department
+from app.shared.enums import DepartmentType
 
 
 def test_table_name() -> None:

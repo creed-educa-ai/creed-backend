@@ -13,7 +13,7 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 from app.domains.users.models import User
-from app.shared.enums import RecordStatus
+from app.shared.enums import LinkType, RecordStatus, Roles
 from app.shared.validators import sem_caractere_de_controle
 
 
@@ -33,8 +33,10 @@ class UserBase(BaseModel):
 class UserCreate(UserBase):
     """Payload de criação.
 
-    Sem senha: credencial é do Keycloak (P-012). O que atravessa é o
-    `keycloak_id`, o `sub` do JWT do usuário já provisionado no realm.
+    Sem senha: credencial é do Keycloak (P-012), e a pessoa a define pelo link do
+    convite. Sem `keycloak_id`: quem cria o usuário no realm é o back, que grava o
+    id que o Keycloak devolve (CREED-23.8). Um `keycloak_id` que ainda chegue no
+    corpo é ignorado, como qualquer campo que o schema não declara.
 
     Sem `role`: o papel vem do vínculo, não do payload — `contrato-api.md` é
     explícito ("mandar `role` no POST é sintoma de ter entendido o modelo ao
@@ -48,20 +50,64 @@ class UserCreate(UserBase):
                 {
                     "name": "Pessoa Exemplo",
                     "email": "pessoa@exemplo.com",
-                    "keycloak_id": "e5c0e7fa-3e57-427a-8d7b-a4ab5fb6c339",
                     "link_id": "3f9a2b1c-4d5e-4f6a-8b7c-9d0e1f2a3b4c",
                 }
             ]
         }
     )
 
-    keycloak_id: uuid.UUID = Field(
-        description="Identificador `sub` do usuário provisionado no Keycloak.",
-        examples=["e5c0e7fa-3e57-427a-8d7b-a4ab5fb6c339"],
-    )
     link_id: uuid.UUID = Field(
         description="Vínculo que dá o papel e a organização deste login.",
         examples=["3f9a2b1c-4d5e-4f6a-8b7c-9d0e1f2a3b4c"],
+    )
+
+    @field_validator("name")
+    @classmethod
+    def _sem_caractere_de_controle(cls, name: str) -> str:
+        """Só na entrada: a saída devolve o que está gravado."""
+        return sem_caractere_de_controle(name)
+
+
+class MemberInvite(UserBase):
+    """Payload do convite de membro (`POST /organizations/{organization_id}/members`).
+
+    Uma chamada cria participante, vínculo e usuário (D8). Sem `link_id`, ao
+    contrário do `UserCreate`: o vínculo nasce aqui, na organização do endereço, com o
+    papel e o tipo deste corpo.
+
+    Espaços nas pontas saem antes da validação, como no `ParticipantCreate`: o mesmo
+    nome vai para o participante e para o usuário, e sem isso os dois gravariam nomes
+    diferentes.
+
+    🟡 Premissa P-046 — o nome vai para o participante e para o usuário; o Keycloak
+    recebe só o e-mail.
+    🟡 Premissa P-047 — sem `type`, o vínculo é `emprego`.
+    """
+
+    model_config = ConfigDict(
+        str_strip_whitespace=True,
+        json_schema_extra={
+            "examples": [
+                {
+                    "name": "Pessoa Exemplo",
+                    "email": "pessoa@exemplo.com",
+                    "role": "gestor",
+                    "type": "emprego",
+                }
+            ]
+        },
+    )
+
+    role: Roles = Field(
+        description=(
+            "Papel do vínculo novo. O gestor só convida como gestor ou respondente."
+        ),
+        examples=["gestor"],
+    )
+    type: LinkType = Field(
+        default=LinkType.EMPREGO,
+        description="Tipo do vínculo novo. Sem o campo, `emprego`.",
+        examples=["emprego"],
     )
 
     @field_validator("name")

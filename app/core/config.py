@@ -37,8 +37,20 @@ class Settings(BaseSettings):
 
     # --- Esteira de IA (N8N self-hosted, ADR-001 secao 2.1) ---
     N8N_WEBHOOK_URL: str = ""
+    # Vai no `Authorization: Bearer` da ida, para o webhook não atender a qualquer
+    # um que alcance a rede (spec da CREED-80, "Segurança na esteira").
+    N8N_WEBHOOK_TOKEN: str = ""
     N8N_CALLBACK_SECRET: str = ""
     N8N_TIMEOUT_SECONDS: int = 10
+
+    # --- Worker da esteira (ADR-0010, item 3) ---
+    # Valores iniciais: só a cota do Bedrock vai dizer os certos. Quem regula o
+    # ritmo é o INSIGHT_MAX_IN_FLIGHT; o N8N da AWS não tem limite próprio (A7).
+    INSIGHT_WORKER_INTERVAL_SECONDS: float = 3
+    INSIGHT_WORKER_BATCH_SIZE: int = 5
+    INSIGHT_MAX_IN_FLIGHT: int = 5
+    INSIGHT_MAX_ATTEMPTS: int = 5
+    INSIGHT_DISPATCH_TIMEOUT_SECONDS: int = 600
 
     # --- Keycloak (CREED-23, decisoes D1 e D3) ---
     # O realm local sobe pelo docker-compose a partir de docker/keycloak/realm-creed.json.
@@ -59,6 +71,16 @@ class Settings(BaseSettings):
     # roda as chaves; reler a cada requisicao poria o Keycloak no caminho critico
     # de toda rota protegida.
     KEYCLOAK_JWKS_CACHE_SECONDS: int = 3600
+    # Validade do link do e-mail de convite e de redefinição de senha, que o
+    # Keycloak manda. O padrão dele para ação disparada pelo admin é 12 h, que
+    # vencem de um dia para o outro.
+    # 🟡 Premissa P-049 — o link vale 72 h. Confirmar na próxima reunião.
+    KEYCLOAK_INVITE_LIFESPAN_SECONDS: int = 72 * 60 * 60
+    # Endereço do front. Vai no convite como destino do link "voltar" da página do
+    # Keycloak, que leva ao /login. Vazio desliga o link: o convite sai sem ele.
+    # 🟡 Premissa P-051 — a pessoa volta ao login por um link, sem login
+    # automático. Confirmar na próxima reunião.
+    FRONTEND_URL: str = ""
 
     # --- CORS ---
     # NoDecode desliga o parse JSON que o pydantic-settings faz em campo de tipo

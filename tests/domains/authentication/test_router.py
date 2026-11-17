@@ -12,30 +12,65 @@ from app.domains.authentication.schemas import (
     UserSessionResponse,
 )
 from app.shared.authorization import AuthenticatedUser, current_user
-from app.shared.exceptions import AuthenticationError
+from app.shared.exceptions import AuthenticationError, ServiceUnavailableError
 
 FAKE_SESSION = SessionResponse(
     access_token="access-fake",  # noqa: S106
     refresh_token="refresh-fake",  # noqa: S106
     expires_in=900,
-    user=UserSessionResponse(id="user-123", email="dev@creed.example.com", role="admin"),
+    user=UserSessionResponse(
+        id="user-123", email="dev@creed.example.com", role="admin", name="Maria Souza"
+    ),
 )
 
 
 class _FakeService:
-    def __init__(self, login_ok: bool = True, refresh_ok: bool = True) -> None:
+    """`unavailable` faz login e renovação falharem como o Keycloak fora do ar.
+    `session_ok=False` é o vínculo que sumiu entre a guarda e a sessão."""
+
+    def __init__(
+        self,
+        login_ok: bool = True,
+        refresh_ok: bool = True,
+        unavailable: bool = False,
+        session_ok: bool = True,
+    ) -> None:
         self.login_ok = login_ok
         self.refresh_ok = refresh_ok
+        self.unavailable = unavailable
+        self.session_ok = session_ok
+        self.password_resets: list[str] = []
+
+    async def get_session(self, user: AuthenticatedUser) -> UserSessionResponse:
+        if not self.session_ok:
+            raise AuthenticationError("Não autenticado")
+        return UserSessionResponse(
+            id=user.sub,
+            email=user.email or "",
+            role=user.roles[0] if user.roles else None,
+            link_id=user.link_id,
+            organization_id=user.organization_id,
+            name="Maria Souza",
+        )
 
     async def login(self, _data: LoginRequest) -> SessionResponse:
+        if self.unavailable:
+            raise ServiceUnavailableError("Não foi possível autenticar agora")
         if not self.login_ok:
             raise AuthenticationError("E-mail ou senha inválidos")
         return FAKE_SESSION
 
     async def refresh(self, _refresh_token: str) -> SessionResponse:
+        if self.unavailable:
+            raise ServiceUnavailableError("Não foi possível renovar a sessão agora")
         if not self.refresh_ok:
             raise AuthenticationError("Sessão expirada, faça login novamente")
         return FAKE_SESSION
+
+    async def request_password_reset(self, email: str) -> None:
+        if self.unavailable:
+            raise ServiceUnavailableError("Não foi possível enviar o e-mail agora.")
+        self.password_resets.append(email)
 
 
 @pytest.fixture
@@ -70,6 +105,7 @@ def test_login_with_valid_credentials_returns_200_in_the_contract_shape(
     assert set(body["user"]) == {
         "id",
         "email",
+        "name",
         "role",
         "link_id",
         "organization_id",
@@ -88,6 +124,18 @@ def test_login_with_invalid_credentials_returns_401(
     )
 
     assert response.status_code == 401
+
+
+def test_login_with_keycloak_down_returns_503(app: FastAPI, client: TestClient) -> None:
+    _use_fake_service(app, _FakeService(unavailable=True))
+
+    response = client.post(
+        "/authentication/login",
+        json={"email": "dev@creed.example.com", "password": "dev"},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Não foi possível autenticar agora"
 
 
 def test_login_with_invalid_payload_returns_422_not_401(client: TestClient) -> None:
@@ -121,18 +169,83 @@ def test_renew_with_expired_refresh_token_returns_401(
     assert response.status_code == 401
 
 
+def test_renew_with_keycloak_down_returns_503(app: FastAPI, client: TestClient) -> None:
+    _use_fake_service(app, _FakeService(unavailable=True))
+
+    response = client.post(
+        "/authentication/renew", json={"refresh_token": "valid-refresh-token"}
+    )
+
+    assert response.status_code == 503
+
+
+def test_password_reset_returns_204_without_body_and_without_token(
+    app: FastAPI, client: TestClient
+) -> None:
+    """Rota pública, como o login.
+
+    O 204 é o mesmo para e-mail com ou sem acesso: quem decide é o service, e ele não
+    devolve nada que distinga os dois.
+    """
+    fake_service = _FakeService()
+    _use_fake_service(app, fake_service)
+
+    response = client.post(
+        "/authentication/password-reset", json={"email": "Pessoa@exemplo.com"}
+    )
+
+    assert response.status_code == 204
+    assert response.content == b""
+    assert fake_service.password_resets == ["Pessoa@exemplo.com"]
+
+
+@pytest.mark.parametrize("body", [{"email": "nao-e-email"}, {}])
+def test_password_reset_with_invalid_email_returns_422(
+    app: FastAPI, client: TestClient, body: dict[str, str]
+) -> None:
+    fake_service = _FakeService()
+    _use_fake_service(app, fake_service)
+
+    response = client.post("/authentication/password-reset", json=body)
+
+    assert response.status_code == 422
+    assert fake_service.password_resets == []
+
+
+def test_password_reset_with_keycloak_or_smtp_down_returns_503(
+    app: FastAPI, client: TestClient
+) -> None:
+    _use_fake_service(app, _FakeService(unavailable=True))
+
+    response = client.post(
+        "/authentication/password-reset", json={"email": "pessoa@exemplo.com"}
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Não foi possível enviar o e-mail agora."
+
+
 def test_session_without_authorization_returns_401(client: TestClient) -> None:
     response = client.get("/authentication/session")
 
     assert response.status_code == 401
 
 
-def test_session_with_authenticated_user_returns_200(
+def _authenticated_user() -> AuthenticatedUser:
+    return AuthenticatedUser(
+        sub="user-123",
+        email="dev@creed.example.com",
+        roles=["admin"],
+        link_id="3f9a2b1c-4d5e-4f6a-8b7c-9d0e1f2a3b4c",
+        organization_id="8f14e45f-ceea-467e-adde-3f81905dbc1c",
+    )
+
+
+def test_session_with_authenticated_user_returns_200_with_the_name(
     app: FastAPI, client: TestClient
 ) -> None:
-    app.dependency_overrides[current_user] = lambda: AuthenticatedUser(
-        sub="user-123", email="dev@creed.example.com", roles=["admin"]
-    )
+    app.dependency_overrides[current_user] = _authenticated_user
+    _use_fake_service(app, _FakeService())
 
     response = client.get(
         "/authentication/session", headers={"Authorization": "Bearer valid"}
@@ -142,18 +255,14 @@ def test_session_with_authenticated_user_returns_200(
     body = response.json()
     assert body["id"] == "user-123"
     assert body["role"] == "admin"
+    assert body["name"] == "Maria Souza"
 
 
 def test_session_returns_link_id_and_organization_id_of_authenticated_user(
     app: FastAPI, client: TestClient
 ) -> None:
-    app.dependency_overrides[current_user] = lambda: AuthenticatedUser(
-        sub="user-123",
-        email="dev@creed.example.com",
-        roles=["admin"],
-        link_id="3f9a2b1c-4d5e-4f6a-8b7c-9d0e1f2a3b4c",
-        organization_id="8f14e45f-ceea-467e-adde-3f81905dbc1c",
-    )
+    app.dependency_overrides[current_user] = _authenticated_user
+    _use_fake_service(app, _FakeService())
 
     response = client.get(
         "/authentication/session", headers={"Authorization": "Bearer valid"}
@@ -163,3 +272,17 @@ def test_session_returns_link_id_and_organization_id_of_authenticated_user(
     body = response.json()
     assert body["link_id"] == "3f9a2b1c-4d5e-4f6a-8b7c-9d0e1f2a3b4c"
     assert body["organization_id"] == "8f14e45f-ceea-467e-adde-3f81905dbc1c"
+
+
+def test_session_without_the_link_person_returns_401(
+    app: FastAPI, client: TestClient
+) -> None:
+    app.dependency_overrides[current_user] = _authenticated_user
+    _use_fake_service(app, _FakeService(session_ok=False))
+
+    response = client.get(
+        "/authentication/session", headers={"Authorization": "Bearer valid"}
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Não autenticado"

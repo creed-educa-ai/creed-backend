@@ -12,11 +12,16 @@ from fastapi import APIRouter, Depends, HTTPException, Path, status
 
 from app.domains.users.dependencies import ServiceDep
 from app.domains.users.schemas import UserCreate, UserResponse
-from app.shared.authorization import require_role
-from app.shared.exceptions import ConflictError, NotFoundError
+from app.shared.authorization import AuthenticatedUser, require_role
+from app.shared.exceptions import ConflictError, NotFoundError, ServiceUnavailableError
 from app.shared.schemas import ErrorResponse
 
 router = APIRouter(prefix="/users", tags=["users"])
+
+# 🟡 Premissa P-045 — quem reenvia segue a regra de quem convida: o respondente não
+# reenvia. O recorte do gestor (organização) é do service, porque compara o usuário
+# com quem pede.
+InviterDep = Annotated[AuthenticatedUser, Depends(require_role("admin", "gestor"))]
 
 
 @router.post(
@@ -25,10 +30,16 @@ router = APIRouter(prefix="/users", tags=["users"])
     status_code=status.HTTP_201_CREATED,
     summary="Criar usuário",
     description=(
-        "Registra na plataforma um usuário já provisionado no Keycloak, "
-        "vinculado a um vínculo existente. O status inicial é ativo, e o "
-        "papel é o do vínculo informado. Exige o papel admin (P-008): amarrar "
-        "um login a um vínculo decide o acesso de alguém à plataforma."
+        "Cria o acesso de uma pessoa a partir de um vínculo existente: registra o "
+        "usuário na plataforma e no provedor de identidade, sem senha, e envia o "
+        "e-mail de convite para a pessoa definir a senha. Se o convite não puder "
+        "ser enviado, no banco nada é criado. Se o provedor falhar no meio, o "
+        "acesso pode sobrar lá, e a nova tentativa responde 409 até a limpeza "
+        "manual. O e-mail é comparado e gravado em minúsculas, como o provedor de "
+        "identidade guarda: a resposta o devolve assim, e o 409 de e-mail repetido "
+        "não distingue maiúsculas. O status inicial é ativo, e o papel é o do "
+        "vínculo informado. Exige o papel admin (P-008): amarrar um login a um "
+        "vínculo decide o acesso de alguém à plataforma."
     ),
     response_description="Usuário criado na plataforma.",
     operation_id="create_user",
@@ -64,13 +75,29 @@ router = APIRouter(prefix="/users", tags=["users"])
         status.HTTP_409_CONFLICT: {
             "model": ErrorResponse,
             "description": (
-                "Já existe um usuário com o e-mail informado, "
-                "ou o vínculo já está em uso por outro usuário."
+                "Já existe um usuário com o e-mail informado (sem distinguir "
+                "maiúsculas), aqui ou no provedor de identidade, ou o vínculo já "
+                "está em uso por outro usuário."
             ),
             "content": {
                 "application/json": {
                     "example": {
                         "detail": "Já existe usuário com o e-mail pessoa@exemplo.com"
+                    }
+                }
+            },
+        },
+        status.HTTP_503_SERVICE_UNAVAILABLE: {
+            "model": ErrorResponse,
+            "description": (
+                "O provedor de identidade ou o envio de e-mail não respondeu. No "
+                "banco, nada é criado. Se o provedor falhar no meio, o acesso pode "
+                "sobrar lá, e a nova tentativa responde 409 até a limpeza manual."
+            ),
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Não foi possível criar o acesso agora. Tente de novo."
                     }
                 }
             },
@@ -84,6 +111,8 @@ async def create_user(dados: UserCreate, service: ServiceDep) -> UserResponse:
         raise HTTPException(status.HTTP_404_NOT_FOUND, exc.message) from exc
     except ConflictError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, exc.message) from exc
+    except ServiceUnavailableError as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, exc.message) from exc
 
     return UserResponse.de_model(
         created.user,
@@ -98,8 +127,9 @@ async def create_user(dados: UserCreate, service: ServiceDep) -> UserResponse:
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Remover usuário",
     description=(
-        "Remove definitivamente um usuário da plataforma pelo identificador. "
-        "Exige o papel admin, o mesmo do cadastro."
+        "Remove definitivamente um usuário da plataforma e do provedor de "
+        "identidade, pelo identificador. Depois disso, o mesmo e-mail pode ser "
+        "convidado de novo. Exige o papel admin, o mesmo do cadastro."
     ),
     response_description="Usuário removido; a resposta não possui corpo.",
     operation_id="delete_user",
@@ -132,6 +162,22 @@ async def create_user(dados: UserCreate, service: ServiceDep) -> UserResponse:
                 }
             },
         },
+        status.HTTP_503_SERVICE_UNAVAILABLE: {
+            "model": ErrorResponse,
+            "description": (
+                "O provedor de identidade não respondeu. O usuário continua no "
+                "banco, mas pode já ter saído do provedor; repetir a remoção resolve."
+            ),
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": (
+                            "Não foi possível remover o acesso agora. Tente de novo."
+                        )
+                    }
+                }
+            },
+        },
     },
 )
 async def delete_user(
@@ -148,3 +194,87 @@ async def delete_user(
         await service.delete_user_service(user_id)
     except NotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, exc.message) from exc
+    except ServiceUnavailableError as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, exc.message) from exc
+
+
+@router.post(
+    "/{user_id}/invitation",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Reenviar convite",
+    description=(
+        "Envia de novo o e-mail de convite, com um link novo para a pessoa definir "
+        "a senha. É o mesmo e-mail da redefinição de senha: para quem já definiu a "
+        "senha, o link serve para trocá-la. Exige o papel admin ou gestor: o admin "
+        "reenvia para qualquer usuário; o gestor, só para quem é da organização do "
+        "próprio vínculo. Usuário de outra organização responde como inexistente."
+    ),
+    response_description="Convite reenviado; a resposta não possui corpo.",
+    operation_id="resend_invitation",
+    responses={
+        status.HTTP_401_UNAUTHORIZED: {
+            "model": ErrorResponse,
+            "description": "Token ausente, inválido ou expirado.",
+            "content": {"application/json": {"example": {"detail": "Não autenticado"}}},
+        },
+        status.HTTP_403_FORBIDDEN: {
+            "model": ErrorResponse,
+            "description": "O usuário autenticado não tem o papel admin nem gestor.",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Cargo insuficiente para acessar"}
+                }
+            },
+        },
+        status.HTTP_404_NOT_FOUND: {
+            "model": ErrorResponse,
+            "description": (
+                "Usuário não encontrado, ou, para o gestor, de outra organização."
+            ),
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": (
+                            "Usuário d40b7a55-b9cc-4b78-ae5d-ab325fd655e2 não encontrado"
+                        )
+                    }
+                }
+            },
+        },
+        status.HTTP_503_SERVICE_UNAVAILABLE: {
+            "model": ErrorResponse,
+            "description": (
+                "O provedor de identidade ou o envio de e-mail não respondeu. Se o "
+                "provedor demorar, o e-mail pode ter saído mesmo assim."
+            ),
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": (
+                            "Não foi possível reenviar o convite agora. Tente de novo."
+                        )
+                    }
+                }
+            },
+        },
+    },
+)
+async def resend_invitation(
+    user_id: Annotated[
+        uuid.UUID,
+        Path(
+            description="Identificador do usuário que recebe o convite de novo.",
+            examples=["d40b7a55-b9cc-4b78-ae5d-ab325fd655e2"],
+        ),
+    ],
+    service: ServiceDep,
+    user: InviterDep,
+) -> None:
+    try:
+        await service.resend_invitation_service(
+            user_id, role=user.role, own_organization_id=user.organization_uuid
+        )
+    except NotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, exc.message) from exc
+    except ServiceUnavailableError as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, exc.message) from exc

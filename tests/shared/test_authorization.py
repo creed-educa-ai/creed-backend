@@ -8,13 +8,13 @@ import pytest
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 
-from app.domains.links.models import Link, LinkType, Roles
+from app.domains.links.models import Link
 from app.domains.users.dependencies import get_service as get_user_service
 from app.domains.users.models import User
 from app.domains.users.service import UserAccess, UserService
 from app.external_services.keycloak.token import InvalidTokenError
 from app.shared.authorization import AuthenticatedUser, CurrentUserDep, require_role
-from app.shared.enums import RecordStatus
+from app.shared.enums import LinkType, RecordStatus, Roles
 
 
 class _FakeUserService:

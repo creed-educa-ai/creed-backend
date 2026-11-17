@@ -1,0 +1,207 @@
+{
+  "$defs": {
+    "InsightCallbackDone": {
+      "additionalProperties": false,
+      "description": "Volta do N8N com o texto pronto.",
+      "properties": {
+        "contract_version": {
+          "const": "insight-v1",
+          "title": "Contract Version",
+          "type": "string"
+        },
+        "insight_id": {
+          "description": "O mesmo id que foi no pedido.",
+          "format": "uuid",
+          "title": "Insight Id",
+          "type": "string"
+        },
+        "attempt": {
+          "description": "A mesma tentativa que foi no pedido.",
+          "minimum": 1,
+          "title": "Attempt",
+          "type": "integer"
+        },
+        "status": {
+          "const": "done",
+          "title": "Status",
+          "type": "string"
+        },
+        "content": {
+          "$ref": "#/$defs/InsightContent"
+        },
+        "model_id": {
+          "description": "Modelo que gerou o texto, como o Bedrock o identifica.",
+          "minLength": 1,
+          "title": "Model Id",
+          "type": "string"
+        },
+        "prompt_version": {
+          "description": "Versão dos prompts e do dossiê, ex.: individual-v1+dossie-v1.",
+          "minLength": 1,
+          "title": "Prompt Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "contract_version",
+        "insight_id",
+        "attempt",
+        "status",
+        "content",
+        "model_id",
+        "prompt_version"
+      ],
+      "title": "InsightCallbackDone",
+      "type": "object"
+    },
+    "InsightCallbackFailed": {
+      "additionalProperties": false,
+      "description": "Volta do N8N quando o texto não saiu.",
+      "properties": {
+        "contract_version": {
+          "const": "insight-v1",
+          "title": "Contract Version",
+          "type": "string"
+        },
+        "insight_id": {
+          "description": "O mesmo id que foi no pedido.",
+          "format": "uuid",
+          "title": "Insight Id",
+          "type": "string"
+        },
+        "attempt": {
+          "description": "A mesma tentativa que foi no pedido. O back só aplica a falha à tentativa que ainda espera a volta.",
+          "minimum": 1,
+          "title": "Attempt",
+          "type": "integer"
+        },
+        "status": {
+          "const": "failed",
+          "title": "Status",
+          "type": "string"
+        },
+        "error": {
+          "description": "Código curto do erro, para o log, ex.: bedrock_throttled.",
+          "minLength": 1,
+          "title": "Error",
+          "type": "string"
+        },
+        "retryable": {
+          "description": "false quando tentar de novo não muda o resultado, como numa recusa do modelo. O back encerra o insight sem gastar as tentativas restantes.",
+          "title": "Retryable",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "contract_version",
+        "insight_id",
+        "attempt",
+        "status",
+        "error",
+        "retryable"
+      ],
+      "title": "InsightCallbackFailed",
+      "type": "object"
+    },
+    "InsightContent": {
+      "additionalProperties": false,
+      "description": "O texto do insight, conferido pelo back antes de gravar.\n\nÉ o mesmo no insight individual e no da empresa: no individual, fala com a\npessoa; no da empresa, fala do grupo com a gestão (P-088). Campo a mais é\nrecusado, como uma chave de prisma escrita de outro jeito.",
+      "properties": {
+        "analise": {
+          "description": "De 2 a 4 parágrafos, de até 900 caracteres cada.",
+          "items": {
+            "maxLength": 900,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 4,
+          "minItems": 2,
+          "title": "Analise",
+          "type": "array"
+        },
+        "prismas": {
+          "$ref": "#/$defs/PrismaTexts"
+        },
+        "recomendacao": {
+          "description": "De 1 a 3 parágrafos, de até 700 caracteres cada.",
+          "items": {
+            "maxLength": 700,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 3,
+          "minItems": 1,
+          "title": "Recomendacao",
+          "type": "array"
+        }
+      },
+      "required": [
+        "analise",
+        "prismas",
+        "recomendacao"
+      ],
+      "title": "InsightContent",
+      "type": "object"
+    },
+    "PrismaTexts": {
+      "additionalProperties": false,
+      "description": "Um texto curto para cada um dos cinco prismas. Os cinco vêm sempre.",
+      "properties": {
+        "seguranca_psicologica": {
+          "maxLength": 320,
+          "minLength": 1,
+          "title": "Seguranca Psicologica",
+          "type": "string"
+        },
+        "lideranca_adaptativa": {
+          "maxLength": 320,
+          "minLength": 1,
+          "title": "Lideranca Adaptativa",
+          "type": "string"
+        },
+        "cultura_empreendedora": {
+          "maxLength": 320,
+          "minLength": 1,
+          "title": "Cultura Empreendedora",
+          "type": "string"
+        },
+        "adaptabilidade_cognitiva": {
+          "maxLength": 320,
+          "minLength": 1,
+          "title": "Adaptabilidade Cognitiva",
+          "type": "string"
+        },
+        "neuroinovacao_prisma": {
+          "maxLength": 320,
+          "minLength": 1,
+          "title": "Neuroinovacao Prisma",
+          "type": "string"
+        }
+      },
+      "required": [
+        "seguranca_psicologica",
+        "lideranca_adaptativa",
+        "cultura_empreendedora",
+        "adaptabilidade_cognitiva",
+        "neuroinovacao_prisma"
+      ],
+      "title": "PrismaTexts",
+      "type": "object"
+    }
+  },
+  "discriminator": {
+    "mapping": {
+      "done": "#/$defs/InsightCallbackDone",
+      "failed": "#/$defs/InsightCallbackFailed"
+    },
+    "propertyName": "status"
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/InsightCallbackDone"
+    },
+    {
+      "$ref": "#/$defs/InsightCallbackFailed"
+    }
+  ]
+}

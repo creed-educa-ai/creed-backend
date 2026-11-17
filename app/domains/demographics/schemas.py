@@ -61,14 +61,19 @@ class DemographicBase(BaseModel):
         description="Nacionalidade por extenso; só com nacionalidade `outra`.",
         examples=["argentina"],
     )
+    perspective: str | None = Field(
+        default=None,
+        max_length=2000,
+        description="Quanto a educação familiar te influenciou",
+        examples=["Muito em minha criação de vida"],
+    )
 
 
 class DemographicCreate(DemographicBase):
     """Payload do perfil demográfico. Todo campo é opcional.
 
-    Normaliza campos válidos que não batem com a nacionalidade; valor inválido é
-    recusado. A normalização é a do `normalizeDemographics` do front, e é o que os
-    checks da tabela exigem.
+    Campos que não batem com a nacionalidade são recusados antes de chegar aos
+    checks equivalentes da tabela.
 
     🟡 Premissa a validar com a cliente — "prefiro não responder" pode vir junto
     com outras opções nas listas.
@@ -108,13 +113,22 @@ class DemographicCreate(DemographicBase):
         return sem_caractere_de_controle(other_nationality)
 
     @model_validator(mode="after")
-    def _clear_fields_of_other_nationalities(self) -> Self:
-        if self.nationality is not Nationality.BRASILEIRA:
-            self.brazil_state = None
-        if self.nationality is not Nationality.PORTUGUESA:
-            self.portugal_region = None
-        if self.nationality is not Nationality.OUTRA:
-            self.other_nationality = None
+    def _validate_fields_of_nationality(self) -> Self:
+        if (
+            self.brazil_state is not None
+            and self.nationality is not Nationality.BRASILEIRA
+        ):
+            raise ValueError("Estado brasileiro exige nacionalidade brasileira")
+        if (
+            self.portugal_region is not None
+            and self.nationality is not Nationality.PORTUGUESA
+        ):
+            raise ValueError("Região portuguesa exige nacionalidade portuguesa")
+        if (
+            self.other_nationality is not None
+            and self.nationality is not Nationality.OUTRA
+        ):
+            raise ValueError("Outra nacionalidade exige nacionalidade outra")
         return self
 
 
@@ -183,6 +197,7 @@ class DemographicResponse(DemographicBase):
             brazil_state=demographic.brazil_state,
             portugal_region=demographic.portugal_region,
             other_nationality=demographic.other_nationality,
+            perspective=demographic.perspective,
             created_at=demographic.created_at,
             updated_at=demographic.updated_at,
         )

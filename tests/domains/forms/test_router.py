@@ -32,7 +32,16 @@ FAKE_FORM = Form(
     created_at=datetime(2026, 9, 13, tzinfo=UTC),
 )
 
-CHAVES_DA_SAIDA = {"id", "name", "organization_id", "status", "created_at"}
+CHAVES_DA_SAIDA = {
+    "id",
+    "name",
+    "organization_id",
+    "status",
+    "opens_at",
+    "closes_at",
+    "link_id",
+    "created_at",
+}
 TOKEN = {"Authorization": "Bearer valido"}
 
 
@@ -238,6 +247,41 @@ class TestConsultar:
         assert response.status_code == 200
         assert set(response.json()) == CHAVES_DA_SAIDA
         assert service.quem_pediu == ("respondente", ORGANIZATION_ID)
+
+    def test_formulario_sem_periodo_devolve_os_tres_campos_nulos(
+        self, app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        autenticar_como(app, monkeypatch, "respondente")
+        _use_fake_service(app, _FakeService(form=FAKE_FORM))
+
+        body = client.get(f"/forms/{FAKE_FORM.id}", headers=TOKEN).json()
+
+        assert body["opens_at"] is None
+        assert body["closes_at"] is None
+        assert body["link_id"] is None
+
+    def test_formulario_com_periodo_e_publico_devolve_os_tres_campos(
+        self, app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        autenticar_como(app, monkeypatch, "respondente")
+        link_id = uuid.uuid4()
+        form = Form(
+            id=FAKE_FORM.id,
+            name=FAKE_FORM.name,
+            organization_id=ORGANIZATION_ID,
+            status=FormStatus.PUBLISHED,
+            opens_at=datetime(2026, 10, 1, tzinfo=UTC),
+            closes_at=datetime(2026, 10, 31, tzinfo=UTC),
+            link_id=link_id,
+            created_at=FAKE_FORM.created_at,
+        )
+        _use_fake_service(app, _FakeService(form=form))
+
+        body = client.get(f"/forms/{FAKE_FORM.id}", headers=TOKEN).json()
+
+        assert body["opens_at"] == "2026-10-01T00:00:00Z"
+        assert body["closes_at"] == "2026-10-31T00:00:00Z"
+        assert body["link_id"] == str(link_id)
 
     def test_organizacao_alheia_devolve_403(
         self, app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch

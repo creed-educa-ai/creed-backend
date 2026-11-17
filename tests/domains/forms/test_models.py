@@ -5,6 +5,7 @@ fácil de desfazer sem perceber.
 """
 
 from app.domains.forms.models import Form, FormStatus
+from app.shared.instrument import CREED_INSTRUMENT_ID
 
 
 class TestForms:
@@ -17,6 +18,10 @@ class TestForms:
             "name": False,
             "organization_id": False,
             "status": False,
+            "opens_at": True,
+            "closes_at": True,
+            "link_id": True,
+            "instrument_id": False,
             "created_at": False,
         }
 
@@ -46,9 +51,28 @@ class TestForms:
         """A CREED-47 deixou esta FK para quando `organizations` existisse (D1)."""
         fks = {fk.parent.name: fk.target_fullname for fk in Form.__table__.foreign_keys}
 
-        assert fks == {"organization_id": "organizations.id"}
+        assert fks == {
+            "organization_id": "organizations.id",
+            "link_id": "links.id",
+            "instrument_id": "instruments.id",
+        }
 
     def test_fk_de_organizacao_tem_o_nome_que_a_migration_usa(self) -> None:
         fk = next(iter(Form.__table__.c.organization_id.foreign_keys))
 
         assert fk.name == "fk_form_organization_id_organizations"
+
+    def test_fk_de_vinculo_tem_o_nome_que_a_migration_usa(self) -> None:
+        fk = next(iter(Form.__table__.c.link_id.foreign_keys))
+
+        assert fk.name == "fk_form_link_id_links"
+
+    def test_link_id_has_index(self) -> None:
+        assert Form.__table__.c.link_id.index is True
+
+    def test_nasce_com_o_instrumento_creed(self) -> None:
+        """Ninguém escolhe instrumento ao abrir período: todos aplicam o CREED."""
+        default = Form.__table__.c.instrument_id.default
+
+        assert default is not None
+        assert default.arg == CREED_INSTRUMENT_ID

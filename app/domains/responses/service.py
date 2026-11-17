@@ -4,18 +4,19 @@ Esta camada não conhece HTTP nem detalhes de ORM. É onde ficam
 as regras próprias das entidades FormResponse e Answer. Formulário é de
 outro domínio: a pergunta "ele existe?" e a conferência de organização vão ao
 `FormService` (CREED-47). Pergunta também: "existe?" e "é descritiva?" vão ao
-`QuestionService`. E a alternativa marcada numa objetiva, ao
-`QuestionOptionService`.
+`QuestionOptionService`. E o pedido de insight que nasce no envio, ao
+`InsightService` (CREED-802).
 """
 
 import uuid
 from datetime import UTC, datetime
 
 from app.domains.forms.service import FormService
+from app.domains.insights.service import InsightService
 from app.domains.questions.service import QuestionOptionService, QuestionService
 from app.domains.responses.models import Answer, FormResponse, FormResponseStatus
 from app.domains.responses.repository import AnswerRepository, FormResponseRepository
-from app.domains.responses.schemas import AnswerCreate
+from app.domains.responses.schemas import AnswerCreate, CurrentFormRead
 from app.shared.exceptions import (
     ConflictError,
     ForbiddenError,
@@ -69,11 +70,24 @@ class FormResponseService:
         forms: FormService,
         questions: QuestionService,
         answers: AnswerRepository,
+        insights: InsightService,
     ) -> None:
         self.repository = repository
         self.forms = forms
         self.questions = questions
         self.answers = answers
+        self.insights = insights
+
+    async def get_current(
+        self, *, link_id: uuid.UUID, organization_id: uuid.UUID
+    ) -> CurrentFormRead:
+        """O questionário aberto para o vínculo logado e a resposta dele, se houver."""
+        form = await self.forms.get_current(
+            link_id=link_id, organization_id=organization_id
+        )
+        form_response = await self.repository.get_by_form_and_vinculo(form.id, link_id)
+
+        return CurrentFormRead.de_models(form, form_response)
 
     async def create_form_response(
         self,
@@ -100,6 +114,7 @@ class FormResponseService:
         self.forms.check_same_organization(
             form.organization_id, organization_id=organization_id
         )
+        await self.forms.check_accepts_answers(form_id, link_id=link_id)
 
         existing = await self.repository.get_by_form_and_vinculo(form_id, link_id)
 
@@ -125,13 +140,21 @@ class FormResponseService:
         """Só o dono envia, e só com as obrigatórias respondidas, descritivas e
         objetivas.
 
-        Ordem: existe (404), é do dono (403), em andamento (409), obrigatórias
-        (422).
+        Ordem: existe (404), é do dono (403), em andamento (409), público (403),
+        período (423), obrigatórias (422).
+
+        O pedido de insight é gravado na mesma transação do envio (a da requisição,
+        que o `get_db` fecha): se ele falhar, a exceção sobe, o `get_db` desfaz tudo
+        e a resposta não fica enviada. Só entra depois de todas as conferências
+        acima, para uma resposta recusada não deixar pedido para trás. A chamada ao
+        N8N não acontece aqui, é do worker (ADR-0010), e por isso o envio não espera
+        a esteira.
         """
         form_response = await _own_form_response(
             self.repository, form_response_id, link_id=link_id
         )
         _check_in_progress(form_response)
+        await self.forms.check_accepts_answers(form_response.form_id, link_id=link_id)
 
         required = await self.questions.list_required(form_response.form_id)
         answers = await self.answers.list_by_form_response(form_response_id)
@@ -144,10 +167,42 @@ class FormResponseService:
             )
             raise ValidationError(f"Perguntas obrigatórias sem resposta: {listed}")
 
+        # Antes de marcar como enviada: se o pedido falhar, a resposta continua em
+        # andamento também aqui na memória, e não só depois do rollback.
+        await self.insights.request_individual(form_response.id)
+        await self.insights.request_organization(form_response.id)
         form_response.status = FormResponseStatus.SUBMITTED
         form_response.submitted_at = datetime.now(UTC)
 
         return form_response
+
+    async def list_ids_for_member_removal(
+        self, link_id: uuid.UUID, individual_form_ids: list[uuid.UUID]
+    ) -> list[uuid.UUID]:
+        """As respostas que a exclusão de membro (M-3) apaga.
+
+        As da pessoa, em qualquer questionário, e as dos questionários feitos só
+        para ela, de quem quer que sejam: o questionário individual sai junto, e
+        resposta apontando para ele impediria a exclusão. Quem chama precisa dos ids
+        antes de apagar, para tirar primeiro os insights e os dashboards delas.
+        """
+        return await self.repository.list_ids_by_link_or_forms(
+            link_id, individual_form_ids
+        )
+
+    async def list_ids_for_forms(self, form_ids: list[uuid.UUID]) -> list[uuid.UUID]:
+        """As respostas que ainda apontam para estes questionários (E-6).
+
+        Na exclusão de empresa, os questionários da organização só saem depois das
+        respostas deles, e quem chama precisa dos ids antes, para tirar primeiro os
+        insights e os dashboards delas.
+        """
+        return await self.repository.list_ids_by_forms(form_ids)
+
+    async def delete_with_answers(self, form_response_ids: list[uuid.UUID]) -> None:
+        """Apaga as respostas e, antes, o que foi marcado em cada uma (M-3)."""
+        await self.answers.delete_by_form_responses(form_response_ids)
+        await self.repository.delete_by_ids(form_response_ids)
 
 
 class AnswerService:
@@ -157,17 +212,20 @@ class AnswerService:
         form_responses: FormResponseRepository,
         questions: QuestionService,
         options: QuestionOptionService,
+        forms: FormService,
     ) -> None:
         self.answers = answers
         self.form_responses = form_responses
         self.questions = questions
         self.options = options
+        self.forms = forms
 
     async def record(
         self, form_response_id: uuid.UUID, dados: AnswerCreate, *, link_id: uuid.UUID
     ) -> Answer:
         """Grava a resposta de uma pergunta, na ordem de conferência da spec da
-        CREED-47: 404, 403, 409, 422 (pergunta), 422 (forma da resposta), 409.
+        CREED-47: 404, 403, 409, público (403), período (423), 422 (pergunta), 422
+        (forma da resposta), 409.
 
         A forma depende do tipo da pergunta: a descritiva leva texto e nenhuma
         alternativa; a objetiva leva uma alternativa daquela pergunta e nenhum
@@ -184,6 +242,7 @@ class AnswerService:
             self.form_responses, form_response_id, link_id=link_id
         )
         _check_in_progress(form_response)
+        await self.forms.check_accepts_answers(form_response.form_id, link_id=link_id)
 
         # A pergunta veio no corpo: inexistente é 422, não 404 (CREED-47, item 11).
         try:
@@ -191,7 +250,7 @@ class AnswerService:
         except NotFoundError as exc:
             raise ValidationError(exc.message) from exc
 
-        if question.form_id != form_response.form_id:
+        if not await self.questions.belongs_to_form(question, form_response.form_id):
             raise ValidationError(
                 f"Pergunta {dados.question_id} não é do formulário desta resposta"
             )

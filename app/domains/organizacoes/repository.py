@@ -59,6 +59,10 @@ class OrganizationRepository:
         await self.db.refresh(organization)
         return organization
 
+    async def delete(self, organization: Organization) -> None:
+        await self.db.delete(organization)
+        await self.db.flush()
+
     async def list_page(self, offset: int, limit: int) -> list[Organization]:
         """Uma página de organizações, por nome. O `id` desempata nomes iguais,
         para a mesma organização não aparecer em duas páginas."""

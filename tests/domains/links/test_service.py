@@ -13,10 +13,12 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 
-from app.domains.department.models import Department, DepartmentType
-from app.domains.links.models import Link, LinkType, Roles
+from app.domains.department.models import Department
+from app.domains.links.models import Link
 from app.domains.links.schemas import LinkCreate, LinkResponse
 from app.domains.links.service import LinkService
+from app.domains.participants.models import Participant
+from app.shared.enums import DepartmentType, LinkType, Roles
 from app.shared.exceptions import NotFoundError
 from app.shared.exceptions import ValidationError as DomainValidationError
 
@@ -33,6 +35,11 @@ class FakeLinkRepository:
 
     async def get_by_id(self, link_id: uuid.UUID) -> Link | None:
         return next((v for v in self.items if v.id == link_id), None)
+
+    async def list_ids_by_organization(
+        self, organization_id: uuid.UUID
+    ) -> list[uuid.UUID]:
+        return [v.id for v in self.items if v.organization_id == organization_id]
 
 
 def make_link(**fields: object) -> Link:
@@ -259,6 +266,40 @@ class TestCreateLink:
         assert repository.items == []
 
 
+class TestCreateMemberLink:
+    """O vínculo do convite de membro (CREED-23.8): sem setor, pelo mesmo caminho."""
+
+    async def test_saves_organization_participant_role_and_type_without_department(
+        self,
+    ) -> None:
+        repository = FakeLinkRepository()
+        organization_id = uuid.uuid4()
+        participant_id = uuid.uuid4()
+
+        created = await service(repository).create_member_link(
+            organization_id, participant_id, Roles.RESPONDENTE, LinkType.MENTORIA
+        )
+
+        assert created.organization_id == organization_id
+        assert created.participant_id == participant_id
+        assert created.role is Roles.RESPONDENTE
+        assert created.type is LinkType.MENTORIA
+        assert created.department_id is None
+        assert repository.items == [created]
+
+    async def test_still_checks_the_participant(self) -> None:
+        repository = FakeLinkRepository()
+
+        with pytest.raises(DomainValidationError):
+            await service(
+                repository, FakeParticipantService(existe=False)
+            ).create_member_link(
+                uuid.uuid4(), uuid.uuid4(), Roles.GESTOR, LinkType.EMPREGO
+            )
+
+        assert repository.items == []
+
+
 class TestGetLink:
     async def test_existing_id_returns_the_link(self) -> None:
         link = make_link()
@@ -274,6 +315,63 @@ class TestGetLink:
         found = await service(repository).get_link_by_id_service(uuid.uuid4())
 
         assert found is None
+
+
+class FakeNamedParticipantService:
+    """Dublê do `ParticipantService` que devolve um participante com nome e anota
+    qual id foi pedido."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.asked: list[uuid.UUID] = []
+
+    async def get_participant(self, participant_id: uuid.UUID) -> Participant:
+        self.asked.append(participant_id)
+        return Participant(id=participant_id, name=self.name)
+
+
+class TestGetPersonName:
+    """O nome que vai junto da sessão: o do participante do vínculo."""
+
+    async def test_returns_the_name_of_the_link_participant(self) -> None:
+        link = make_link()
+        participants = FakeNamedParticipantService("Maria Souza")
+
+        name = await service(
+            FakeLinkRepository([link]),
+            participants,  # type: ignore[arg-type]
+        ).get_person_name(link.id)
+
+        assert name == "Maria Souza"
+        assert participants.asked == [link.participant_id]
+
+    async def test_unknown_link_returns_none_without_asking_the_participant(
+        self,
+    ) -> None:
+        participants = FakeNamedParticipantService("Maria Souza")
+
+        name = await service(
+            FakeLinkRepository(),
+            participants,  # type: ignore[arg-type]
+        ).get_person_name(uuid.uuid4())
+
+        assert name is None
+        assert participants.asked == []
+
+
+class TestListOrganizationLinkIds:
+    """O que a exclusão de empresa (E-6) apaga, membro a membro."""
+
+    async def test_returns_every_link_of_the_organization_and_only_those(self) -> None:
+        organization_id = uuid.uuid4()
+        gestor = make_link(organization_id=organization_id, role=Roles.GESTOR)
+        respondent = make_link(organization_id=organization_id, role=Roles.RESPONDENTE)
+        elsewhere = make_link()
+        repository = FakeLinkRepository([gestor, elsewhere, respondent])
+
+        ids = await service(repository).list_organization_link_ids(organization_id)
+
+        assert ids == [gestor.id, respondent.id]
 
 
 class TestLinkCreate:

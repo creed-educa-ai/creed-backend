@@ -11,9 +11,13 @@ insert recusado. `repository.insert` devolve `None` nesse caso (nao pode
 levantar erro de negocio — test_arquitetura.py o proibe), e e este service
 que traduz `None` em ConflictError.
 
-Formulario e de outro dominio: a pergunta "ele existe?" vai ao `FormService`,
-nunca ao model de `forms` (CREED-47). A regra de organizacao (P-033) tambem mora
-la: aqui se pede a conferencia, sem repetir a comparacao.
+A pergunta pertence ao instrumento, que e o mesmo para toda organizacao: por isso
+cadastrar pergunta, alternativa e traducao e so do admin (a guarda e do router), sem
+regra de organizacao. Ler continua passando pelo formulario: o `FormService` diz se
+quem pede pode ve-lo (P-033), e o formulario diz qual instrumento ele aplica.
+
+Traducoes: o PT vive em `Question.text` e `QuestionOption.label`; EN/ES entram
+pelos services de traducao, no maximo uma por idioma (repetir e ConflictError).
 """
 
 import uuid
@@ -21,15 +25,25 @@ import uuid
 from app.domains.forms.service import FormService
 from app.domains.questions.models import (
     Question,
+    QuestionLang,
     QuestionOption,
+    QuestionOptionTranslation,
     QuestionSection,
+    QuestionTranslation,
     QuestionType,
 )
 from app.domains.questions.repository import (
     QuestionOptionRepository,
+    QuestionOptionTranslationRepository,
     QuestionRepository,
+    QuestionTranslationRepository,
 )
-from app.domains.questions.schemas import QuestionCreate, QuestionOptionCreate
+from app.domains.questions.schemas import (
+    QuestionCreate,
+    QuestionOptionCreate,
+    QuestionOptionTranslationCreate,
+    QuestionTranslationCreate,
+)
 from app.shared.exceptions import ConflictError, NotFoundError, ValidationError
 
 
@@ -38,29 +52,20 @@ class QuestionService:
         self.repository = repository
         self.forms = forms
 
-    async def create(
-        self, request: QuestionCreate, *, role: str, organization_id: uuid.UUID
-    ) -> Question:
-        """`role` e `organization_id` sao de quem pede, nao do formulario."""
-        # O formulario veio no corpo: inexistente e 422, nao 404 (CREED-47, item 11).
-        try:
-            form = await self.forms.get(request.form_id)
-        except NotFoundError as exc:
-            raise ValidationError(exc.message) from exc
+    async def create(self, request: QuestionCreate) -> Question:
+        # O instrumento veio no corpo: inexistente e 422, nao 404 (CREED-47, item 11).
+        if not await self.repository.instrument_exists(request.instrument_id):
+            raise ValidationError(f"Instrumento {request.instrument_id} não encontrado")
 
-        self.forms.check_organization(
-            form.organization_id, role=role, organization_id=organization_id
-        )
-
-        already_exists = await self.repository.get_by_form_and_order(
-            request.form_id, request.order_index
+        already_exists = await self.repository.get_by_instrument_and_order(
+            request.instrument_id, request.order_index
         )
 
         if already_exists is not None:
             raise self._conflito_de_posicao(request)
 
         question = Question(
-            form_id=request.form_id,
+            instrument_id=request.instrument_id,
             text=request.text,
             order_index=request.order_index,
             type=request.type,
@@ -78,6 +83,7 @@ class QuestionService:
         self,
         form_id: uuid.UUID,
         section: QuestionSection | None = None,
+        lang: QuestionLang | None = None,
         *,
         role: str,
         organization_id: uuid.UUID,
@@ -87,9 +93,14 @@ class QuestionService:
 
         Sem a primeira conferencia, "formulario inexistente" e "formulario ainda
         sem perguntas" devolviam o mesmo 200 com lista vazia.
+
+        Com `lang`, as perguntas e alternativas voltam com a traducao daquele
+        idioma carregada (quando existir); o fallback pro PT e do `de_model`.
         """
-        await self.forms.get_for_user(form_id, role=role, organization_id=organization_id)
-        return await self.repository.list_by_form(form_id, section)
+        form = await self.forms.get_for_user(
+            form_id, role=role, organization_id=organization_id
+        )
+        return await self.repository.list_by_instrument(form.instrument_id, section, lang)
 
     async def get(self, question_id: uuid.UUID) -> Question:
         """So "existe?", sem regra de acesso: e o que `responses` usa."""
@@ -106,7 +117,13 @@ class QuestionService:
         Descritivas e objetivas: com as alternativas da CREED-37, a objetiva pode
         ser respondida, e a obrigatoria passa a contar (fecha o D2 da CREED-47).
         """
-        return await self.repository.list_required(form_id)
+        form = await self.forms.get(form_id)
+        return await self.repository.list_required(form.instrument_id)
+
+    async def belongs_to_form(self, question: Question, form_id: uuid.UUID) -> bool:
+        """Se a pergunta e do instrumento que o formulario aplica."""
+        form = await self.forms.get(form_id)
+        return question.instrument_id == form.instrument_id
 
     def is_descriptive(self, question: Question) -> bool:
         """Responde por `responses`, que nao pode importar `QuestionType`."""
@@ -115,7 +132,51 @@ class QuestionService:
     def _conflito_de_posicao(self, request: QuestionCreate) -> ConflictError:
         return ConflictError(
             f"Já existe pergunta na posição {request.order_index} "
-            f"do formulário {request.form_id}"
+            f"do instrumento {request.instrument_id}"
+        )
+
+
+class QuestionTranslationService:
+    def __init__(
+        self,
+        repository: QuestionTranslationRepository,
+        questions: QuestionService,
+    ) -> None:
+        self.repository = repository
+        self.questions = questions
+
+    async def create(
+        self, question_id: uuid.UUID, request: QuestionTranslationCreate
+    ) -> QuestionTranslation:
+        """Cadastra a traducao de uma pergunta.
+
+        Pergunta inexistente levanta `NotFoundError`. Uma traducao por idioma:
+        repetir e `ConflictError`.
+        """
+        await self.questions.get(question_id)
+
+        already_exists = await self.repository.get_by_question_and_lang(
+            question_id, request.lang
+        )
+
+        if already_exists is not None:
+            raise self._lang_conflict(question_id, request)
+
+        translation = QuestionTranslation(
+            question_id=question_id,
+            lang=request.lang,
+            text=request.text,
+        )
+        created = await self.repository.insert(translation)
+        if created is None:
+            raise self._lang_conflict(question_id, request)
+        return created
+
+    def _lang_conflict(
+        self, question_id: uuid.UUID, request: QuestionTranslationCreate
+    ) -> ConflictError:
+        return ConflictError(
+            f"Já existe tradução '{request.lang.value}' para a pergunta {question_id}"
         )
 
 
@@ -124,33 +185,21 @@ class QuestionOptionService:
         self,
         repository: QuestionOptionRepository,
         questions: QuestionService,
-        forms: FormService,
     ) -> None:
         self.repository = repository
         self.questions = questions
-        self.forms = forms
 
     async def create(
-        self,
-        question_id: uuid.UUID,
-        request: QuestionOptionCreate,
-        *,
-        role: str,
-        organization_id: uuid.UUID,
+        self, question_id: uuid.UUID, request: QuestionOptionCreate
     ) -> QuestionOption:
         """Cadastra uma alternativa numa pergunta objetiva.
 
-        Pergunta inexistente levanta `NotFoundError`, e de formulário de outra
-        organização, `ForbiddenError`. `role` e `organization_id` são de quem pede.
+        Pergunta inexistente levanta `NotFoundError`.
 
         Premissa: alternativa só faz sentido em pergunta objetiva; a descritiva é
         recusada.
         """
         question = await self.questions.get(question_id)
-
-        await self.forms.get_for_user(
-            question.form_id, role=role, organization_id=organization_id
-        )
 
         if self.questions.is_descriptive(question):
             raise ValidationError(
@@ -191,4 +240,48 @@ class QuestionOptionService:
         return ConflictError(
             f"Já existe alternativa na posição {request.order_index} "
             f"da pergunta {question_id}"
+        )
+
+
+class QuestionOptionTranslationService:
+    def __init__(
+        self,
+        repository: QuestionOptionTranslationRepository,
+        options: QuestionOptionService,
+    ) -> None:
+        self.repository = repository
+        self.options = options
+
+    async def create(
+        self, option_id: uuid.UUID, request: QuestionOptionTranslationCreate
+    ) -> QuestionOptionTranslation:
+        """Cadastra a traducao do label de uma alternativa.
+
+        Alternativa inexistente levanta `NotFoundError`. Uma traducao por idioma:
+        repetir e `ConflictError`.
+        """
+        await self.options.get(option_id)
+
+        already_exists = await self.repository.get_by_option_and_lang(
+            option_id, request.lang
+        )
+
+        if already_exists is not None:
+            raise self._lang_conflict(option_id, request)
+
+        translation = QuestionOptionTranslation(
+            option_id=option_id,
+            lang=request.lang,
+            label=request.label,
+        )
+        created = await self.repository.insert(translation)
+        if created is None:
+            raise self._lang_conflict(option_id, request)
+        return created
+
+    def _lang_conflict(
+        self, option_id: uuid.UUID, request: QuestionOptionTranslationCreate
+    ) -> ConflictError:
+        return ConflictError(
+            f"Já existe tradução '{request.lang.value}' para a alternativa {option_id}"
         )

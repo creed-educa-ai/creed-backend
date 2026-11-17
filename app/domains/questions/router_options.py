@@ -20,7 +20,6 @@ from app.domains.questions.schemas import (
 from app.shared.authorization import AuthenticatedUser, require_role
 from app.shared.exceptions import (
     ConflictError,
-    ForbiddenError,
     NotFoundError,
     ValidationError,
 )
@@ -28,7 +27,8 @@ from app.shared.schemas import ErrorResponse, ValidationErrorResponse
 
 router = APIRouter(tags=["questions"])
 
-EditorDep = Annotated[AuthenticatedUser, Depends(require_role("admin", "gestor"))]
+# A pergunta é do instrumento, o mesmo para toda organização: só o admin cadastra.
+AdminDep = Annotated[AuthenticatedUser, Depends(require_role("admin"))]
 
 _UNAUTHORIZED: dict[int | str, dict[str, Any]] = {
     status.HTTP_401_UNAUTHORIZED: {
@@ -46,9 +46,8 @@ _UNAUTHORIZED: dict[int | str, dict[str, Any]] = {
     summary="Criar alternativa de pergunta",
     description=(
         "Cadastra uma alternativa numa pergunta objetiva, na posição informada. "
-        "A pergunta precisa já existir e ser objetiva. Exige o papel admin ou "
-        "gestor; o gestor só cadastra em pergunta de formulário da própria "
-        "organização."
+        "A pergunta precisa já existir e ser objetiva. Exige o papel admin: a "
+        "pergunta é do instrumento, o mesmo para toda organização."
     ),
     response_description="Alternativa criada.",
     operation_id="create_question_option",
@@ -56,13 +55,10 @@ _UNAUTHORIZED: dict[int | str, dict[str, Any]] = {
         **_UNAUTHORIZED,
         status.HTTP_403_FORBIDDEN: {
             "model": ErrorResponse,
-            "description": (
-                "Papel sem permissão para cadastrar, ou pergunta de formulário "
-                "de outra organização."
-            ),
+            "description": "Papel sem permissão para cadastrar: só o admin cadastra.",
             "content": {
                 "application/json": {
-                    "example": {"detail": "Sem acesso a formulário de outra organização"}
+                    "example": {"detail": "Cargo insuficiente para acessar"}
                 }
             },
         },
@@ -124,19 +120,12 @@ async def create_question_option(
     ],
     dados: QuestionOptionCreate,
     service: OptionServiceDep,
-    user: EditorDep,
+    user: AdminDep,
 ) -> QuestionOptionResponse:
     try:
-        option = await service.create(
-            question_id,
-            dados,
-            role=user.role,
-            organization_id=user.organization_uuid,
-        )
+        option = await service.create(question_id, dados)
     except NotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, exc.message) from exc
-    except ForbiddenError as exc:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, exc.message) from exc
     except ValidationError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, exc.message) from exc
     except ConflictError as exc:

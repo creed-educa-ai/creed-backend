@@ -8,6 +8,7 @@ from app.domains.prismas.utils import (
     calculate_neuroinnovation,
     calculate_prism,
     dimension_averages,
+    scale_to_100,
 )
 from app.shared.enums import Dimension
 from app.shared.exceptions import ValidationError
@@ -98,3 +99,8 @@ def test_calculate_all_prisms_returns_all_five_keys() -> None:
     averages = dict.fromkeys(Dimension, 3.0)
 
     assert set(calculate_all_prisms(averages)) == set(NeuroinnovationPrism)
+
+
+@pytest.mark.parametrize(("media", "nota"), [(1, 0), (2, 25), (3, 50), (4, 75), (5, 100)])
+def test_scale_to_100_vai_de_0_a_100(media: float, nota: float) -> None:
+    assert scale_to_100(media) == nota

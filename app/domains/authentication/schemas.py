@@ -1,6 +1,6 @@
 """Schemas Pydantic do domínio authentication."""
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 
 class LoginRequest(BaseModel):
@@ -34,11 +34,29 @@ class RefreshRequest(BaseModel):
     )
 
 
+class PasswordResetRequest(BaseModel):
+    """Pedido de "esqueci minha senha".
+
+    `EmailStr`, ao contrário do `LoginRequest`: aqui o e-mail inválido é 422, que o
+    front mostra no campo. O e-mail vai como a pessoa digitou; quem compara em
+    minúsculas é o service.
+    """
+
+    model_config = ConfigDict(
+        json_schema_extra={"examples": [{"email": "usuario@exemplo.com"}]}
+    )
+
+    email: EmailStr = Field(
+        description="E-mail de quem esqueceu a senha.",
+        examples=["usuario@exemplo.com"],
+    )
+
+
 class UserSessionResponse(BaseModel):
     """Usuário devolvido junto da sessão.
 
-    `link_id` e `organization_id` vêm do vínculo do usuário. `organization_name`
-    ainda não existe -> None
+    `link_id` e `organization_id` vêm do vínculo do usuário, e `name` da pessoa do
+    vínculo (o participante). `organization_name` ainda não existe -> None
     """
 
     model_config = ConfigDict(
@@ -47,6 +65,7 @@ class UserSessionResponse(BaseModel):
                 {
                     "id": "6f8c2e7d-4248-4d30-a8b8-2091c48b06f2",
                     "email": "usuario@exemplo.com",
+                    "name": "Maria Souza",
                     "role": "respondente",
                     "link_id": None,
                     "organization_id": None,
@@ -58,6 +77,13 @@ class UserSessionResponse(BaseModel):
 
     id: str = Field(description="Identificador interno do usuário.")
     email: str = Field(description="E-mail do usuário autenticado.")
+    name: str = Field(
+        description=(
+            "Nome da pessoa do vínculo, o mesmo que o dashboard e a lista de "
+            "membros mostram."
+        ),
+        examples=["Maria Souza"],
+    )
     role: str | None = Field(
         default=None,
         description="Papel efetivo do usuário na plataforma.",
@@ -88,6 +114,7 @@ class SessionResponse(BaseModel):
                     "user": {
                         "id": "6f8c2e7d-4248-4d30-a8b8-2091c48b06f2",
                         "email": "usuario@exemplo.com",
+                        "name": "Maria Souza",
                         "role": "respondente",
                         "link_id": None,
                         "organization_id": None,

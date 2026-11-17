@@ -39,6 +39,18 @@ services:
       # escritos nele. Sem prefixo KC_ porque o Keycloak lê KC_* como config própria.
       CREED_BACKEND_CLIENT_SECRET: creed-local-secret
       CREED_REALM_SSL_REQUIRED: none
+      # SMTP do realm (ADR-0006): no local, o Mailpit, sem autenticação nem TLS.
+      # Em produção é o Gmail do projeto, com STARTTLS (creed-infrastructure/ec2).
+      SMTP_HOST: mailpit
+      SMTP_PORT: '1025'
+      SMTP_FROM: nao-responda@creed.local
+      SMTP_AUTH: 'false'
+      SMTP_STARTTLS: 'false'
+      SMTP_SSL: 'false'
+      SMTP_USER: ''
+      SMTP_PASSWORD: ''
+      # Para onde o link "voltar" da página do convite leva (P-051): o front local.
+      CREED_FRONTEND_URL: http://localhost:5173
     ports: ['8080:8080']
     volumes:
       - ./docker/keycloak/realm-creed.json:/opt/keycloak/data/import/realm-creed.json:ro
@@ -62,6 +74,37 @@ services:
     volumes: [n8ndata:/home/node/.n8n]
     depends_on:
       db: {condition: service_healthy}
+
+  # Worker da esteira de insights (ADR-0010, item 3): a mesma imagem do back, outro
+  # comando. No local não há esteira (o N8N existe só na AWS, adendo A7): a URL vazia
+  # faz o worker avisar "esteira desligada" e ficar parado. O perfil o deixa fora do
+  # `docker compose up` de sempre; ele sobe com `docker compose up insight-worker`.
+  insight-worker:
+    build: .
+    command: python -m app.workers.insights
+    profiles: [esteira]
+    env_file: .env
+    environment:
+      # Dentro da rede do compose o banco é `db:5432`, não a porta do host do .env.
+      POSTGRES_HOST: db
+      POSTGRES_PORT: '5432'
+      # Vazia mesmo que o .env tenha uma URL: um .env copiado do exemplo antigo
+      # apontava para um N8N local que não existe.
+      N8N_WEBHOOK_URL: ''
+    # O SIGTERM deixa o ciclo em curso terminar. Com o N8N fora, um ciclo leva até
+    # INSIGHT_WORKER_BATCH_SIZE × N8N_TIMEOUT_SECONDS (5 × 10 s); com os 10 s padrão
+    # do Docker, o SIGKILL chegaria no meio. Mudou um dos dois, reveja este valor.
+    stop_grace_period: 1m
+    depends_on:
+      db: {condition: service_healthy}
+
+  # E-mail do ambiente local (ADR-0006): o Keycloak manda o convite para cá, e o
+  # Mailpit não entrega a ninguém, só mostra a mensagem em http://localhost:8025.
+  # Versão fixa, como o n8n: com `latest`, cada máquina do time roda a versão do
+  # dia em que baixou a imagem. Não existe em produção, onde o SMTP é o do Gmail.
+  mailpit:
+    image: axllent/mailpit:v1.31.1
+    ports: ['8025:8025', '1025:1025']
 
 volumes:
   pgdata:

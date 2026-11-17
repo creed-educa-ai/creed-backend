@@ -10,7 +10,8 @@ import uuid
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.domains.department.models import Department, DepartmentType
+from app.domains.department.models import Department
+from app.shared.enums import DepartmentType
 
 
 class DepartmentCreate(BaseModel):

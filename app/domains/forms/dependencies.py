@@ -11,6 +11,7 @@ from fastapi import Depends
 from app.core.database import SessionDep
 from app.domains.forms.repository import FormRepository
 from app.domains.forms.service import FormService
+from app.domains.links.dependencies import ServiceDep as LinkServiceDep
 from app.domains.organizacoes.dependencies import (
     ServiceDep as OrganizationServiceDep,
 )
@@ -25,8 +26,9 @@ def get_repository(
 def get_service(
     repository: Annotated[FormRepository, Depends(get_repository)],
     organizations: OrganizationServiceDep,
+    links: LinkServiceDep,
 ) -> FormService:
-    return FormService(repository, organizations)
+    return FormService(repository, organizations, links)
 
 
 ServiceDep = Annotated[FormService, Depends(get_service)]

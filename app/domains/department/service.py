@@ -10,6 +10,7 @@ from app.domains.department.models import Department
 from app.domains.department.repository import DepartmentRepository
 from app.domains.department.schemas import DepartmentCreate
 from app.domains.organizacoes.service import OrganizationService
+from app.shared.enums import DepartmentType
 from app.shared.exceptions import NotFoundError, ValidationError
 
 
@@ -29,6 +30,38 @@ class DepartmentService:
 
         return department
 
+    async def get_or_create(
+        self, organization_id: uuid.UUID, department_type: DepartmentType
+    ) -> Department:
+        """O setor daquele tipo na organização, criado na hora se ela ainda não tem.
+
+        Não confere se a organização existe: quem chama (a troca de setor do
+        membro) já conferiu, e a FK de `departments.organization_id` garante o resto.
+        """
+        existing = await self.repository.get_by_organization_and_type(
+            organization_id, department_type
+        )
+        if existing is not None:
+            return existing
+
+        created = await self.repository.create_if_absent(
+            Department(organization_id=organization_id, type=department_type)
+        )
+        if created is not None:
+            return created
+
+        # Outro pedido criou o mesmo setor entre a busca acima e o INSERT: a
+        # unicidade recusou o nosso, e o dele já está gravado.
+        department = await self.repository.get_by_organization_and_type(
+            organization_id, department_type
+        )
+        if department is None:
+            raise RuntimeError(
+                f"Setor {department_type.value} da organização {organization_id} "
+                "recusado como duplicado, mas não encontrado"
+            )
+        return department
+
     async def create(self, dados: DepartmentCreate) -> Department:
         """Cria um departamento a partir dos dados validados.
 
@@ -43,3 +76,11 @@ class DepartmentService:
             type=dados.type,
         )
         return await self.repository.create(department)
+
+    async def delete_for_organization(self, organization_id: uuid.UUID) -> None:
+        """Apaga os setores da organização na exclusão de empresa (E-6).
+
+        Sem regra de acesso: quem chama já conferiu quem pede, e já apagou os
+        vínculos, que apontam para o setor (`links.department_id`).
+        """
+        await self.repository.delete_by_organization(organization_id)

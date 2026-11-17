@@ -8,7 +8,9 @@ from typing import cast
 
 from sqlalchemy import Table, UniqueConstraint
 
-from app.domains.organizacoes.models import Organization
+from app.domains.organizacoes.models import Organization, OrganizationStatus
+from app.domains.participants.models import Participant
+from app.domains.users.models import User
 from app.shared.enums import RecordStatus
 
 
@@ -38,12 +40,29 @@ class TestOrganization:
         }
         assert uniques.get("uq_organizations_document_id") == ("document_id",)
 
-    def test_status_usa_o_enum_compartilhado_e_nasce_ativo(self) -> None:
+    def test_status_usa_o_enum_proprio_e_nasce_ativo(self) -> None:
         coluna = Organization.__table__.columns["status"]
-        assert coluna.type.enum_class is RecordStatus  # type: ignore[attr-defined]
+        assert coluna.type.enum_class is OrganizationStatus  # type: ignore[attr-defined]
+        assert coluna.type.name == "organization_status"  # type: ignore[attr-defined]
         assert not coluna.nullable
         assert coluna.default is not None
-        assert coluna.default.arg is RecordStatus.ACTIVE
+        assert coluna.default.arg is OrganizationStatus.ACTIVE
+
+    def test_pendente_e_valor_so_da_organizacao(self) -> None:
+        """`pending` não vaza para login e participante, que seguem no `recordstatus`."""
+        assert OrganizationStatus("pending") is OrganizationStatus.PENDING
+        for tabela in (User.__table__, Participant.__table__):
+            coluna = tabela.columns["status"]
+            assert coluna.type.enum_class is RecordStatus  # type: ignore[attr-defined]
+        assert "pending" not in {membro.value for membro in RecordStatus}
+
+    def test_dados_de_contato_sao_opcionais(self) -> None:
+        """Só o cadastro público os preenche; o `POST /organizacoes` não os pede."""
+        colunas = Organization.__table__.columns
+        tamanhos = {"email": 320, "contact_name": 200, "phone": 30}
+        for nome, tamanho in tamanhos.items():
+            assert colunas[nome].nullable
+            assert colunas[nome].type.length == tamanho  # type: ignore[attr-defined]
 
     def test_nome_e_endereco_sao_obrigatorios(self) -> None:
         colunas = Organization.__table__.columns

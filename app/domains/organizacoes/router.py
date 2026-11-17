@@ -4,6 +4,10 @@ Camada fina: recebe, valida via Pydantic, delega ao service e devolve. Nenhuma
 regra de negócio aqui, e nenhum import de `models` — a montagem da resposta é
 `OrganizationResponse.de_model()`, em `schemas.py`.
 
+Toda resposta mostra o documento da organização, que mora em outro domínio. Por
+isso cada rota passa o que o service devolveu por `service.with_documents`, que lê
+os documentos numa chamada só, antes de montar a saída.
+
 A guarda decide o papel: `admin` em todas as rotas, `gestor` só na consulta por
 id. Que o `gestor` só vê a própria organização é regra do service, que recebe de
 quem pede o papel e a organização do vínculo — a mesma divisão de `forms`.
@@ -20,6 +24,7 @@ from app.domains.organizacoes.schemas import (
     OrganizationResponse,
     OrganizationUpdate,
 )
+from app.domains.organizacoes.service import OrganizationWithDocument
 from app.shared.authorization import AuthenticatedUser, require_role
 from app.shared.exceptions import (
     ConflictError,
@@ -82,6 +87,12 @@ _NOT_FOUND: dict[int | str, dict[str, Any]] = {
 }
 
 
+def _response(item: OrganizationWithDocument) -> OrganizationResponse:
+    return OrganizationResponse.de_model(
+        item.organization, item.document_type, item.document_value
+    )
+
+
 @router.post(
     "",
     response_model=OrganizationResponse,
@@ -137,11 +148,13 @@ async def create_organization(
     dados: OrganizationCreate, service: ServiceDep
 ) -> OrganizationResponse:
     try:
-        return OrganizationResponse.de_model(await service.create(dados))
+        organization = await service.create(dados)
     except ValidationError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, exc.message) from exc
     except ConflictError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, exc.message) from exc
+    (item,) = await service.with_documents([organization])
+    return _response(item)
 
 
 @router.get(
@@ -161,9 +174,10 @@ async def list_organizations(
         int, Query(ge=1, le=200, description="Itens por página.")
     ] = 50,
 ) -> PaginaDe[OrganizationResponse]:
-    itens, total = await service.list_page(pagina, tamanho_pagina)
+    organizations, total = await service.list_page(pagina, tamanho_pagina)
+    itens = await service.with_documents(organizations)
     return PaginaDe[OrganizationResponse](
-        itens=[OrganizationResponse.de_model(item) for item in itens],
+        itens=[_response(item) for item in itens],
         total=total,
         pagina=pagina,
         tamanho_pagina=tamanho_pagina,
@@ -202,7 +216,8 @@ async def get_organization(
         raise HTTPException(status.HTTP_403_FORBIDDEN, exc.message) from exc
     except NotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, exc.message) from exc
-    return OrganizationResponse.de_model(organization)
+    (item,) = await service.with_documents([organization])
+    return _response(item)
 
 
 @router.patch(
@@ -212,11 +227,31 @@ async def get_organization(
     summary="Alterar organização",
     description=(
         "Altera nome, endereço ou status de uma organização. Só os campos "
-        "enviados mudam. Exige o papel admin."
+        "enviados mudam. O status aceito é `active` ou `inactive`; numa organização "
+        "`pending`, mandar `status` dá 409 e nada muda, mas nome e endereço "
+        "continuam editáveis. Exige o papel admin."
     ),
     response_description="Organização alterada.",
     operation_id="update_organization",
-    responses={**_UNAUTHORIZED, **_SO_ADMIN, **_NOT_FOUND},
+    responses={
+        **_UNAUTHORIZED,
+        **_SO_ADMIN,
+        **_NOT_FOUND,
+        status.HTTP_409_CONFLICT: {
+            "model": ErrorResponse,
+            "description": (
+                "A organização está pendente e o corpo traz `status`: ela só sai "
+                "desse estado aprovada ou rejeitada."
+            ),
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "A empresa está pendente: aprove ou rejeite o cadastro"
+                    }
+                }
+            },
+        },
+    },
 )
 async def update_organization(
     organization_id: OrganizationIdPath,
@@ -224,6 +259,10 @@ async def update_organization(
     service: ServiceDep,
 ) -> OrganizationResponse:
     try:
-        return OrganizationResponse.de_model(await service.update(organization_id, dados))
+        organization = await service.update(organization_id, dados)
     except NotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, exc.message) from exc
+    except ConflictError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, exc.message) from exc
+    (item,) = await service.with_documents([organization])
+    return _response(item)
