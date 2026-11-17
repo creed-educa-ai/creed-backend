@@ -126,6 +126,19 @@ class LinkService:
         """
         return await self.repository.get_by_id(link_id)
 
+    async def get_person_name(self, link_id: uuid.UUID) -> str | None:
+        """O nome da pessoa do vínculo, ou `None` se o vínculo não existir.
+
+        O nome mora no participante, e não em `user.name`, que fica só até o
+        participante existir em todo lugar (CONTEXT, "A v1 e a autenticação"). É o
+        mesmo nome que o dashboard e a lista de membros mostram.
+        """
+        link = await self.repository.get_by_id(link_id)
+        if link is None:
+            return None
+        participant = await self.participants.get_participant(link.participant_id)
+        return participant.name
+
     async def update_member_department(
         self,
         organization_id: uuid.UUID,

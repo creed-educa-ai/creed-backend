@@ -1,12 +1,13 @@
 """Regra de negócio do domínio authentication"""
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from app.domains.authentication.schemas import (
     LoginRequest,
     SessionResponse,
     UserSessionResponse,
 )
+from app.domains.links.service import LinkService
 from app.domains.users.service import UserService
 from app.external_services.keycloak import client as keycloak_client
 from app.external_services.keycloak.token import (
@@ -16,13 +17,19 @@ from app.external_services.keycloak.token import (
 )
 from app.shared.exceptions import AuthenticationError, ServiceUnavailableError
 
+if TYPE_CHECKING:
+    from app.shared.authorization import AuthenticatedUser
+
 _INVALID_CREDENTIALS = "E-mail ou senha inválidos"
 _SESSION_EXPIRED = "Sessão expirada, faça login novamente"
+_NOT_AUTHENTICATED = "Não autenticado"
 
 
 class AuthenticationService:
-    def __init__(self, users: UserService) -> None:
+    def __init__(self, users: UserService, links: LinkService) -> None:
         self.users = users
+        # Só para o nome da pessoa do vínculo, que vai junto da sessão.
+        self.links = links
 
     async def login(self, data: LoginRequest) -> SessionResponse:
         try:
@@ -78,6 +85,11 @@ class AuthenticationService:
         if access is None:
             raise AuthenticationError(error_message)
 
+        # O vínculo acabou de ser conferido; sem ele, o mesmo "sem sessão" de cima.
+        name = await self.links.get_person_name(access.link_id)
+        if name is None:
+            raise AuthenticationError(error_message)
+
         return SessionResponse(
             access_token=tokens["access_token"],
             refresh_token=tokens["refresh_token"],
@@ -88,5 +100,25 @@ class AuthenticationService:
                 role=access.role,
                 link_id=str(access.link_id),
                 organization_id=str(access.organization_id),
+                name=name,
             ),
+        )
+
+    async def get_session(self, user: "AuthenticatedUser") -> UserSessionResponse:
+        """A sessão de quem já passou pela guarda, com o nome da pessoa do vínculo.
+
+        A guarda (`CurrentUserDep`) já conferiu o usuário e o vínculo no banco. Se o
+        vínculo sumiu entre a guarda e aqui, é o mesmo 401 da guarda.
+        """
+        name = await self.links.get_person_name(user.link_uuid)
+        if name is None:
+            raise AuthenticationError(_NOT_AUTHENTICATED)
+
+        return UserSessionResponse(
+            id=user.sub,
+            email=user.email or "",
+            role=user.roles[0] if user.roles else None,
+            link_id=user.link_id,
+            organization_id=user.organization_id,
+            name=name,
         )
