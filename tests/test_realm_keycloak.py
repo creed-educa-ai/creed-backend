@@ -133,6 +133,21 @@ def test_redirect_do_client_chega_pelo_ambiente(client: dict[str, Any]) -> None:
     assert client["standardFlowEnabled"] is False
 
 
+@pytest.mark.parametrize(
+    ("chave", "tipo"), [("loginTheme", "login"), ("emailTheme", "email")]
+)
+def test_paginas_e_email_do_realm_usam_o_tema_do_creed(chave: str, tipo: str) -> None:
+    """As páginas de definir a senha e o e-mail do convite têm a cara do front.
+
+    O nome no realm e a pasta montada no container precisam bater: com um nome que
+    não existe, o Keycloak não falha, ele cai no tema padrão sem avisar ninguém.
+    """
+    temas = Path(__file__).resolve().parents[1] / "docker" / "keycloak" / "themes"
+
+    assert REALM[chave] == "creed"
+    assert (temas / REALM[chave] / tipo / "theme.properties").is_file()
+
+
 def test_papeis_do_realm_sao_os_da_premissa_p006() -> None:
     nomes = {papel["name"] for papel in REALM["roles"]["realm"]}
 
