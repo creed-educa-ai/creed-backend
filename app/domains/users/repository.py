@@ -36,6 +36,11 @@ class UserRepository:
         await self.db.refresh(user)
         return user
 
+    async def save(self, user: User) -> User:
+        """Grava as alterações de um usuário já carregado pela sessão."""
+        await self.db.flush()
+        return user
+
     async def delete(self, user: User) -> None:
         """Deleta um usuário do banco."""
         await self.db.delete(user)

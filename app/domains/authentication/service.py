@@ -1,5 +1,6 @@
 """Regra de negócio do domínio authentication"""
 
+import uuid
 from typing import TYPE_CHECKING, Any
 
 from app.domains.authentication.schemas import (
@@ -101,6 +102,7 @@ class AuthenticationService:
                 link_id=str(access.link_id),
                 organization_id=str(access.organization_id),
                 name=name,
+                terms_accepted_at=access.terms_accepted_at,
             ),
         )
 
@@ -121,4 +123,12 @@ class AuthenticationService:
             link_id=user.link_id,
             organization_id=user.organization_id,
             name=name,
+            terms_accepted_at=user.terms_accepted_at,
         )
+
+    async def accept_terms(self, user: "AuthenticatedUser") -> None:
+        """Aceite do termo de quem já passou pela guarda. Quem grava é o `users`.
+
+        O `sub` da identidade conferida é o id do `user` no banco, não o do Keycloak.
+        """
+        await self.users.accept_terms_service(uuid.UUID(user.sub))

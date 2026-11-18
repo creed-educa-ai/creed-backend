@@ -2,6 +2,7 @@
 
 import logging
 import uuid
+from datetime import datetime
 from typing import Annotated, Any
 
 from fastapi import Depends, HTTPException, status
@@ -40,12 +41,14 @@ class AuthenticatedUser:
         roles: list[str],
         link_id: str | None = None,
         organization_id: str | None = None,
+        terms_accepted_at: datetime | None = None,
     ) -> None:
         self.sub = sub
         self.email = email
         self.roles = roles
         self.link_id = link_id
         self.organization_id = organization_id
+        self.terms_accepted_at = terms_accepted_at
 
     def has_role(self, role: str) -> bool:
         return role in self.roles
@@ -141,6 +144,7 @@ async def _check_against_database(
         roles=[access.role],
         link_id=str(access.link_id),
         organization_id=str(access.organization_id),
+        terms_accepted_at=access.terms_accepted_at,
     )
 
 
