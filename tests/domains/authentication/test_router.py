@@ -1,5 +1,7 @@
 """Testes de app/domains/authentication/router.py — só contrato HTTP"""
 
+from datetime import UTC, datetime
+
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -40,6 +42,10 @@ class _FakeService:
         self.unavailable = unavailable
         self.session_ok = session_ok
         self.password_resets: list[str] = []
+        self.terms_accepted_by: list[str] = []
+
+    async def accept_terms(self, user: AuthenticatedUser) -> None:
+        self.terms_accepted_by.append(user.sub)
 
     async def get_session(self, user: AuthenticatedUser) -> UserSessionResponse:
         if not self.session_ok:
@@ -51,6 +57,7 @@ class _FakeService:
             link_id=user.link_id,
             organization_id=user.organization_id,
             name="Maria Souza",
+            terms_accepted_at=user.terms_accepted_at,
         )
 
     async def login(self, _data: LoginRequest) -> SessionResponse:
@@ -110,6 +117,7 @@ def test_login_with_valid_credentials_returns_200_in_the_contract_shape(
         "link_id",
         "organization_id",
         "organization_name",
+        "terms_accepted_at",
     }
 
 
@@ -286,3 +294,57 @@ def test_session_without_the_link_person_returns_401(
 
     assert response.status_code == 401
     assert response.json()["detail"] == "Não autenticado"
+
+
+def test_session_returns_the_terms_acceptance_date(
+    app: FastAPI, client: TestClient
+) -> None:
+    def _user_who_accepted() -> AuthenticatedUser:
+        user = _authenticated_user()
+        user.terms_accepted_at = datetime(2026, 11, 10, 14, 0, tzinfo=UTC)
+        return user
+
+    app.dependency_overrides[current_user] = _user_who_accepted
+    _use_fake_service(app, _FakeService())
+
+    response = client.get(
+        "/authentication/session", headers={"Authorization": "Bearer valid"}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["terms_accepted_at"] == "2026-11-10T14:00:00Z"
+
+
+def test_session_of_who_never_accepted_returns_null_terms_acceptance(
+    app: FastAPI, client: TestClient
+) -> None:
+    app.dependency_overrides[current_user] = _authenticated_user
+    _use_fake_service(app, _FakeService())
+
+    response = client.get(
+        "/authentication/session", headers={"Authorization": "Bearer valid"}
+    )
+
+    assert response.json()["terms_accepted_at"] is None
+
+
+def test_terms_acceptance_returns_204_and_records_for_the_authenticated_user(
+    app: FastAPI, client: TestClient
+) -> None:
+    app.dependency_overrides[current_user] = _authenticated_user
+    fake_service = _FakeService()
+    _use_fake_service(app, fake_service)
+
+    response = client.post(
+        "/authentication/terms-acceptance", headers={"Authorization": "Bearer valid"}
+    )
+
+    assert response.status_code == 204
+    assert response.content == b""
+    assert fake_service.terms_accepted_by == ["user-123"]
+
+
+def test_terms_acceptance_without_authorization_returns_401(client: TestClient) -> None:
+    response = client.post("/authentication/terms-acceptance")
+
+    assert response.status_code == 401

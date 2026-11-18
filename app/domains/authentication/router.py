@@ -11,7 +11,11 @@ from app.domains.authentication.schemas import (
     UserSessionResponse,
 )
 from app.shared.authorization import CurrentUserDep
-from app.shared.exceptions import AuthenticationError, ServiceUnavailableError
+from app.shared.exceptions import (
+    AuthenticationError,
+    NotFoundError,
+    ServiceUnavailableError,
+)
 from app.shared.schemas import ErrorResponse
 
 router = APIRouter(prefix="/authentication", tags=["authentication"])
@@ -160,3 +164,31 @@ async def session(user: CurrentUserDep, service: ServiceDep) -> UserSessionRespo
         return await service.get_session(user)
     except AuthenticationError as exc:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, exc.message) from exc
+
+
+@router.post(
+    "/terms-acceptance",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Aceitar o termo de consentimento",
+    description=(
+        "Registra que o usuário autenticado aceitou o termo de consentimento. Só o "
+        "primeiro aceite grava a data: chamar de novo não muda nada e responde igual. "
+        "A data volta em `terms_accepted_at` no login e em `GET /session`."
+    ),
+    response_description="Aceite registrado; a resposta não possui corpo.",
+    operation_id="accept_terms",
+    responses={
+        status.HTTP_401_UNAUTHORIZED: {
+            "model": ErrorResponse,
+            "description": "Token ausente, inválido, expirado ou usuário inativo.",
+            "content": {"application/json": {"example": {"detail": "Não autenticado"}}},
+        }
+    },
+)
+async def accept_terms(user: CurrentUserDep, service: ServiceDep) -> None:
+    # A guarda já achou o usuário no banco; se ele sumiu entre ela e aqui, é o
+    # mesmo 401 dela.
+    try:
+        await service.accept_terms(user)
+    except NotFoundError as exc:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Não autenticado") from exc

@@ -4,6 +4,7 @@ com fakes no lugar do Keycloak e do UserService de users
 """
 
 import uuid
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -45,12 +46,16 @@ class _FakeUserService(UserService):
     def __init__(self, access: UserAccess | None) -> None:
         self._access = access
         self.password_resets: list[str] = []
+        self.terms_accepted_by: list[uuid.UUID] = []
 
     async def get_active_user_access_by_email(self, email: str) -> UserAccess | None:
         return self._access
 
     async def send_password_reset_service(self, email: str) -> None:
         self.password_resets.append(email)
+
+    async def accept_terms_service(self, user_id: uuid.UUID) -> None:
+        self.terms_accepted_by.append(user_id)
 
 
 class _FakeLinkService(LinkService):
@@ -312,3 +317,51 @@ async def test_get_session_without_the_link_person_raises_authentication_error()
 
     with pytest.raises(AuthenticationError):
         await service.get_session(_checked_user())
+
+
+async def test_login_returns_the_terms_acceptance_date_of_the_database_user(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    aceite = datetime(2026, 11, 10, 14, 0, tzinfo=UTC)
+    access = UserAccess(
+        id=uuid.uuid4(),
+        email="dev@creed.example.com",
+        role="admin",
+        link_id=uuid.uuid4(),
+        organization_id=uuid.uuid4(),
+        terms_accepted_at=aceite,
+    )
+    service = AuthenticationService(_FakeUserService(access), _FakeLinkService())
+
+    async def _fake_login(_email: str, _password: str) -> dict[str, Any]:
+        return FAKE_TOKENS
+
+    monkeypatch.setattr(keycloak_client, "login", _fake_login)
+
+    login_request = LoginRequest(email="dev@creed.example.com", password="dev")  # noqa: S106
+    session = await service.login(login_request)
+
+    assert session.user.terms_accepted_at == aceite
+
+
+async def test_get_session_returns_the_terms_acceptance_date() -> None:
+    aceite = datetime(2026, 11, 10, 14, 0, tzinfo=UTC)
+    user = _checked_user()
+    user.terms_accepted_at = aceite
+    service = AuthenticationService(_FakeUserService(ACTIVE_ACCESS), _FakeLinkService())
+
+    session = await service.get_session(user)
+
+    assert session.terms_accepted_at == aceite
+
+
+async def test_accept_terms_delegates_the_database_user_id_to_users() -> None:
+    """O `sub` da identidade conferida é o id do `user` no banco."""
+    users = _FakeUserService(ACTIVE_ACCESS)
+    user_id = uuid.uuid4()
+    user = _checked_user()
+    user.sub = str(user_id)
+
+    await AuthenticationService(users, _FakeLinkService()).accept_terms(user)
+
+    assert users.terms_accepted_by == [user_id]

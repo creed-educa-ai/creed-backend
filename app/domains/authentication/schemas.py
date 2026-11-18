@@ -1,5 +1,7 @@
 """Schemas Pydantic do domínio authentication."""
 
+from datetime import datetime
+
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 
@@ -100,6 +102,13 @@ class UserSessionResponse(BaseModel):
     organization_name: str | None = Field(
         default=None,
         description="Nome da organização, quando disponível.",
+    )
+    terms_accepted_at: datetime | None = Field(
+        default=None,
+        description=(
+            "Quando o usuário aceitou o termo de consentimento. Nulo enquanto não "
+            "aceitou: o front mostra o termo antes de liberar a área logada."
+        ),
     )
 
 
