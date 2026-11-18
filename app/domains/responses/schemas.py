@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.domains.forms.schemas import FormRead
 from app.domains.responses.models import Answer, FormResponse, FormResponseStatus
+from app.shared.languages import DEFAULT_LANGUAGE, Language
 
 
 class FormResponseCreate(BaseModel):
@@ -28,6 +29,21 @@ class FormResponseCreate(BaseModel):
     form_id: uuid.UUID = Field(
         description="Identificador do formulário que será respondido.",
         examples=["7d94e9bb-25ca-4df9-9c08-d90251dd8d68"],
+    )
+
+
+class FormResponseSubmit(BaseModel):
+    """Corpo do envio, opcional. Sem ele, o insight sai em pt-BR."""
+
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={"examples": [{"language": "en"}]},
+    )
+
+    language: Language = Field(
+        default=DEFAULT_LANGUAGE,
+        description="Idioma da tela no envio. O insight da resposta é escrito nele.",
+        examples=["pt-BR", "en", "es"],
     )
 
 
