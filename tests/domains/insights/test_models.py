@@ -29,6 +29,7 @@ OBRIGATORIAS = {
     "organization_id",
     "form_id",
     "status",
+    "language",
     "attempts",
     "next_attempt_at",
     "created_at",
@@ -143,9 +144,23 @@ def test_done_e_content_andam_juntos() -> None:
     }
 
     # O banco grava o NOME do membro: 'DONE', não 'done'.
-    assert checks == {
-        "ck_insights_done_has_content": "(status = 'DONE') = (content IS NOT NULL)"
+    assert checks["ck_insights_done_has_content"] == (
+        "(status = 'DONE') = (content IS NOT NULL)"
+    )
+
+
+def test_idioma_so_aceita_os_da_tela_e_nasce_em_pt_br() -> None:
+    checks = {
+        restricao.name: str(restricao.sqltext)
+        for restricao in TABELA.constraints
+        if isinstance(restricao, sa.CheckConstraint)
     }
+    coluna = TABELA.columns["language"]
+
+    assert checks["ck_insights_language"] == "language IN ('pt-BR', 'en', 'es')"
+    assert set(checks) == {"ck_insights_done_has_content", "ck_insights_language"}
+    assert isinstance(coluna.server_default, sa.DefaultClause)
+    assert coluna.server_default.arg == "pt-BR"
 
 
 def test_indices_do_worker_do_dashboard_e_da_empresa_pendente() -> None:

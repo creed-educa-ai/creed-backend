@@ -23,6 +23,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    String,
     Text,
     UniqueConstraint,
     func,
@@ -33,6 +34,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
 from app.shared.enums import Prisma
+from app.shared.languages import DEFAULT_LANGUAGE
 
 
 class InsightStatus(enum.Enum):
@@ -73,6 +75,10 @@ class Insight(Base):
             "form_id",
             unique=True,
             postgresql_where=text("form_response_id IS NULL AND status = 'PENDING'"),
+        ),
+        CheckConstraint(
+            "language IN ('pt-BR', 'en', 'es')",
+            name="ck_insights_language",
         ),
         # O worker busca o que está pendente e vencido.
         Index("ix_insights_status_next_attempt_at", "status", "next_attempt_at"),
@@ -121,6 +127,15 @@ class Insight(Base):
         nullable=False,
         default=InsightStatus.PENDING,
         server_default=InsightStatus.PENDING.name,
+    )
+
+    # Em que língua o texto é escrito: a da tela de quem enviou a resposta. O da
+    # empresa fica em pt-BR, porque é um texto só para todos os leitores do período.
+    language: Mapped[str] = mapped_column(
+        String(5),
+        nullable=False,
+        default=DEFAULT_LANGUAGE,
+        server_default=DEFAULT_LANGUAGE,
     )
 
     attempts: Mapped[int] = mapped_column(

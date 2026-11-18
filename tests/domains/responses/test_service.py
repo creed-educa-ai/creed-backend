@@ -223,12 +223,16 @@ class FakeInsightService:
     def __init__(self, *, falhar_com: Exception | None = None) -> None:
         self.falhar_com = falhar_com
         self.pedidos: list[uuid.UUID] = []
+        self.idiomas: list[str] = []
         self.pedidos_da_empresa: list[uuid.UUID] = []
 
-    async def request_individual(self, form_response_id: uuid.UUID) -> None:
+    async def request_individual(
+        self, form_response_id: uuid.UUID, language: str = "pt-BR"
+    ) -> None:
         if self.falhar_com is not None:
             raise self.falhar_com
         self.pedidos.append(form_response_id)
+        self.idiomas.append(language)
 
     async def request_organization(self, form_response_id: uuid.UUID) -> None:
         self.pedidos_da_empresa.append(form_response_id)
@@ -342,6 +346,28 @@ class TestEnvioPedeOInsight:
         # InsightService (CREED-8013). O envio pede sempre.
         assert insights.pedidos_da_empresa == [form_response.id]
         assert resultado.status is FormResponseStatus.SUBMITTED
+
+    async def test_sem_idioma_o_insight_e_pedido_em_pt_br(self) -> None:
+        form_response = um_form_response()
+        insights = FakeInsightService()
+
+        await servico(
+            FakeFormResponseRepository([form_response]), insights=insights
+        ).submit_form_response(form_response.id, link_id=form_response.vinculo_id)
+
+        assert insights.idiomas == ["pt-BR"]
+
+    async def test_o_idioma_do_envio_vai_para_o_pedido_do_insight(self) -> None:
+        form_response = um_form_response()
+        insights = FakeInsightService()
+
+        await servico(
+            FakeFormResponseRepository([form_response]), insights=insights
+        ).submit_form_response(
+            form_response.id, link_id=form_response.vinculo_id, language="es"
+        )
+
+        assert insights.idiomas == ["es"]
 
     async def test_falha_ao_gravar_o_pedido_deixa_a_resposta_em_andamento(self) -> None:
         form_response = um_form_response()

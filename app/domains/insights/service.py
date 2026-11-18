@@ -7,7 +7,7 @@ import logging
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from app.domains.dashboards.service import DashboardService
 from app.domains.insights.models import Insight, InsightPrisma, InsightStatus
@@ -45,6 +45,7 @@ from app.shared.exceptions import (
     NotFoundError,
     ValidationError,
 )
+from app.shared.languages import DEFAULT_LANGUAGE, Language
 
 if TYPE_CHECKING:
     from app.shared.authorization import AuthenticatedUser
@@ -173,13 +174,17 @@ class InsightService:
         self.n8n = n8n
         self.dashboards = dashboards
 
-    async def request_individual(self, form_response_id: uuid.UUID) -> Insight:
+    async def request_individual(
+        self, form_response_id: uuid.UUID, language: Language = DEFAULT_LANGUAGE
+    ) -> Insight:
         """Grava o pedido de insight de uma resposta que acabou de ser enviada.
 
         Quem chama é o envio da resposta, na transação dele: se a gravação falhar,
         a resposta não fica enviada. O pedido nasce `pending`, e o worker o
         despacha ao N8N (ADR-0010). Receber só o id, e não o `FormResponse`, evita
         importar o model de `responses`: organização e período saem do banco.
+
+        `language` é o idioma da tela no envio, e o texto sai nele.
 
         🟡 Premissa P-042 — uma resposta enviada, um insight. Confirmar na próxima
         reunião.
@@ -192,6 +197,7 @@ class InsightService:
             organization_id=scope.organization_id,
             form_id=scope.form_id,
             form_response_id=form_response_id,
+            language=language,
         )
         created = await self.repository.create(insight)
 
@@ -257,7 +263,8 @@ class InsightService:
             insight_id=insight.id,
             # A reivindicação já contou esta tentativa (ADR-0010, item 3).
             attempt=insight.attempts,
-            language="pt-BR",  # P-092: o back ainda não guarda o idioma da pessoa
+            # O idioma da tela no envio, gravado no pedido.
+            language=cast(Language, insight.language),
             result=InsightResult(
                 prismas=PrismaScores.model_validate(
                     {prisma.value: _as_on_screen(s) for prisma, s in prismas.items()}
@@ -316,7 +323,8 @@ class InsightService:
             insight_id=insight.id,
             # A reivindicação já contou esta tentativa (ADR-0010, item 3).
             attempt=insight.attempts,
-            language="pt-BR",  # P-092
+            # Um texto por período para todos os leitores: não há um idioma de dono.
+            language=DEFAULT_LANGUAGE,
             period=Period(opens_at=numbers.opens_at, closes_at=numbers.closes_at),
             participation=Participation(
                 submitted=numbers.submitted, invited=numbers.invited

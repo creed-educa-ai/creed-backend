@@ -11,7 +11,7 @@ de quem responde vem do login, nunca do corpo.
 import uuid
 from typing import Annotated, Any
 
-from fastapi import APIRouter, HTTPException, Path, status
+from fastapi import APIRouter, Body, HTTPException, Path, status
 
 from app.domains.responses.dependencies import AnswerServiceDep, ServiceDep
 from app.domains.responses.schemas import (
@@ -19,6 +19,7 @@ from app.domains.responses.schemas import (
     AnswerResponse,
     FormResponseCreate,
     FormResponseResponse,
+    FormResponseSubmit,
 )
 from app.shared.authorization import CurrentUserDep
 from app.shared.exceptions import (
@@ -139,7 +140,8 @@ async def criar_form_response(
         "Finaliza uma resposta em andamento, alterando o status para `submitted` "
         "e registrando a data de submissão. Só o vínculo que abriu a resposta "
         "pode submetê-la, e só com todas as perguntas obrigatórias respondidas, "
-        "descritivas e objetivas."
+        "descritivas e objetivas. O corpo é opcional: `language` é o idioma da "
+        "tela, e o insight da resposta é escrito nele (sem corpo, pt-BR)."
     ),
     response_description="Resposta finalizada com a data de submissão.",
     operation_id="submit_form_response",
@@ -203,10 +205,13 @@ async def submeter_form_response(
     ],
     service: ServiceDep,
     user: CurrentUserDep,
+    dados: Annotated[FormResponseSubmit | None, Body()] = None,
 ) -> FormResponseResponse:
+    # Sem corpo vale o padrão do schema, como num corpo vazio.
+    envio = dados or FormResponseSubmit()
     try:
         form_response = await service.submit_form_response(
-            form_response_id, link_id=user.link_uuid
+            form_response_id, link_id=user.link_uuid, language=envio.language
         )
     except PeriodClosedError as exc:
         raise HTTPException(status.HTTP_423_LOCKED, exc.message) from exc

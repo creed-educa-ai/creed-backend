@@ -90,6 +90,32 @@ def test_exemplo_de_ida_vale_pelo_modelo() -> None:
     assert len(request.open_answers) == 2
 
 
+@pytest.mark.parametrize("idioma", ["pt-BR", "en", "es"])
+def test_ida_individual_aceita_os_idiomas_da_tela(idioma: str) -> None:
+    payload = _load("exemplo-ida-individual.json")
+    payload["language"] = idioma
+
+    assert IndividualInsightRequest.model_validate(payload).language == idioma
+
+
+@pytest.mark.parametrize("idioma", ["fr", "en-US", "pt"])
+def test_ida_individual_com_idioma_fora_da_tela_e_recusada(idioma: str) -> None:
+    payload = _load("exemplo-ida-individual.json")
+    payload["language"] = idioma
+
+    with pytest.raises(ValidationError, match="language"):
+        IndividualInsightRequest.model_validate(payload)
+
+
+def test_ida_da_empresa_so_vai_em_pt_br() -> None:
+    """Um texto por período para todos os leitores: não há idioma de dono."""
+    payload = _load("exemplo-ida-empresa.json")
+    payload["language"] = "en"
+
+    with pytest.raises(ValidationError, match="language"):
+        OrganizationInsightRequest.model_validate(payload)
+
+
 def test_ida_sem_campo_obrigatorio_e_recusada() -> None:
     payload = _load("exemplo-ida-individual.json")
     del payload["insight_id"]

@@ -215,6 +215,29 @@ async def test_pedido_individual_leva_organizacao_e_periodo_da_resposta() -> Non
     assert resultado is enviado
 
 
+async def test_pedido_individual_sem_idioma_fica_em_pt_br() -> None:
+    repository = AsyncMock(spec=InsightRepository)
+    repository.get_form_scope.return_value = FormScope(uuid.uuid4(), uuid.uuid4(), False)
+    repository.create.side_effect = lambda insight: insight
+    service = InsightService(repository, AsyncMock(spec=PrismaService))
+
+    await service.request_individual(uuid.uuid4())
+
+    assert repository.create.await_args.args[0].language == "pt-BR"
+
+
+@pytest.mark.parametrize("idioma", ["pt-BR", "en", "es"])
+async def test_pedido_individual_grava_o_idioma_da_tela(idioma: str) -> None:
+    repository = AsyncMock(spec=InsightRepository)
+    repository.get_form_scope.return_value = FormScope(uuid.uuid4(), uuid.uuid4(), False)
+    repository.create.side_effect = lambda insight: insight
+    service = InsightService(repository, AsyncMock(spec=PrismaService))
+
+    await service.request_individual(uuid.uuid4(), language=idioma)  # type: ignore[arg-type]
+
+    assert repository.create.await_args.args[0].language == idioma
+
+
 async def test_pedido_de_resposta_inexistente_vira_not_found() -> None:
     repository = AsyncMock(spec=InsightRepository)
     repository.get_form_scope.return_value = None
@@ -266,15 +289,17 @@ def _notas(
     return notas, dict.fromkeys(Dimension, 70.25)
 
 
-def _pedido(attempts: int = 1) -> Insight:
+def _pedido(attempts: int = 1, language: str = "pt-BR") -> Insight:
     """Um insight já reivindicado: a reivindicação soma a tentativa antes de montar
-    o pedido (ADR-0010, item 3)."""
+    o pedido (ADR-0010, item 3). O idioma vem do banco, como na reivindicação: o
+    `default` do model só vale no INSERT."""
     return Insight(
         id=uuid.uuid4(),
         organization_id=uuid.uuid4(),
         form_id=uuid.uuid4(),
         form_response_id=uuid.uuid4(),
         attempts=attempts,
+        language=language,
     )
 
 
@@ -320,6 +345,15 @@ async def test_pedido_tem_a_forma_do_exemplo_do_kit() -> None:
     assert IndividualInsightRequest.model_validate(corpo) == payload
     assert payload.insight_id == pedido.id
     assert payload.language == "pt-BR"
+
+
+@pytest.mark.parametrize("idioma", ["en", "es"])
+async def test_pedido_vai_no_idioma_gravado_no_insight(idioma: str) -> None:
+    service, _ = _service_do_pedido(ABERTAS)
+
+    payload = await service.build_individual_payload(_pedido(language=idioma))
+
+    assert payload.language == idioma
 
 
 @pytest.mark.parametrize(
@@ -446,6 +480,7 @@ def _insight(status: InsightStatus, attempts: int = 0) -> Insight:
         form_response_id=uuid.uuid4(),
         status=status,
         attempts=attempts,
+        language="pt-BR",
     )
 
 
@@ -1130,6 +1165,7 @@ def _insight_da_empresa(attempts: int = 1) -> Insight:
         form_response_id=None,
         status=InsightStatus.PENDING,
         attempts=attempts,
+        language="pt-BR",
     )
 
 
