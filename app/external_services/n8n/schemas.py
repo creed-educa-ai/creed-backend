@@ -23,6 +23,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.shared.enums import DepartmentType, Prisma
+from app.shared.languages import Language
 
 # Notas na escala de 0 a 100, a mesma da tela: o texto nunca cita uma escala que a
 # pessoa não vê.
@@ -106,8 +107,8 @@ class IndividualInsightRequest(BaseModel):
         ge=1,
         description="Tentativa de disparo, a partir de 1. Volta igual no callback.",
     )
-    language: Literal["pt-BR"] = Field(
-        description="Idioma do texto, sempre pt-BR nesta versão (P-092)."
+    language: Language = Field(
+        description="Idioma do texto: o da tela de quem enviou a resposta."
     )
     result: InsightResult
     open_answers: list[OpenAnswer] = Field(
@@ -195,7 +196,10 @@ class OrganizationInsightRequest(BaseModel):
         description="Tentativa de disparo, a partir de 1. Volta igual no callback.",
     )
     language: Literal["pt-BR"] = Field(
-        description="Idioma do texto, sempre pt-BR nesta versão (P-092)."
+        description=(
+            "Idioma do texto, sempre pt-BR: é um texto só por período, para todos "
+            "os leitores da empresa."
+        )
     )
     period: Period
     participation: Participation
