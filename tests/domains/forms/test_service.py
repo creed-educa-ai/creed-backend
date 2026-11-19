@@ -605,6 +605,18 @@ class TestCreatePeriod:
                 organization_id_user=self.ORG,
             )
 
+    async def test_abertura_no_minuto_atual_com_tolerancia_e_aceita(self) -> None:
+        """Minuto atual com :00s que chega segundos depois no backend é aceito."""
+        agora = datetime.now(UTC)
+        opens_at = agora - timedelta(seconds=45)
+        form = await servico(FakeFormRepository()).create_period(
+            self.ORG,
+            self.request(opens_at=opens_at),
+            role="gestor",
+            organization_id_user=self.ORG,
+        )
+        assert form.opens_at == opens_at
+
     async def test_link_de_outra_organizacao_devolve_validation_error(self) -> None:
         with pytest.raises(ValidationError, match="não encontrado"):
             await servico(
