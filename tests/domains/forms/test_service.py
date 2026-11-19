@@ -609,10 +609,9 @@ class TestCreatePeriod:
         """Minuto atual com :00s que chega segundos depois no backend é aceito."""
         agora = datetime.now(UTC)
         opens_at = agora - timedelta(seconds=45)
-        closes_at = agora + timedelta(days=1)
         form = await servico(FakeFormRepository()).create_period(
             self.ORG,
-            self.request(opens_at=opens_at, closes_at=closes_at),
+            self.request(opens_at=opens_at),
             role="gestor",
             organization_id_user=self.ORG,
         )
