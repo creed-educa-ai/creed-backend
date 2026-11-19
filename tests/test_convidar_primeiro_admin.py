@@ -32,7 +32,7 @@ from app.external_services.keycloak import admin as keycloak_admin
 from app.external_services.keycloak.client import KeycloakUnavailableError
 from app.shared.enums import LinkType, RecordStatus, Roles
 from app.shared.exceptions import ConflictError, ServiceUnavailableError
-from scripts import seed_local
+from scripts import demonstracao_comum as seed_local
 from scripts.convidar_primeiro_admin import (
     CREED_ORGANIZATION_DOCUMENT_ID,
     CREED_ORGANIZATION_ID,

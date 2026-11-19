@@ -22,7 +22,10 @@ COPY alembic.ini ./
 # senha conhecida, e a barreira dele (ENVIRONMENT=local) não segura quem roda a
 # imagem sem ENVIRONMENT, porque o padrão do config.py é "local". Script novo de
 # scripts/ entra aqui pelo nome, e só se puder rodar em produção.
-COPY scripts/__init__.py scripts/convidar_primeiro_admin.py ./scripts/
+# O seed_demonstracao.py pode: só a gestora tem senha, digitada por quem roda, e o
+# demonstracao_comum.py, de onde ele lê a equipe, não tem senha nenhuma.
+COPY scripts/__init__.py scripts/convidar_primeiro_admin.py \
+     scripts/demonstracao_comum.py scripts/seed_demonstracao.py ./scripts/
 
 # Usuário não-root
 RUN useradd --create-home --shell /bin/bash appuser && chown -R appuser:appuser /app
