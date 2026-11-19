@@ -1,0 +1,306 @@
+{
+  "name": "insight-v1 entrada",
+  "description": "Entrada da esteira de insights (CREED-806): recebe o pedido insight-v1 do back com token, responde 202, valida o contrato e encaminha ao gerar ou devolve a recusa.",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "creed/insights/v1",
+        "authentication": "headerAuth",
+        "options": {
+          "noResponseBody": true,
+          "responseCode": {
+            "values": {
+              "responseCode": "customCode",
+              "customCode": 202
+            }
+          }
+        }
+      },
+      "id": "603ebdfa-76b0-400c-80fd-9c7346db6a31",
+      "name": "Recebe pedido do back",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.2,
+      "position": [
+        0,
+        96
+      ],
+      "webhookId": "dcf0cb8c-7ca4-49a3-8a0b-fd2a66576e04",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "VLz6dJZckxvraXHC",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Confere o pedido contra o contrato insight-v1 (docker/n8n/contrato/ida.schema.json).\nconst p = ($json.body !== undefined ? $json.body : $json) || {};\nconst UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;\nconst PRISMAS = ['seguranca_psicologica', 'lideranca_adaptativa', 'cultura_empreendedora', 'adaptabilidade_cognitiva', 'neuroinovacao_prisma'];\nconst DIMENSOES = ['S2', 'S4', 'S5A', 'S5B', 'S6', 'S7', 'S8'];\nconst IDIOMAS = ['pt-BR', 'en', 'es'];\nconst SETORES = ['Marketing', 'Financeiro', 'Administrativo', 'RecursosHumanos', 'TecnologiaInformacao'];\nconst NIVEIS = ['alinhado', 'moderado', 'dividido'];\n\nconst idOk = typeof p.insight_id === 'string' && UUID.test(p.insight_id);\nconst tentativaOk = Number.isInteger(p.attempt) && p.attempt >= 1;\nif (!idOk || !tentativaOk) {\n  // Sem id ou tentativa, não há para quem devolver: fica só no log desta execução.\n  return { json: { acao: 'descartar', motivo: 'sem insight_id ou attempt utilizável' } };\n}\n\nconst recusar = function (erro) {\n  return {\n    json: {\n      acao: 'recusar',\n      motivo: erro,\n      volta: { contract_version: 'insight-v1', insight_id: p.insight_id, attempt: p.attempt, status: 'failed', error: erro, retryable: false }\n    }\n  };\n};\n\nconst objeto = function (o) { return o !== null && typeof o === 'object' && !Array.isArray(o); };\nconst nota = function (n) { return typeof n === 'number' && n >= 0 && n <= 100; };\nconst inteiro = function (n, min) { return Number.isInteger(n) && n >= min; };\nconst mesmasChaves = function (obj, chaves) {\n  return objeto(obj) && Object.keys(obj).sort().join(',') === chaves.slice().sort().join(',');\n};\nconst notasOk = function (obj, chaves) {\n  return mesmasChaves(obj, chaves) && chaves.every(function (k) { return nota(obj[k]); });\n};\nconst r = p.result || {};\nconst resultadoOk =\n  notasOk(r.prismas, PRISMAS) &&\n  notasOk(r.dimensions, DIMENSOES) &&\n  PRISMAS.indexOf(r.destaque) >= 0 &&\n  PRISMAS.indexOf(r.oportunidade) >= 0;\n\nconst baseOk =\n  p.contract_version === 'insight-v1' &&\n  (p.scope === 'individual' || p.scope === 'organization') &&\n  IDIOMAS.indexOf(p.language) >= 0 &&\n  resultadoOk;\nif (!baseOk) {\n  return recusar('invalid_payload');\n}\n\nif (p.scope === 'organization') {\n  // Pedido da empresa (task 15): agregado do período, sem resposta aberta (P-090).\n  const per = p.period;\n  const periodoOk = objeto(per) && typeof per.opens_at === 'string' &&\n    (per.closes_at === null || typeof per.closes_at === 'string');\n  const part = p.participation;\n  const participacaoOk = objeto(part) && inteiro(part.submitted, 1) && inteiro(part.invited, 1);\n  const setoresOk = Array.isArray(p.departments) && p.departments.every(function (s) {\n    return objeto(s) && SETORES.indexOf(s.department) >= 0 && inteiro(s.submitted, 1) && notasOk(s.prismas, PRISMAS);\n  });\n  const alinhamentoOk = mesmasChaves(p.alignment, PRISMAS) && PRISMAS.every(function (k) {\n    const a = p.alignment[k];\n    return objeto(a) && NIVEIS.indexOf(a.level) >= 0 && mesmasChaves(a.bands, ['baixa', 'media', 'alta']) &&\n      inteiro(a.bands.baixa, 0) && inteiro(a.bands.media, 0) && inteiro(a.bands.alta, 0);\n  });\n  if (!periodoOk || !participacaoOk || !setoresOk || !alinhamentoOk || p.open_answers !== undefined) {\n    return recusar('invalid_payload');\n  }\n  return { json: { acao: 'gerar', pedido: p } };\n}\n\nconst texto = function (t) { return typeof t === 'string' && t.trim().length > 0; };\nconst abertasOk = Array.isArray(p.open_answers) && p.open_answers.every(function (a) {\n  return a && texto(a.section) && texto(a.question) && texto(a.answer);\n});\nif (!abertasOk) {\n  return recusar('invalid_payload');\n}\n\nreturn { json: { acao: 'gerar', pedido: p } };\n"
+      },
+      "id": "d003fb6b-181d-41ba-8b0e-fcaa0c6c417a",
+      "name": "Validar pedido",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        96
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.acao }}",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "rightValue": "gerar"
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.acao }}",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "rightValue": "recusar"
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "ca9fce03-ef5f-4be4-aacc-e7a4555ff641",
+      "name": "Decidir",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        448,
+        96
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "3gGHajSZVXo9saSd",
+          "cachedResultName": "insight-v1 gerar"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "pedido": "={{ $json.pedido }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "pedido",
+              "displayName": "pedido",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "object"
+            }
+          ],
+          "attemptToConvertTypes": false
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "a1bc0a43-b0a7-4f47-9e08-5c19ef1deb40",
+      "name": "Gerar insight",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.4,
+      "position": [
+        672,
+        0
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YWYaef5QCb3DtGE3",
+          "cachedResultName": "insight-v1 volta"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "volta": "={{ $json.volta }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "volta",
+              "displayName": "volta",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "object"
+            }
+          ],
+          "attemptToConvertTypes": false
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "637035f1-1c98-4073-8de2-0a55b1ea7675",
+      "name": "Devolver recusa",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.4,
+      "position": [
+        672,
+        192
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Entrada da esteira (CREED-806 e task 15)\nO back chama `POST /webhook/creed/insights/v1` com `Authorization: Bearer <N8N_WEBHOOK_TOKEN>` e recebe 202 na hora.\n\nPedido válido, individual ou da empresa, em `pt-BR`, `en` ou `es`, vai para **insight-v1 gerar**. Pedido fora do contrato volta como `failed` sem retentativa. Sem `insight_id`/`attempt` não há volta possível.",
+        "height": 224,
+        "width": 304,
+        "color": 7
+      },
+      "id": "fdc589f3-9d01-4f8c-a08e-5784ec8c5c9e",
+      "name": "Sticky Note 31112817",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        80,
+        -192
+      ]
+    },
+    {
+      "id": "a3785358-ca21-46eb-ad8c-adae0756e556",
+      "name": "Falha inesperada",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        896,
+        -112
+      ],
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={{ JSON.stringify({ volta: { contract_version: 'insight-v1', insight_id: $('Validar pedido').item.json.pedido.insight_id, attempt: $('Validar pedido').item.json.pedido.attempt, status: 'failed', error: 'n8n_error', retryable: true } }) }}",
+        "includeOtherFields": false,
+        "options": {}
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Recebe pedido do back": {
+      "main": [
+        [
+          {
+            "node": "Validar pedido",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validar pedido": {
+      "main": [
+        [
+          {
+            "node": "Decidir",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decidir": {
+      "main": [
+        [
+          {
+            "node": "Gerar insight",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Devolver recusa",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gerar insight": {
+      "main": [
+        null,
+        [
+          {
+            "node": "Falha inesperada",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Falha inesperada": {
+      "main": [
+        [
+          {
+            "node": "Devolver recusa",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "nodeGroups": [],
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": true,
+    "binaryMode": "separate"
+  },
+  "versionId": "52b7c833-9d34-4e01-89d1-56e8b4076bc8",
+  "meta": {
+    "aiBuilderAssisted": true,
+    "builderVariant": "mcp",
+    "templateCredsSetupCompleted": true
+  },
+  "id": "fl0raACvEvOgGbCa",
+  "tags": []
+}

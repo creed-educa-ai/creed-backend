@@ -19,9 +19,10 @@ nasce dos modelos Pydantic do back, e os arquivos daqui derivam deles.
 | `exemplo-volta-done.json` | um callback `done` válido | o back, nos testes da rota de volta |
 | `exemplo-volta-failed.json` | um callback `failed` válido | o back, nos testes da rota de volta |
 | `vetor-hmac.json` | um segredo de teste, um timestamp, um corpo e a assinatura que eles dão | os dois lados, para provar que assinam igual |
+| `saida-n8n.json` | o corpo `done` que o workflow `insight-v1` montou de verdade com o `exemplo-ida-individual.json` (CREED-806), o mesmo que foi assinado e enviado ao back | o back, que o valida pelo modelo da volta |
 
-O `saida-n8n.json`, o corpo que o N8N produziu de verdade, entra quando o workflow
-existir (CREED-806). O teste do back o valida contra o `volta.schema.json`.
+O texto do `saida-n8n.json` saiu do prompt provisório da CREED-806 e não é referência
+de qualidade: ele prova o formato, não o conteúdo. A qualidade é da CREED-808.
 
 Nenhum arquivo daqui tem dado real de respondente. Os exemplos são sintéticos e devem
 continuar assim.
