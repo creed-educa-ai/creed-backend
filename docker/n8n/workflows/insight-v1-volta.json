@@ -1,0 +1,287 @@
+{
+  "name": "insight-v1 volta",
+  "description": "Sub-workflow da esteira de insights (CREED-806): assina o corpo da volta com HMAC-SHA256 e faz POST na rota de callback do back.",
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "volta",
+              "type": "object"
+            }
+          ]
+        }
+      },
+      "id": "be1969ac-5fbb-479c-b1ba-b872cc0f2a86",
+      "name": "Recebe volta",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "corpo",
+              "name": "corpo",
+              "value": "={{ JSON.stringify($json.volta) }}",
+              "type": "string"
+            },
+            {
+              "id": "timestamp",
+              "name": "timestamp",
+              "value": "={{ String(Math.floor($now.toSeconds())) }}",
+              "type": "string"
+            },
+            {
+              "id": "insight-id",
+              "name": "insight_id",
+              "value": "={{ $json.volta.insight_id }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "04d29a81-b117-48c7-9105-841e23c161a3",
+      "name": "Serializar corpo",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        272,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "xZCeMZZkH7aHP4WN",
+          "cachedResultName": "segredos-esteira"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "nome",
+              "keyValue": "N8N_CALLBACK_SECRET"
+            }
+          ]
+        },
+        "limit": 1
+      },
+      "id": "dfddb5d2-c981-40c8-84da-6e433da6287e",
+      "name": "Ler segredo",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        496,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "action": "hmac",
+        "type": "SHA256",
+        "value": "={{ $('Serializar corpo').item.json.timestamp }}.{{ $('Serializar corpo').item.json.corpo }}",
+        "dataPropertyName": "assinatura",
+        "secret": "={{ $json.valor }}"
+      },
+      "id": "8ae800cc-1166-4fec-8175-751cc72331c9",
+      "name": "Assinar corpo",
+      "type": "n8n-nodes-base.crypto",
+      "typeVersion": 1,
+      "position": [
+        720,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://back:8000/api/v1/insights/callback",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Creed-Timestamp",
+              "value": "={{ $('Serializar corpo').item.json.timestamp }}"
+            },
+            {
+              "name": "X-Creed-Signature",
+              "value": "=sha256={{ $json.assinatura }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $('Serializar corpo').item.json.corpo }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          },
+          "timeout": 10000
+        }
+      },
+      "id": "7584037d-c5b0-4e60-9866-d539160d7265",
+      "name": "Enviar ao back",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        944,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "status-code",
+              "name": "status_code",
+              "value": "={{ $json.statusCode }}",
+              "type": "number"
+            },
+            {
+              "id": "insight-id-r",
+              "name": "insight_id",
+              "value": "={{ $('Serializar corpo').item.json.insight_id }}",
+              "type": "string"
+            },
+            {
+              "id": "resposta",
+              "name": "resposta",
+              "value": "={{ typeof $json.body === 'string' ? $json.body : JSON.stringify($json.body ?? null) }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "9da33c2f-eabb-4285-bc9b-45b390ffbbe0",
+      "name": "Resultado da volta",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        1168,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Volta da esteira (CREED-806)\nRecebe o corpo da volta (`done` ou `failed`), serializa uma vez, assina `{timestamp}.{corpo}` com HMAC-SHA256 e envia exatamente essa string ao back.\n\nO segredo mora na data table `segredos-esteira` (linha `nome = N8N_CALLBACK_SECRET`), nunca no workflow. Por isso este workflow não salva dados de execução.",
+        "height": 224,
+        "width": 608,
+        "color": 7
+      },
+      "id": "ce6fc181-55a2-47be-9de8-b6c960341c68",
+      "name": "Sticky Note 27cf84cd",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        16,
+        -240
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Recebe volta": {
+      "main": [
+        [
+          {
+            "node": "Serializar corpo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Serializar corpo": {
+      "main": [
+        [
+          {
+            "node": "Ler segredo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ler segredo": {
+      "main": [
+        [
+          {
+            "node": "Assinar corpo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Assinar corpo": {
+      "main": [
+        [
+          {
+            "node": "Enviar ao back",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enviar ao back": {
+      "main": [
+        [
+          {
+            "node": "Resultado da volta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "nodeGroups": [
+    {
+      "id": "60cda5a0-ccd1-419f-9e98-ce9d5b886557",
+      "name": "Assinar e devolver",
+      "nodeNames": [
+        "Serializar corpo",
+        "Ler segredo",
+        "Assinar corpo",
+        "Enviar ao back",
+        "Resultado da volta"
+      ],
+      "description": "Serializa o corpo, assina com o segredo da data table e faz POST na rota de volta do back"
+    }
+  ],
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": true,
+    "saveManualExecutions": false,
+    "saveDataErrorExecution": "none",
+    "saveDataSuccessExecution": "none",
+    "callerPolicy": "workflowsFromSameOwner",
+    "binaryMode": "separate"
+  },
+  "versionId": "15bf5cb0-3979-438b-bfda-a49b62927ab7",
+  "meta": {
+    "aiBuilderAssisted": true,
+    "builderVariant": "mcp"
+  },
+  "id": "YWYaef5QCb3DtGE3",
+  "tags": []
+}

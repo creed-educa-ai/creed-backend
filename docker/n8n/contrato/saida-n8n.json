@@ -1,0 +1,26 @@
+{
+  "contract_version": "insight-v1",
+  "insight_id": "0b4e1f2a-9c3d-4a5b-8e6f-7d8c9b0a1e2f",
+  "attempt": 1,
+  "status": "done",
+  "content": {
+    "analise": [
+      "Seu destaque em Segurança Psicológica (85) sugere uma base favorável para construir relações de confiança, participação e abertura no trabalho. As dimensões S6 (82) e S7 (88) reforçam esse potencial. Sua percepção de que reuniões podem ser dominadas pelas mesmas vozes mostra atenção concreta à qualidade da escuta e à inclusão de perspectivas que ainda encontram menos espaço.",
+      "A oportunidade em Adaptabilidade Cognitiva (61) convida você a ampliar, de modo intencional, a circulação de perspectivas antes de formar conclusões ou definir caminhos. Os resultados em S5A (64), S5B (58) e S8 (58) indicam espaço para experimentar abordagens que tornem divergências, repertórios culturais e experiências entre áreas fontes mais visíveis de aprendizado.",
+      "Liderança Adaptativa (73), Cultura Empreendedora (80) e Neuroinovação (71) apontam recursos relevantes para transformar essa intenção em prática. Seu pedido por mais tempo de troca entre áreas pode se tornar uma alavanca: quando diferentes contextos se encontram com estrutura e escuta, surgem alternativas mais conectadas aos desafios reais e maior corresponsabilidade pelas soluções."
+    ],
+    "prismas": {
+      "seguranca_psicologica": "Em Segurança Psicológica (85), seu destaque favorece ambientes em que as pessoas possam contribuir com mais abertura. Use essa força para equilibrar a participação nas reuniões e convidar, de forma ativa, quem ainda não encontrou espaço de voz.",
+      "lideranca_adaptativa": "Em Liderança Adaptativa (73), você tem base para mobilizar conversas diante de contextos diversos. Avance criando acordos de participação, escutando sinais do grupo e ajustando formatos quando algumas vozes concentram as decisões.",
+      "cultura_empreendedora": "Em Cultura Empreendedora (80), há potencial para transformar trocas entre áreas em ação. Estruture encontros com desafios comuns, responsáveis e próximos passos, para que ideias variadas ganhem experimentação e continuidade.",
+      "adaptabilidade_cognitiva": "Em Adaptabilidade Cognitiva (61), sua oportunidade é sustentar curiosidade diante de referências diferentes. Antes de decidir, busque perspectivas de quem chegou recentemente, teste interpretações alternativas e revise premissas do grupo.",
+      "neuroinovacao_prisma": "Em Neuroinovação (71), você pode conectar diversidade de experiências à criação de novas respostas. Combine espaços de escuta com pequenos testes práticos, aprendendo com o que funciona em diferentes áreas e contextos."
+    },
+    "recomendacao": [
+      "Em uma próxima reunião, experimente um roteiro simples de inclusão: envie uma pergunta antes do encontro, reserve uma rodada inicial curta para todas as pessoas e convide explicitamente quem chegou de outra cidade ou área a compartilhar sua leitura. Registre contribuições e retome-as na decisão, para que escuta se converta em influência real.",
+      "Crie momentos regulares de troca entre áreas, com tempo protegido e um tema concreto por encontro. Alterne quem facilita, peça que cada participante apresente um desafio e uma prática que funciona em seu contexto, e encerre com um pequeno experimento. Depois, revisem o aprendizado e ajustem o próximo passo juntos."
+    ]
+  },
+  "model_id": "openai.gpt-5.6-terra",
+  "prompt_version": "individual-v0-provisorio"
+}

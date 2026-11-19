@@ -280,6 +280,17 @@ def test_volta_failed_sem_retryable_e_recusada() -> None:
         CALLBACK.validate_python(body)
 
 
+def test_saida_do_n8n_vale_pelo_modelo() -> None:
+    """O corpo que o workflow `insight-v1` montou de verdade, com o exemplo de ida
+    (CREED-806), é um `done` que o back aceita, e responde ao mesmo pedido."""
+    callback = CALLBACK.validate_python(_load("saida-n8n.json"))
+    pedido = _load("exemplo-ida-individual.json")
+
+    assert isinstance(callback, InsightCallbackDone)
+    assert str(callback.insight_id) == pedido["insight_id"]
+    assert callback.attempt == pedido["attempt"]
+
+
 # --- Schemas commitados -----------------------------------------------------
 
 
