@@ -1,4 +1,5 @@
-"""Testes de scripts/seed_local.py: as organizações, as pessoas de teste e os
+"""Testes de scripts/seed_local.py e da base dele, scripts/demonstracao_comum.py:
+as organizações, as pessoas de teste e os
 períodos de demonstração do ambiente local. O seed não cria período aberto nem
 pergunta: o período aberto nasce pelo painel, como em produção, e as perguntas são do
 instrumento CREED, que entra por migration de dados.
@@ -19,12 +20,11 @@ from app.domains.documents.models import DocType, Document
 from app.domains.organizacoes.models import Organization
 from app.domains.questions.models import Question, QuestionOption
 from app.shared.enums import DepartmentType, Dimension, LinkType, Roles
-from scripts.seed_local import (
+from scripts.demonstracao_comum import (
     ADMIN,
     AUSENTE_NO_SEGUNDO_PERIODO,
     CREED,
     EMPRESA,
-    OLD_DEMO_FORM_ID,
     ORGANIZACOES,
     OUTRA_EMPRESA,
     PERFIL_DO_SETOR,
@@ -37,10 +37,10 @@ from scripts.seed_local import (
     _ensure_organization,
     _new_link,
     _pessoa,
-    _usuario_de_teste,
     nota_de_demonstracao,
     respostas_de_demonstracao,
 )
+from scripts.seed_local import OLD_DEMO_FORM_ID, _usuario_de_teste
 
 PAPEIS = {"admin", "gestor", "respondente"}
 
