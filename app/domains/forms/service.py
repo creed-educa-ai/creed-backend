@@ -11,7 +11,7 @@ comparação. Se a organização existe, quem responde é o `OrganizationService
 
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
 from app.domains.forms.models import Form, FormStatus
@@ -27,6 +27,11 @@ from app.shared.exceptions import (
 )
 
 ADMIN = "admin"
+
+# Tolerância para relógio de rede e formulários sem segundos: ao selecionar
+# o minuto corrente (ex.: 15:30), o front envia 15:30:00, que chega alguns
+# segundos depois no backend.
+CLOCK_SKEW_TOLERANCE = timedelta(minutes=2)
 
 
 class PeriodLinkService(Protocol):
@@ -242,7 +247,7 @@ class FormService:
         if not await self.organizations.organization_exists(target_organization_id):
             raise NotFoundError(f"Organização {target_organization_id} não encontrada")
 
-        if request.opens_at < datetime.now(UTC):
+        if request.opens_at < datetime.now(UTC) - CLOCK_SKEW_TOLERANCE:
             raise ValidationError("opens_at não pode estar no passado")
 
         if link_id is not None:
