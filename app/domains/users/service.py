@@ -29,6 +29,7 @@ cadastrou a empresa pelo `MemberService`, que é deste domínio.
 import logging
 import uuid
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 from app.domains.dashboards.service import DashboardService
 from app.domains.demographics.service import DemographicService
@@ -91,6 +92,7 @@ class UserAccess:
     role: str
     link_id: uuid.UUID
     organization_id: uuid.UUID
+    terms_accepted_at: datetime | None = None
 
 
 class UserService:
@@ -121,7 +123,22 @@ class UserService:
             role=link.role.value,
             link_id=user.link_id,
             organization_id=link.organization_id,
+            terms_accepted_at=user.terms_accepted_at,
         )
+
+    async def accept_terms_service(self, user_id: uuid.UUID) -> None:
+        """Registra o aceite do termo de consentimento.
+
+        Só grava no primeiro aceite: aceitar de novo não muda a data, e a rota
+        responde igual. Não há commit aqui: quem fecha a transação é a requisição.
+        """
+        user = await self.repository.get_by_id(user_id)
+        if user is None:
+            raise NotFoundError("Usuário não encontrado")
+
+        if user.terms_accepted_at is None:
+            user.terms_accepted_at = datetime.now(UTC)
+            await self.repository.save(user)
 
     async def create_user_service(self, request: UserCreate) -> CreatedUser:
         """Cria o acesso no banco e no Keycloak e manda o convite. Tudo ou nada (D7).

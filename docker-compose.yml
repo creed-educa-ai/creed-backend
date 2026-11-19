@@ -54,6 +54,10 @@ services:
     ports: ['8080:8080']
     volumes:
       - ./docker/keycloak/realm-creed.json:/opt/keycloak/data/import/realm-creed.json:ro
+      # Tema das páginas que a pessoa vê no Keycloak (definir a senha) e do e-mail do
+      # convite. O start-dev não guarda tema em cache: mudou um arquivo da pasta, é só
+      # recarregar a página ou mandar outro e-mail.
+      - ./docker/keycloak/themes/creed:/opt/keycloak/themes/creed:ro
     depends_on:
       db: {condition: service_healthy}
 

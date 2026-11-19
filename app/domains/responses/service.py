@@ -23,6 +23,7 @@ from app.shared.exceptions import (
     NotFoundError,
     ValidationError,
 )
+from app.shared.languages import DEFAULT_LANGUAGE, Language
 
 
 async def _own_form_response(
@@ -136,9 +137,10 @@ class FormResponseService:
         form_response_id: uuid.UUID,
         *,
         link_id: uuid.UUID,
+        language: Language = DEFAULT_LANGUAGE,
     ) -> FormResponse:
         """Só o dono envia, e só com as obrigatórias respondidas, descritivas e
-        objetivas.
+        objetivas. `language` é o idioma da tela, e o insight é escrito nele.
 
         Ordem: existe (404), é do dono (403), em andamento (409), público (403),
         período (423), obrigatórias (422).
@@ -169,7 +171,7 @@ class FormResponseService:
 
         # Antes de marcar como enviada: se o pedido falhar, a resposta continua em
         # andamento também aqui na memória, e não só depois do rollback.
-        await self.insights.request_individual(form_response.id)
+        await self.insights.request_individual(form_response.id, language=language)
         await self.insights.request_organization(form_response.id)
         form_response.status = FormResponseStatus.SUBMITTED
         form_response.submitted_at = datetime.now(UTC)

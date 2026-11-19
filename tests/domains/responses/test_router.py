@@ -58,6 +58,7 @@ class _FakeFormResponseService:
         self.recusar_envio = recusar_envio
         self.faltam_obrigatorias = faltam_obrigatorias
         self.quem_pediu: tuple[uuid.UUID, uuid.UUID] | None = None
+        self.idioma_do_envio: str | None = None
 
     async def create_form_response(
         self,
@@ -74,8 +75,13 @@ class _FakeFormResponseService:
         return form_response
 
     async def submit_form_response(
-        self, form_response_id: uuid.UUID, *, link_id: uuid.UUID
+        self,
+        form_response_id: uuid.UUID,
+        *,
+        link_id: uuid.UUID,
+        language: str = "pt-BR",
     ) -> FormResponse:
+        self.idioma_do_envio = language
         if self.recusar_envio is not None:
             raise self.recusar_envio
         form_response = self.itens.get(form_response_id)
@@ -248,6 +254,49 @@ class TestSubmeterResposta:
 
         assert response.status_code == 200
         assert response.json()["status"] == "submitted"
+
+    def test_sem_corpo_o_idioma_e_pt_br(self, app: FastAPI, client: TestClient) -> None:
+        propria = um_form_response()
+        service = _FakeFormResponseService([propria])
+        _use_fake_service(app, service)
+
+        response = client.patch(f"/form-responses/{propria.id}")
+
+        assert response.status_code == 200
+        assert service.idioma_do_envio == "pt-BR"
+
+    @pytest.mark.parametrize("idioma", ["pt-BR", "en", "es"])
+    def test_o_idioma_do_corpo_vai_para_o_service(
+        self, app: FastAPI, client: TestClient, idioma: str
+    ) -> None:
+        propria = um_form_response()
+        service = _FakeFormResponseService([propria])
+        _use_fake_service(app, service)
+
+        response = client.patch(
+            f"/form-responses/{propria.id}", json={"language": idioma}
+        )
+
+        assert response.status_code == 200
+        assert service.idioma_do_envio == idioma
+
+    @pytest.mark.parametrize(
+        "corpo",
+        [{"language": "fr"}, {"language": "en-US"}, {"language": "en", "outro": 1}],
+        ids=["idioma fora da tela", "variante regional", "campo a mais"],
+    )
+    def test_corpo_invalido_devolve_422_e_nao_envia(
+        self, app: FastAPI, client: TestClient, corpo: dict[str, object]
+    ) -> None:
+        propria = um_form_response()
+        service = _FakeFormResponseService([propria])
+        _use_fake_service(app, service)
+
+        response = client.patch(f"/form-responses/{propria.id}", json=corpo)
+
+        assert response.status_code == 422
+        assert service.idioma_do_envio is None
+        assert propria.status is FormResponseStatus.IN_PROGRESS
 
     def test_a_de_outro_vinculo_devolve_403(
         self, app: FastAPI, client: TestClient

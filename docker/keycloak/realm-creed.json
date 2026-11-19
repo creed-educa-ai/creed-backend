@@ -1,6 +1,8 @@
 {
   "realm": "creed",
   "displayName": "CREED.ai Educa",
+  "loginTheme": "creed",
+  "emailTheme": "creed",
   "enabled": true,
   "sslRequired": "${CREED_REALM_SSL_REQUIRED}",
   "registrationAllowed": false,

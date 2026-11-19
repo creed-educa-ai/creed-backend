@@ -184,6 +184,19 @@ async def test_pedido_nasce_pending_com_organizacao_e_periodo_da_resposta(
     assert pedido.next_attempt_at is not None
 
 
+async def test_pedido_guarda_o_idioma_do_envio(cenario: Cenario) -> None:
+    async with cenario.sessions.begin() as session:
+        pedido = await _service(session).request_individual(
+            cenario.response_ids[2], language="es"
+        )
+
+    async with cenario.sessions() as session:
+        idioma = await session.scalar(
+            select(Insight.language).where(Insight.id == pedido.id)
+        )
+    assert idioma == "es"
+
+
 async def test_segundo_pedido_da_mesma_resposta_vira_conflict(cenario: Cenario) -> None:
     """O `unique` de verdade, com o nome que o repository procura na mensagem."""
     async with cenario.sessions.begin() as session:
@@ -268,6 +281,34 @@ async def test_insert_direto_de_segundo_insight_da_mesma_resposta_e_recusado(
     with pytest.raises(IntegrityError, match="uq_insights_form_response_id"):
         async with cenario.sessions.begin() as session:
             session.add(um_insight(cenario, response_index=0))
+
+
+async def test_insert_sem_idioma_nasce_em_pt_br(cenario: Cenario) -> None:
+    """O `server_default`: é o que as linhas antigas receberam na migration."""
+    async with cenario.sessions.begin() as session:
+        await session.execute(
+            text(
+                "INSERT INTO insights (id, organization_id, form_id) "
+                "VALUES (:id, :org, :form)"
+            ),
+            {
+                "id": uuid.uuid4(),
+                "org": cenario.organization_id,
+                "form": cenario.form_ids[0],
+            },
+        )
+
+    async with cenario.sessions() as session:
+        idiomas = (await session.scalars(select(Insight.language))).all()
+    assert idiomas == ["pt-BR"]
+
+
+async def test_idioma_fora_da_tela_e_recusado(cenario: Cenario) -> None:
+    with pytest.raises(IntegrityError, match="ck_insights_language"):
+        async with cenario.sessions.begin() as session:
+            insight = um_insight(cenario, response_index=0)
+            insight.language = "fr"
+            session.add(insight)
 
 
 async def test_done_exige_content(cenario: Cenario) -> None:

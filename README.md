@@ -83,6 +83,37 @@ mensagens aparecem em http://localhost:8025. Sem o `mailpit` de pé, todo envio 
 > local**, porque o realm mora no schema `keycloak` do mesmo Postgres, e os workflows
 > do N8N local.
 
+### Tema das páginas e do e-mail do Keycloak
+
+As páginas que o Keycloak mostra para a pessoa (definir a senha pelo link do convite
+ou da redefinição, a confirmação antes e o aviso depois) usam o tema `creed`, em
+`docker/keycloak/themes/creed/login/`. Ele repete a tela de login do front: o
+`AuthLayout`, as cores, a fonte, os campos e os botões.
+
+O e-mail do convite e da redefinição usa o mesmo tema, em
+`docker/keycloak/themes/creed/email/`: faixa roxa com o logo e um cartão branco com o
+botão. E-mail não lê CSS externo nem SVG, então ali o estilo é inline, em tabelas, e o
+logo é um PNG (`email/resources/img/logo.png`), o símbolo e o wordmark do login
+renderizados em imagem. Para ver, mande um convite e abra a mensagem no Mailpit.
+
+- **O CSS é escrito à mão**, em `resources/css/creed.css`, com os tokens do
+  `src/index.css` do creed-frontend copiados. Mudou a identidade visual lá? Mude aqui.
+- **Os textos** ficam em `messages/messages_<idioma>.properties`: só o que muda em
+  relação ao tema `base` do Keycloak, mais as chaves novas, que começam com `creed`.
+- **Mudança no tema aparece com F5**: o `start-dev` não guarda tema em cache. Para
+  ver as páginas, peça "Esqueci minha senha" no front local com uma pessoa do seed e
+  abra o link no Mailpit.
+- **O `loginTheme` e o `emailTheme` do realm seguem o aviso acima**: quem importou o
+  realm antes deles vê o tema padrão. Sem querer o `down -v`, ative só os temas:
+
+```bash
+docker compose exec keycloak /opt/keycloak/bin/kcadm.sh update realms/creed -s loginTheme=creed -s emailTheme=creed --no-config --server http://localhost:8080 --realm master --user admin --password admin
+```
+
+Em produção, a pasta é montada pelo compose da EC2 e o tema é ativado pelo
+`realm/aplicar-ajustes.sh` (README do `creed-infrastructure/ec2`). Lá o Keycloak
+guarda o tema em cache: mudou o tema, reinicie o container.
+
 O usuário de teste **não** vem do realm: o arquivo é o mesmo que a produção importa,
 e lá não pode existir admin com senha conhecida. Quem o cria — no Keycloak e no
 **nosso** banco — é o seed, que só roda com `ENVIRONMENT=local` e é idempotente:

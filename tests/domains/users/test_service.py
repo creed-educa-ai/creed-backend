@@ -31,6 +31,7 @@ class FakeUserRepository:
     def __init__(self, existentes: list[User] | None = None) -> None:
         self.itens: list[User] = list(existentes or [])
         self.removidos: list[User] = []
+        self.salvos: list[User] = []
 
     async def get_by_id(self, user_id: uuid.UUID) -> User | None:
         return next((u for u in self.itens if u.id == user_id), None)
@@ -43,6 +44,10 @@ class FakeUserRepository:
 
     async def create(self, user: User) -> User:
         self.itens.append(user)
+        return user
+
+    async def save(self, user: User) -> User:
+        self.salvos.append(user)
         return user
 
     async def delete(self, user: User) -> None:
@@ -635,6 +640,18 @@ class TestGetActiveUserAccessByEmail:
         assert access.link_id == link.id
         assert access.organization_id == link.organization_id
 
+    async def test_returns_terms_acceptance_date(self) -> None:
+        aceite = datetime(2026, 11, 10, 14, 0, tzinfo=UTC)
+        link = make_link()
+        user = um_user(link_id=link.id, terms_accepted_at=aceite)
+
+        access = await servico(
+            FakeUserRepository([user]), FakeLinkService([link])
+        ).get_active_user_access_by_email(user.email)
+
+        assert access is not None
+        assert access.terms_accepted_at == aceite
+
     async def test_unknown_user_returns_none(self) -> None:
         repository = FakeUserRepository()
 
@@ -664,6 +681,31 @@ class TestGetActiveUserAccessByEmail:
         ).get_active_user_access_by_email(user.email)
 
         assert access is None
+
+
+class TestAceitarTermo:
+    async def test_first_acceptance_records_the_date(self) -> None:
+        user = um_user(terms_accepted_at=None)
+        repository = FakeUserRepository([user])
+
+        await servico(repository).accept_terms_service(user.id)
+
+        assert user.terms_accepted_at is not None
+        assert repository.salvos == [user]
+
+    async def test_accepting_again_keeps_the_first_date(self) -> None:
+        primeiro = datetime(2026, 11, 10, 14, 0, tzinfo=UTC)
+        user = um_user(terms_accepted_at=primeiro)
+        repository = FakeUserRepository([user])
+
+        await servico(repository).accept_terms_service(user.id)
+
+        assert user.terms_accepted_at == primeiro
+        assert repository.salvos == []
+
+    async def test_unknown_user_raises_not_found(self) -> None:
+        with pytest.raises(NotFoundError):
+            await servico(FakeUserRepository()).accept_terms_service(uuid.uuid4())
 
 
 class TestUserResponse:

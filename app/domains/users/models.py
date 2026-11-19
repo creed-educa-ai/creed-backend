@@ -47,6 +47,12 @@ class User(Base):
         nullable=False,
     )
 
+    # Quando a pessoa aceitou o termo de consentimento. Nulo = ainda não aceitou, e
+    # o front mostra o termo antes de liberar a área logada.
+    terms_accepted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

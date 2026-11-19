@@ -181,8 +181,12 @@
           "type": "integer"
         },
         "language": {
-          "const": "pt-BR",
-          "description": "Idioma do texto, sempre pt-BR nesta versão (P-092).",
+          "description": "Idioma do texto: o da tela de quem enviou a resposta.",
+          "enum": [
+            "pt-BR",
+            "en",
+            "es"
+          ],
           "title": "Language",
           "type": "string"
         },
@@ -297,7 +301,7 @@
         },
         "language": {
           "const": "pt-BR",
-          "description": "Idioma do texto, sempre pt-BR nesta versão (P-092).",
+          "description": "Idioma do texto, sempre pt-BR: é um texto só por período, para todos os leitores da empresa.",
           "title": "Language",
           "type": "string"
         },

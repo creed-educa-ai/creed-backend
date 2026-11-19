@@ -90,6 +90,32 @@ def test_exemplo_de_ida_vale_pelo_modelo() -> None:
     assert len(request.open_answers) == 2
 
 
+@pytest.mark.parametrize("idioma", ["pt-BR", "en", "es"])
+def test_ida_individual_aceita_os_idiomas_da_tela(idioma: str) -> None:
+    payload = _load("exemplo-ida-individual.json")
+    payload["language"] = idioma
+
+    assert IndividualInsightRequest.model_validate(payload).language == idioma
+
+
+@pytest.mark.parametrize("idioma", ["fr", "en-US", "pt"])
+def test_ida_individual_com_idioma_fora_da_tela_e_recusada(idioma: str) -> None:
+    payload = _load("exemplo-ida-individual.json")
+    payload["language"] = idioma
+
+    with pytest.raises(ValidationError, match="language"):
+        IndividualInsightRequest.model_validate(payload)
+
+
+def test_ida_da_empresa_so_vai_em_pt_br() -> None:
+    """Um texto por período para todos os leitores: não há idioma de dono."""
+    payload = _load("exemplo-ida-empresa.json")
+    payload["language"] = "en"
+
+    with pytest.raises(ValidationError, match="language"):
+        OrganizationInsightRequest.model_validate(payload)
+
+
 def test_ida_sem_campo_obrigatorio_e_recusada() -> None:
     payload = _load("exemplo-ida-individual.json")
     del payload["insight_id"]
@@ -252,6 +278,17 @@ def test_volta_failed_sem_retryable_e_recusada() -> None:
 
     with pytest.raises(ValidationError, match="retryable"):
         CALLBACK.validate_python(body)
+
+
+def test_saida_do_n8n_vale_pelo_modelo() -> None:
+    """O corpo que o workflow `insight-v1` montou de verdade, com o exemplo de ida
+    (CREED-806), é um `done` que o back aceita, e responde ao mesmo pedido."""
+    callback = CALLBACK.validate_python(_load("saida-n8n.json"))
+    pedido = _load("exemplo-ida-individual.json")
+
+    assert isinstance(callback, InsightCallbackDone)
+    assert str(callback.insight_id) == pedido["insight_id"]
+    assert callback.attempt == pedido["attempt"]
 
 
 # --- Schemas commitados -----------------------------------------------------
